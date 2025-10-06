@@ -57,7 +57,7 @@ class MenuBarController: ObservableObject {
     
     private func setupPopover() {
         popover = NSPopover()
-        popover?.contentSize = NSSize(width: 400, height: 500)
+        popover?.contentSize = NSSize(width: 400, height: 300) // Smaller initial size
         popover?.behavior = .semitransient  // Changed from .transient to .semitransient
         popover?.animates = true
         popover?.contentViewController = NSHostingController(
@@ -160,6 +160,10 @@ class MenuBarController: ObservableObject {
     func hidePopover() {
         stopClickOutsideMonitoring()
         popover?.close()
+    }
+    
+    func updatePopoverSize(to size: NSSize) {
+        popover?.contentSize = size
     }
     
     func activatePreviousApplication() {

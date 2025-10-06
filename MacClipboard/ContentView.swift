@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var selectedItem: ClipboardItem?
     @State private var searchText = ""
     @State private var selectedIndex: Int = 0
+    @State private var showImageModal = false
     @FocusState private var isSearchFocused: Bool
     
     @ObservedObject private var permissionManager: PermissionManager
@@ -22,36 +23,55 @@ struct ContentView: View {
         if searchText.isEmpty {
             return clipboardMonitor.clipboardHistory
         } else {
-            return clipboardMonitor.clipboardHistory.filter { item in
-                item.previewText.localizedCaseInsensitiveContains(searchText) ||
-                item.fullText.localizedCaseInsensitiveContains(searchText)
+            let filtered = clipboardMonitor.clipboardHistory.filter { item in
+                let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchText)
+                let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchText)
+                return previewMatch || fullTextMatch
             }
+            
+            // Simple debug output to console
+            print("🔍 Search: '\(searchText)' found \(filtered.count)/\(clipboardMonitor.clipboardHistory.count) items")
+            for (i, item) in filtered.enumerated() {
+                print("  \(i): \(item.previewText)")
+            }
+            
+            return filtered
         }
     }
     
     private var dynamicHeight: CGFloat {
-        let baseHeight: CGFloat = 80  // Header + search + padding (reduced)
-        let itemHeight: CGFloat = 32  // Even more compact row height
+        let baseHeight: CGFloat = 50  // Reduced header + search + minimal padding
+        let itemHeight: CGFloat = 32  // Compact row height
         
-        // Show many more items - aim for 15-25 items visible
-        let minItemsToShow: Int = 15
-        let maxItemsToShow = max(minItemsToShow, min(filteredItems.count, 25))
-        let listHeight = CGFloat(maxItemsToShow) * itemHeight
+        // Calculate items to show based on available content
+        let itemCount = filteredItems.count
+        let minItemsToShow: Int = min(itemCount, 5)  // Show at least 5 items if available
+        let maxItemsToShow = min(itemCount, 12)     // Reduced max items for horizontal layout
+        let itemsToShow = max(minItemsToShow, min(maxItemsToShow, itemCount))
         
-        // Get screen height and be much more generous
+        let listHeight = CGFloat(itemsToShow) * itemHeight
+        
+        // Permission banner height (when shown)
+        let permissionHeight: CGFloat = !permissionManager.isAccessibilityGranted ? 80 : 0
+        
+        // Calculate total height (no additional preview height since it's now horizontal)
+        let totalHeight = baseHeight + permissionHeight + listHeight
+        
+        // Set a minimum height to ensure preview is always visible
+        // This is especially important when there's only 1 item
+        let minimumHeight: CGFloat = 250  // Enough space for header + search + list + preview
+        
+        // Get screen height and limit to reasonable size
         let screenHeight = NSScreen.main?.visibleFrame.height ?? 1000
-        let maxAllowedHeight = screenHeight * 0.9 // Use up to 90% of screen height
+        let maxAllowedHeight = screenHeight * 0.6 // Reduced to 60% for cleaner look
         
-        let calculatedHeight = baseHeight + listHeight
-        let finalHeight = min(calculatedHeight, maxAllowedHeight)
+        let finalHeight = max(minimumHeight, min(totalHeight, maxAllowedHeight))
         
-        // Ensure minimum height to show at least 10 items
-        let minimumHeight = baseHeight + (CGFloat(10) * itemHeight)
-        return max(finalHeight, minimumHeight)
+        return finalHeight
     }
     
     var body: some View {
-        VStack(spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             headerView
             if !permissionManager.isAccessibilityGranted {
                 permissionBanner
@@ -60,29 +80,49 @@ struct ContentView: View {
             
             if filteredItems.isEmpty {
                 emptyStateView
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                clipboardListView
-            }
-            
-            if let selectedItem = selectedItem {
-                previewView(for: selectedItem)
+                if let selectedItem = selectedItem {
+                    // Horizontal layout with list and preview side by side
+                    HStack(spacing: 0) {
+                        clipboardListView
+                            .frame(width: 200)
+                        Divider()
+                        compactPreviewView(for: selectedItem)
+                            .frame(width: 199)
+                    }
+                } else {
+                    // Full width list when no preview
+                    clipboardListView
+                }
             }
         }
-        .frame(width: 400, height: dynamicHeight)
+        .frame(width: 400, height: dynamicHeight, alignment: .top)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
-            // Reset selection when popover appears
-            selectedIndex = 0
-            updateSelectedItem()
-            // Focus search on appear
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                isSearchFocused = true
+            // Ensure we have items and properly select the first one
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                if !filteredItems.isEmpty {
+                    selectedIndex = 0
+                    updateSelectedItem()
+                    print("App appeared - set selectedIndex to 0, selectedItem: \(selectedItem?.previewText ?? "nil")")
+                    print("Total filtered items: \(filteredItems.count)")
+                }
+                // Update popover size after selection is set
+                updatePopoverSize()
             }
         }
-        .onChange(of: filteredItems) { _ in
+        .onChange(of: dynamicHeight) { newHeight in
+            updatePopoverSize()
+        }
+        .onChange(of: filteredItems) { newItems in
             // Reset selection when filter changes
+            print("🔄 filteredItems changed: \(newItems.count) items")
             selectedIndex = 0
             updateSelectedItem()
+            print("🔄 After reset: selectedIndex=\(selectedIndex), selectedItem=\(selectedItem?.previewText ?? "nil")")
+            // Update size when items change
+            updatePopoverSize()
         }
         .onChange(of: clipboardMonitor.clipboardHistory) { _ in
             // Reset selection when clipboard history changes
@@ -155,8 +195,8 @@ struct ContentView: View {
             .buttonStyle(PlainButtonStyle())
             .help("Close")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(Color(NSColor.controlBackgroundColor))
     }
     
@@ -165,7 +205,7 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
             
-            TextField("Search clipboard...", text: $searchText)
+            TextField("Search clipboard... (or just start typing)", text: $searchText)
                 .textFieldStyle(PlainTextFieldStyle())
                 .focused($isSearchFocused)
                 .onSubmit {
@@ -177,8 +217,8 @@ struct ContentView: View {
                     }
                 }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
         .background(Color(NSColor.controlBackgroundColor))
     }
     
@@ -203,7 +243,8 @@ struct ContentView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
+                    ForEach(0..<filteredItems.count, id: \.self) { index in
+                        let item = filteredItems[index]
                         ClipboardItemRow(
                             item: item,
                             isSelected: selectedIndex == index,
@@ -215,14 +256,17 @@ struct ContentView: View {
                                 pasteItem(item)
                             }
                         )
-                        .id("item-\(index)")
+                        .id("filtered-\(item.id)-\(index)")
                     }
                 }
             }
-            .frame(maxHeight: selectedItem == nil ? .infinity : 250)
+            .frame(maxWidth: .infinity)
+            .id("listview-\(searchText)") // Force refresh when search changes
             .onChange(of: selectedIndex) { newIndex in
                 withAnimation(.easeInOut(duration: 0.2)) {
-                    proxy.scrollTo("item-\(newIndex)", anchor: .center)
+                    if newIndex < filteredItems.count {
+                        proxy.scrollTo("filtered-\(filteredItems[newIndex].id)-\(newIndex)", anchor: .center)
+                    }
                 }
             }
         }
@@ -282,6 +326,88 @@ struct ContentView: View {
         .padding(.bottom)
     }
     
+    private func compactPreviewView(for item: ClipboardItem) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Preview")
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Button("Copy") {
+                    clipboardMonitor.copyToClipboard(item)
+                    menuBarController.hidePopoverAndActivatePreviousApp()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+                .controlSize(.small)
+            }
+            
+            ScrollView {
+                switch item.type {
+                case .text:
+                    Text(item.fullText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(nil)
+                case .image:
+                    if let image = item.content as? NSImage {
+                        ZStack {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 120)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(4)
+                            
+                            // Zoom icon overlay - more visible
+                            VStack {
+                                HStack {
+                                    Spacer()
+                                    Image(systemName: "magnifyingglass")
+                                        .font(.system(size: 14, weight: .semibold))
+                                        .foregroundColor(.white)
+                                        .frame(width: 24, height: 24)
+                                        .background(Circle().fill(Color.black.opacity(0.7)))
+                                }
+                                Spacer()
+                            }
+                            .padding(6)
+                        }
+                        .contentShape(Rectangle()) // Make entire area clickable
+                        .onTapGesture {
+                            print("Image clicked! Opening modal...")
+                            showImageModal = true
+                        }
+                        .onHover { hovering in
+                            // Add visual feedback on hover
+                            print(hovering ? "Hovering over image" : "Left image")
+                        }
+                        .help("Click to view full size with zoom")
+                        .sheet(isPresented: $showImageModal) {
+                            ImageModalView(image: image)
+                                .onAppear {
+                                    print("Modal sheet appeared")
+                                }
+                        }
+                    }
+                case .file:
+                    Text(item.fullText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .lineLimit(nil)
+                }
+            }
+        }
+        .padding(6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+    
     // MARK: - Navigation Functions
     
     private func navigateUp() {
@@ -332,6 +458,12 @@ struct ContentView: View {
         }
     }
     
+    private func updatePopoverSize() {
+        DispatchQueue.main.async {
+            self.menuBarController.updatePopoverSize(to: NSSize(width: 400, height: self.dynamicHeight))
+        }
+    }
+    
     private func pasteSelectedItem() {
         guard let item = selectedItem else { return }
         pasteItem(item)
@@ -372,11 +504,59 @@ struct ContentView: View {
             Logging.debug("Escape pressed - hiding popover")
             menuBarController.hidePopover()
             return true
+        case 48: // Tab
+            Logging.debug("Tab pressed - toggling search focus")
+            isSearchFocused.toggle()
+            return true
         default:
+            // Check if this is a printable character that should trigger search
+            if let characters = keyEvent.characters, 
+               !characters.isEmpty,
+               !isSearchFocused,
+               isPrintableCharacter(keyEvent) {
+                Logging.debug("Printable character '\(characters)' - focusing search and adding to search text")
+                // Focus first, then add the character to prevent text selection
+                DispatchQueue.main.async {
+                    self.isSearchFocused = true
+                    // Add a small delay to ensure focus is set before adding text
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
+                        self.searchText = characters
+                    }
+                }
+                return true
+            }
             Logging.debug("Unhandled key: \(keyEvent.keyCode)")
             return false
         }
         return false
+    }
+    
+    private func isPrintableCharacter(_ keyEvent: NSEvent) -> Bool {
+        // Check if it's a printable character (letters, numbers, symbols, space)
+        // Exclude special keys like function keys, modifiers, etc.
+        guard let characters = keyEvent.characters, !characters.isEmpty else { return false }
+        
+        let char = characters.first!
+        let keyCode = keyEvent.keyCode
+        
+        // Exclude special keys by keycode
+        let specialKeyCodes: Set<UInt16> = [
+            36,  // Enter
+            48,  // Tab
+            49,  // Space (we'll handle this specially)
+            51,  // Delete
+            53,  // Escape
+            117, // Forward Delete
+            123, 124, 125, 126, // Arrow keys
+            96, 97, 98, 99, 100, 101, 103, 111 // Function keys F1-F8
+        ]
+        
+        if specialKeyCodes.contains(keyCode) && keyCode != 49 { // Allow space (49)
+            return false
+        }
+        
+        // Check if character is printable (letters, numbers, symbols, space)
+        return char.isPrintableASCII || char.isLetter || char.isNumber || char.isSymbol || char == " "
     }
 }
 
@@ -394,11 +574,23 @@ struct ClipboardItemRow: View {
     
     var body: some View {
         HStack(spacing: 8) {
-            // Content type icon
-            Image(systemName: iconName)
-                .font(.system(size: 12))
-                .foregroundColor(iconColor)
-                .frame(width: 14)
+            // Content type icon or thumbnail
+            if item.type == .image, let image = item.content as? NSImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: 20, height: 20)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 3)
+                            .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
+                    )
+            } else {
+                Image(systemName: iconName)
+                    .font(.system(size: 12))
+                    .foregroundColor(iconColor)
+                    .frame(width: 20, height: 20)
+            }
             
             // Content preview
             VStack(alignment: .leading, spacing: 1) {
@@ -430,7 +622,12 @@ struct ClipboardItemRow: View {
         .cornerRadius(3)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Single click: select and paste immediately
+            // Single click: just select, don't paste immediately
+            // This allows image preview to work properly
+            onSelect()
+        }
+        .onTapGesture(count: 2) {
+            // Double click: select and paste
             onSelect()
             onCopy()
         }
@@ -525,6 +722,144 @@ class KeyEventView: NSView {
             return true
         }
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+struct ImageModalView: View {
+    let image: NSImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    @State private var lastScale: CGFloat = 1.0
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with controls
+            HStack {
+                Text("Image Preview - Zoom: \(String(format: "%.1f", scale))x")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                
+                Spacer()
+                
+                Button("Zoom In") {
+                    withAnimation(.spring()) {
+                        scale = min(scale * 1.5, 10.0)
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Zoom Out") {
+                    withAnimation(.spring()) {
+                        scale = max(scale / 1.5, 0.1)
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Reset") {
+                    withAnimation(.spring()) {
+                        scale = 1.0
+                        offset = .zero
+                        lastOffset = .zero
+                        lastScale = 1.0
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Fit") {
+                    withAnimation(.spring()) {
+                        let maxWidth: CGFloat = 500
+                        let maxHeight: CGFloat = 350
+                        let imageAspect = image.size.width / image.size.height
+                        let viewAspect = maxWidth / maxHeight
+                        
+                        if imageAspect > viewAspect {
+                            scale = maxWidth / image.size.width
+                        } else {
+                            scale = maxHeight / image.size.height
+                        }
+                        offset = .zero
+                        lastOffset = .zero
+                        lastScale = scale
+                    }
+                }
+                .buttonStyle(.bordered)
+                
+                Button("Close") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            
+            // Image view with improved zoom
+            GeometryReader { geometry in
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipped()
+                    .background(Color.black.opacity(0.1))
+                    .gesture(
+                        SimultaneousGesture(
+                            // Magnification gesture
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    let newScale = lastScale * value
+                                    scale = max(0.1, min(newScale, 10.0))
+                                }
+                                .onEnded { value in
+                                    lastScale = scale
+                                },
+                            
+                            // Drag gesture
+                            DragGesture()
+                                .onChanged { value in
+                                    offset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                }
+                                .onEnded { _ in
+                                    lastOffset = offset
+                                }
+                        )
+                    )
+                    .onTapGesture(count: 2) {
+                        withAnimation(.spring()) {
+                            if scale > 1.0 {
+                                scale = 1.0
+                                offset = .zero
+                                lastOffset = .zero
+                                lastScale = 1.0
+                            } else {
+                                scale = 2.0
+                                lastScale = 2.0
+                            }
+                        }
+                    }
+                    .onTapGesture(count: 1) {
+                        // Single tap for debugging
+                        print("Image tapped - current scale: \(scale)")
+                    }
+            }
+        }
+        .frame(minWidth: 700, minHeight: 500)
+        .background(Color(NSColor.windowBackgroundColor))
+        .onAppear {
+            print("ImageModalView appeared for image: \(image.size)")
+        }
+    }
+}
+
+extension Character {
+    var isPrintableASCII: Bool {
+        guard let asciiValue = self.asciiValue else { return false }
+        return asciiValue >= 32 && asciiValue <= 126
     }
 }
 
