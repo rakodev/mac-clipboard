@@ -5,15 +5,29 @@ class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
     private var changeCount: Int = 0
     private var timer: Timer?
-    private let maxItems: Int = 50
     private var isPausing = false
+    private var userPreferences: UserPreferencesManager
     
-    init() {
+    private var maxItems: Int {
+        return userPreferences.maxClipboardItems
+    }
+    
+    init(userPreferences: UserPreferencesManager = UserPreferencesManager.shared) {
+        self.userPreferences = userPreferences
         startMonitoring()
+        
+        // Listen for preferences changes to trim history if needed
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(preferencesChanged),
+            name: UserDefaults.didChangeNotification,
+            object: nil
+        )
     }
     
     deinit {
         stopMonitoring()
+        NotificationCenter.default.removeObserver(self)
     }
     
     private func startMonitoring() {
@@ -116,6 +130,20 @@ class ClipboardMonitor: ObservableObject {
             if self.clipboardHistory.count > self.maxItems {
                 self.clipboardHistory.removeLast(self.clipboardHistory.count - self.maxItems)
                 Logging.debug("✂️ Trimmed to max items: \(self.clipboardHistory.count)")
+            }
+        }
+    }
+    
+    @objc private func preferencesChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Trim history if new limit is smaller than current count
+            let currentLimit = self.maxItems
+            if self.clipboardHistory.count > currentLimit {
+                let itemsToRemove = self.clipboardHistory.count - currentLimit
+                self.clipboardHistory.removeLast(itemsToRemove)
+                Logging.debug("📊 Preferences changed: Trimmed history to \(currentLimit) items (removed \(itemsToRemove) items)")
             }
         }
     }

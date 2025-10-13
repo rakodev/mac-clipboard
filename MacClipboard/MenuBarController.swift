@@ -10,6 +10,7 @@ class MenuBarController: ObservableObject {
     private var previousApplication: NSRunningApplication?
     private var didAttemptAXPrompt = false
     private var clickOutsideMonitor: Any?
+    private var settingsWindow: NSWindow?
     
     let permissionManager = PermissionManager()
     
@@ -80,16 +81,39 @@ class MenuBarController: ObservableObject {
     private func showContextMenu() {
         let menu = NSMenu()
         
-        menu.addItem(NSMenuItem(title: "Show Clipboard", action: #selector(showPopover), keyEquivalent: ""))
+        let showClipboardItem = NSMenuItem(title: "Show Clipboard", action: #selector(showPopover), keyEquivalent: "")
+        showClipboardItem.target = self
+        menu.addItem(showClipboardItem)
+        
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Diagnose Paste", action: #selector(diagnosePaste), keyEquivalent: ""))
+        
+        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        
         menu.addItem(NSMenuItem.separator())
+        
+        let diagnoseItem = NSMenuItem(title: "Diagnose Paste", action: #selector(diagnosePaste), keyEquivalent: "")
+        diagnoseItem.target = self
+        menu.addItem(diagnoseItem)
+        
+        menu.addItem(NSMenuItem.separator())
+        
         let aboutItem = NSMenuItem(title: "About MacClipboard", action: #selector(showAbout), keyEquivalent: "")
+        aboutItem.target = self
         menu.addItem(aboutItem)
+        
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: ""))
+        
+        let clearItem = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
+        clearItem.target = self
+        menu.addItem(clearItem)
+        
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Quit Clipboard Manager", action: #selector(quit), keyEquivalent: "q"))
+        
+        let quitItem = NSMenuItem(title: "Quit Clipboard Manager", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
         
         statusItem?.menu = menu
         statusItem?.button?.performClick(nil)
@@ -104,6 +128,48 @@ class MenuBarController: ObservableObject {
         options[.applicationVersion] = "Version \(version) (Build \(build))"
         NSApp.orderFrontStandardAboutPanel(options: options)
         NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    @objc func showSettings() {
+        // Close existing settings window if open
+        settingsWindow?.close()
+        
+        // Hide popover if it's showing to avoid conflicts
+        if popover?.isShown == true {
+            popover?.close()
+        }
+        
+        // Create settings view with window reference for proper dismissal
+        let settingsView = SimpleSettingsView { [weak self] in
+            self?.settingsWindow?.close()
+            self?.settingsWindow = nil
+        }
+        
+        // Create and configure window with better size
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        
+        window.title = "MacClipboard Settings"
+        window.contentView = NSHostingView(rootView: settingsView)
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.setContentSize(NSSize(width: 500, height: 400))
+        
+        // Ensure proper window ordering and focus
+        window.level = .floating
+        window.orderFront(nil)
+        
+        // Store reference and show
+        settingsWindow = window
+        window.makeKeyAndOrderFront(nil)
+        
+        // Force to front and activate
+        NSApp.activate(ignoringOtherApps: true)
+        window.orderFrontRegardless()
     }
     
     @objc private func showPopover() {
@@ -365,4 +431,114 @@ private func fourCharCodeFrom(_ string: String) -> FourCharCode {
         result = result << 8 + FourCharCode(byte)
     }
     return result
+}
+
+// Simple inline settings view until we can add SettingsView.swift to the project
+struct SimpleSettingsView: View {
+    @ObservedObject private var preferences = UserPreferencesManager.shared
+    let onDismiss: () -> Void
+    
+    init(onDismiss: @escaping () -> Void = {}) {
+        self.onDismiss = onDismiss
+    }
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Header
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("MacClipboard Settings")
+                        .font(.title2)
+                        .fontWeight(.semibold)
+                    
+                    Text("Configure clipboard history and behavior")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                
+                Divider()
+                
+                // Clipboard History Settings
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Clipboard History")
+                        .font(.headline)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text("Maximum items:")
+                                .frame(width: 120, alignment: .leading)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(preferences.maxClipboardItems) },
+                                        set: { preferences.maxClipboardItems = Int($0) }
+                                    ),
+                                    in: Double(UserPreferencesManager.minClipboardItems)...Double(UserPreferencesManager.maxClipboardItems),
+                                    step: 10
+                                ) {
+                                    Text("Max Items")
+                                } minimumValueLabel: {
+                                    Text("\(UserPreferencesManager.minClipboardItems)")
+                                        .font(.caption)
+                                } maximumValueLabel: {
+                                    Text("\(UserPreferencesManager.maxClipboardItems)")
+                                        .font(.caption)
+                                }
+                                
+                                Text("\(preferences.maxClipboardItems) items")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        
+                        Text("Older items will be automatically removed when the limit is reached.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.leading, 120)
+                    }
+                }
+                
+                Divider()
+                
+                // Additional Settings
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Global Hotkey")
+                        .font(.headline)
+                    
+                    HStack {
+                        Toggle("Enable global hotkey (⌘⇧V)", isOn: $preferences.hotKeyEnabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    
+                    if !preferences.hotKeyEnabled {
+                        Text("Global hotkey is disabled. You can still access clipboard via menu bar.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Spacer(minLength: 40)
+                
+                // Bottom buttons
+                HStack {
+                    Button("Reset to Defaults") {
+                        preferences.resetToDefaults()
+                    }
+                    .buttonStyle(.borderless)
+                    
+                    Spacer()
+                    
+                    Button("Done") {
+                        onDismiss()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(20)
+        }
+        .frame(minWidth: 460, minHeight: 360)
+        .background(Color(NSColor.windowBackgroundColor))
+    }
 }

@@ -10,6 +10,7 @@ struct ContentView: View {
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
     @FocusState private var isSearchFocused: Bool
+    @State private var timeAgoCache: [UUID: String] = [:]
     
     @ObservedObject private var permissionManager: PermissionManager
     
@@ -100,6 +101,9 @@ struct ContentView: View {
         .frame(width: 400, height: dynamicHeight, alignment: .top)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
+            // Initialize time cache when popover opens
+            initializeTimeCache()
+            
             // Ensure we have items and properly select the first one
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 if !filteredItems.isEmpty {
@@ -178,6 +182,15 @@ struct ContentView: View {
             Spacer()
             
             Button(action: {
+                menuBarController.showSettings()
+            }) {
+                Image(systemName: "gearshape")
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Settings")
+            
+            Button(action: {
                 clipboardMonitor.clearHistory()
             }) {
                 Image(systemName: "trash")
@@ -247,6 +260,7 @@ struct ContentView: View {
                         let item = filteredItems[index]
                         ClipboardItemRow(
                             item: item,
+                            index: index,
                             isSelected: selectedIndex == index,
                             onSelect: { 
                                 selectedIndex = index
@@ -254,7 +268,8 @@ struct ContentView: View {
                             },
                             onCopy: {
                                 pasteItem(item)
-                            }
+                            },
+                            timeAgoText: timeAgoCache[item.id] ?? "unknown"
                         )
                         .id("filtered-\(item.id)-\(index)")
                     }
@@ -458,6 +473,34 @@ struct ContentView: View {
         }
     }
     
+    private func handleNumberKey(_ number: Int) {
+        guard !filteredItems.isEmpty else { return }
+        
+        // Number 0 is the most recent (index 0), number 9 is the 10th most recent (index 9)
+        let targetIndex = number
+        
+        if targetIndex < filteredItems.count {
+            selectedIndex = targetIndex
+            isSearchFocused = false // Ensure we're not in search mode
+            updateSelectedItem()
+            Logging.debug("Number \(number) pressed - jumped to index \(targetIndex)")
+        } else {
+            Logging.debug("Number \(number) pressed but not enough items (only \(filteredItems.count) available)")
+        }
+    }
+    
+    private func initializeTimeCache() {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        let now = Date()
+        
+        timeAgoCache.removeAll()
+        for item in clipboardMonitor.clipboardHistory {
+            let timeString = formatter.localizedString(for: item.timestamp, relativeTo: now)
+            timeAgoCache[item.id] = timeString
+        }
+    }
+    
     private func updatePopoverSize() {
         DispatchQueue.main.async {
             self.menuBarController.updatePopoverSize(to: NSSize(width: 400, height: self.dynamicHeight))
@@ -508,6 +551,26 @@ struct ContentView: View {
             Logging.debug("Tab pressed - toggling search focus")
             isSearchFocused.toggle()
             return true
+        case 29: // 0
+            if !isSearchFocused { handleNumberKey(0); return true }
+        case 18: // 1
+            if !isSearchFocused { handleNumberKey(1); return true }
+        case 19: // 2
+            if !isSearchFocused { handleNumberKey(2); return true }
+        case 20: // 3
+            if !isSearchFocused { handleNumberKey(3); return true }
+        case 21: // 4
+            if !isSearchFocused { handleNumberKey(4); return true }
+        case 23: // 5
+            if !isSearchFocused { handleNumberKey(5); return true }
+        case 22: // 6
+            if !isSearchFocused { handleNumberKey(6); return true }
+        case 26: // 7
+            if !isSearchFocused { handleNumberKey(7); return true }
+        case 28: // 8
+            if !isSearchFocused { handleNumberKey(8); return true }
+        case 25: // 9
+            if !isSearchFocused { handleNumberKey(9); return true }
         default:
             // Check if this is a printable character that should trigger search
             if let characters = keyEvent.characters, 
@@ -532,8 +595,8 @@ struct ContentView: View {
     }
     
     private func isPrintableCharacter(_ keyEvent: NSEvent) -> Bool {
-        // Check if it's a printable character (letters, numbers, symbols, space)
-        // Exclude special keys like function keys, modifiers, etc.
+        // Check if it's a printable character (letters, symbols, space)
+        // Exclude special keys and number keys (used for navigation)
         guard let characters = keyEvent.characters, !characters.isEmpty else { return false }
         
         let char = characters.first!
@@ -548,34 +611,43 @@ struct ContentView: View {
             53,  // Escape
             117, // Forward Delete
             123, 124, 125, 126, // Arrow keys
-            96, 97, 98, 99, 100, 101, 103, 111 // Function keys F1-F8
+            96, 97, 98, 99, 100, 101, 103, 111, // Function keys F1-F8
+            // Number keys (used for navigation)
+            29, 18, 19, 20, 21, 23, 22, 26, 28, 25 // 0-9
         ]
         
         if specialKeyCodes.contains(keyCode) && keyCode != 49 { // Allow space (49)
             return false
         }
         
-        // Check if character is printable (letters, numbers, symbols, space)
-        return char.isPrintableASCII || char.isLetter || char.isNumber || char.isSymbol || char == " "
+        // Check if character is printable (letters, symbols, space, but not digits)
+        return (char.isPrintableASCII || char.isLetter || char.isSymbol || char == " ") && !char.isNumber
     }
 }
 
 struct ClipboardItemRow: View {
     let item: ClipboardItem
+    let index: Int
     let isSelected: Bool
     let onSelect: () -> Void
     let onCopy: () -> Void
-    
-    private var timeAgoText: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        return formatter.localizedString(for: item.timestamp, relativeTo: Date())
-    }
+    let timeAgoText: String
     
     var body: some View {
         HStack(spacing: 8) {
-            // Content type icon or thumbnail
-            if item.type == .image, let image = item.content as? NSImage {
+            // Show number for first 10 items, icon for others
+            if index < 10 {
+                // Show number (0-9)
+                Text("\(index)")
+                    .font(.system(.caption, design: .monospaced))
+                    .fontWeight(.semibold)
+                    .foregroundColor(isSelected ? .accentColor : .secondary)
+                    .frame(width: 20, height: 20)
+                    .background(
+                        Circle()
+                            .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
+                    )
+            } else if item.type == .image, let image = item.content as? NSImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
