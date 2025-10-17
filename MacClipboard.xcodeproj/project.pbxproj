@@ -15,6 +15,8 @@
 		A01234567890123456789011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789012 /* Assets.xcassets */; };
 		A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0LOGGINGFILE00000000000000 /* Logging.swift */; };
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
+		A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */; };
+		E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2515D8D1089F4890B45C263D /* PersistenceManager.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -28,6 +30,8 @@
 		A01234567890123456789013 /* MacClipboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacClipboard.entitlements; sourceTree = "<group>"; };
 		A0LOGGINGFILE00000000000000 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		A0PERMISSIONMGR000000000000 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
+		508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = ClipboardData.xcdatamodeld; sourceTree = "<group>"; };
+		2515D8D1089F4890B45C263D /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -59,6 +63,8 @@
 				A01234567890123456789010 /* UserPreferences.swift */,
 				A0LOGGINGFILE00000000000000 /* Logging.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
+				2515D8D1089F4890B45C263D /* PersistenceManager.swift */,
+				508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */,
 				A01234567890123456789012 /* Assets.xcassets */,
 				A01234567890123456789013 /* MacClipboard.entitlements */,
 			);
@@ -149,6 +155,8 @@
 				A01234567890123456789001 /* MacClipboardApp.swift in Sources */,
 				A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
+				E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */,
+				A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

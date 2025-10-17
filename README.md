@@ -178,9 +178,30 @@ Please keep changes focused and maintain the lightweight philosophy.
 * The icon appears as a clipboard symbol in your menu bar
 * Try adjusting menu bar item spacing in System Settings
 
+**Menu bar icon click not working?**
+
+* Left-click the icon to open clipboard history
+* Right-click the icon for settings and other options
+* If clicks aren't responding, try restarting the app
+
+**Persistence not working?**
+
+* Right-click the menu bar icon and select "Settings..."
+* Ensure "Enable Persistence" is toggled on (enabled by default)
+* Check available storage space if items aren't being saved
+* Persistence is disabled if storage limit is exceeded
+
+**Focus not returning after using clipboard?**
+
+* When you close the clipboard (Escape or click outside), focus automatically returns to your previous application
+* If focus doesn't restore properly, ensure the clipboard app has accessibility permissions
+* This works for both keyboard shortcuts and clicking outside the popover
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
 
 ---
 Built with ❤️ for better clipboard management on macOS.
+---
+MIT. See [LICENSE](LICENSE).

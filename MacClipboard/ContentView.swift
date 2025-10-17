@@ -30,11 +30,7 @@ struct ContentView: View {
                 return previewMatch || fullTextMatch
             }
             
-            // Simple debug output to console
-            print("🔍 Search: '\(searchText)' found \(filtered.count)/\(clipboardMonitor.clipboardHistory.count) items")
-            for (i, item) in filtered.enumerated() {
-                print("  \(i): \(item.previewText)")
-            }
+            
             
             return filtered
         }
@@ -109,8 +105,6 @@ struct ContentView: View {
                 if !filteredItems.isEmpty {
                     selectedIndex = 0
                     updateSelectedItem()
-                    print("App appeared - set selectedIndex to 0, selectedItem: \(selectedItem?.previewText ?? "nil")")
-                    print("Total filtered items: \(filteredItems.count)")
                 }
                 // Update popover size after selection is set
                 updatePopoverSize()
@@ -121,10 +115,8 @@ struct ContentView: View {
         }
         .onChange(of: filteredItems) { newItems in
             // Reset selection when filter changes
-            print("🔄 filteredItems changed: \(newItems.count) items")
             selectedIndex = 0
             updateSelectedItem()
-            print("🔄 After reset: selectedIndex=\(selectedIndex), selectedItem=\(selectedItem?.previewText ?? "nil")")
             // Update size when items change
             updatePopoverSize()
         }
@@ -394,19 +386,14 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle()) // Make entire area clickable
                         .onTapGesture {
-                            print("Image clicked! Opening modal...")
                             showImageModal = true
                         }
                         .onHover { hovering in
-                            // Add visual feedback on hover
-                            print(hovering ? "Hovering over image" : "Left image")
+                            // Add visual feedback on hover (hover state is handled by UI)
                         }
                         .help("Click to view full size with zoom")
                         .sheet(isPresented: $showImageModal) {
                             ImageModalView(image: image)
-                                .onAppear {
-                                    print("Modal sheet appeared")
-                                }
                         }
                     }
                 case .file:
@@ -426,7 +413,6 @@ struct ContentView: View {
     // MARK: - Navigation Functions
     
     private func navigateUp() {
-        print("Navigate up called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         Logging.debug("Navigate up called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         if isSearchFocused {
             // If search is focused, move to list
@@ -440,14 +426,13 @@ struct ContentView: View {
     }
     
     private func navigateDown() {
-        print("Navigate down called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         Logging.debug("Navigate down called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         if isSearchFocused {
             // If search is focused, move to list
             isSearchFocused = false
             selectedIndex = 0
         } else {
-            selectedIndex = min(max(0, filteredItems.count - 1), selectedIndex + 1)
+            selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
         }
         Logging.debug("After navigate down - selectedIndex: \(selectedIndex)")
         updateSelectedItem()
@@ -525,7 +510,6 @@ struct ContentView: View {
     // MARK: - Key Event Handling
     
     private func handleKeyEvent(_ keyEvent: NSEvent) -> Bool {
-        print("Key event received: keyCode = \(keyEvent.keyCode)")
         Logging.debug("Key event received: keyCode = \(keyEvent.keyCode)")
         
         switch keyEvent.keyCode {
@@ -544,8 +528,8 @@ struct ContentView: View {
                 return true
             }
         case 53: // Escape
-            Logging.debug("Escape pressed - hiding popover")
-            menuBarController.hidePopover()
+            Logging.debug("Escape pressed - hiding popover and restoring focus")
+            menuBarController.hidePopoverAndActivatePreviousApp()
             return true
         case 48: // Tab
             Logging.debug("Tab pressed - toggling search focus")
@@ -750,47 +734,37 @@ class KeyEventView: NSView {
     var onKeyEvent: ((NSEvent) -> Bool)?
     
     override var acceptsFirstResponder: Bool { 
-        print("KeyEventView acceptsFirstResponder called")
         return true 
     }
     
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        print("KeyEventView moved to window")
         
         // Ensure this view can receive key events
         DispatchQueue.main.async {
             self.window?.makeFirstResponder(self)
-            print("Made KeyEventView first responder: \(self.window?.firstResponder == self)")
         }
     }
     
     override func becomeFirstResponder() -> Bool {
-        print("KeyEventView becomeFirstResponder called")
         return super.becomeFirstResponder()
     }
     
     override func keyDown(with event: NSEvent) {
-        print("KeyEventView keyDown called with keyCode: \(event.keyCode)")
         if let handler = onKeyEvent, handler(event) {
-            print("Key event handled by custom handler")
             return
         }
-        print("Key event passed to super")
         super.keyDown(with: event)
     }
     
     // Handle events that might not reach keyDown
     override func flagsChanged(with event: NSEvent) {
-        print("KeyEventView flagsChanged called")
         super.flagsChanged(with: event)
     }
     
     // Ensure we can handle key events
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        print("KeyEventView performKeyEquivalent called with keyCode: \(event.keyCode)")
         if let handler = onKeyEvent, handler(event) {
-            print("Key equivalent handled by custom handler")
             return true
         }
         return super.performKeyEquivalent(with: event)
@@ -922,9 +896,6 @@ struct ImageModalView: View {
         }
         .frame(minWidth: 700, minHeight: 500)
         .background(Color(NSColor.windowBackgroundColor))
-        .onAppear {
-            print("ImageModalView appeared for image: \(image.size)")
-        }
     }
 }
 
@@ -938,6 +909,6 @@ extension Character {
 #Preview {
     ContentView(
         clipboardMonitor: ClipboardMonitor(),
-        menuBarController: MenuBarController()
+        menuBarController: MenuBarController(clipboardMonitor: ClipboardMonitor())
     )
 }

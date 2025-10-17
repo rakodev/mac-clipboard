@@ -7,14 +7,19 @@ class ClipboardMonitor: ObservableObject {
     private var timer: Timer?
     private var isPausing = false
     private var userPreferences: UserPreferencesManager
+    private var persistenceManager: PersistenceManager
+    private var maintenanceTimer: Timer?
     
-    private var maxItems: Int {
-        return userPreferences.maxClipboardItems
-    }
-    
-    init(userPreferences: UserPreferencesManager = UserPreferencesManager.shared) {
+    init(userPreferences: UserPreferencesManager = UserPreferencesManager.shared,
+         persistenceManager: PersistenceManager = PersistenceManager.shared) {
         self.userPreferences = userPreferences
+        self.persistenceManager = persistenceManager
+        
+        // Load persisted history first
+        self.loadPersistedHistory()
+        
         startMonitoring()
+        startMaintenanceTimer()
         
         // Listen for preferences changes to trim history if needed
         NotificationCenter.default.addObserver(
@@ -27,6 +32,7 @@ class ClipboardMonitor: ObservableObject {
     
     deinit {
         stopMonitoring()
+        stopMaintenanceTimer()
         NotificationCenter.default.removeObserver(self)
     }
     
@@ -43,6 +49,55 @@ class ClipboardMonitor: ObservableObject {
     private func stopMonitoring() {
         timer?.invalidate()
         timer = nil
+    }
+    
+    
+    private func startMaintenanceTimer() {
+        // Run maintenance every hour
+        maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
+            self?.performMaintenance()
+        }
+    }
+    
+    private func stopMaintenanceTimer() {
+        maintenanceTimer?.invalidate()
+        maintenanceTimer = nil
+    }
+    
+    private func loadPersistedHistory() {
+        guard userPreferences.persistenceEnabled else { return }
+        
+        let persistedItems = persistenceManager.loadClipboardHistory(limit: userPreferences.maxClipboardItems)
+        
+        DispatchQueue.main.async {
+            self.clipboardHistory = persistedItems
+        }
+    }
+    
+    private func saveItemToPersistence(_ item: ClipboardItem) {
+        guard userPreferences.persistenceEnabled else { return }
+        
+        DispatchQueue.global(qos: .utility).async {
+            self.persistenceManager.saveClipboardItem(item, saveImages: self.userPreferences.saveImages)
+        }
+    }
+    
+    private func performMaintenance() {
+        guard userPreferences.persistenceEnabled else { return }
+        
+        DispatchQueue.global(qos: .utility).async {
+            // Clean up old items
+            self.persistenceManager.cleanupOldItems(olderThan: self.userPreferences.persistenceDays)
+            
+            // Check storage size and clean up if needed
+            let currentSize = self.persistenceManager.getStorageSize()
+            let maxSizeBytes = Int64(self.userPreferences.maxStorageSize) * 1024 * 1024 // Convert MB to bytes
+            
+            if currentSize > maxSizeBytes {
+                // In a more sophisticated implementation, we could selectively remove larger items first
+                self.persistenceManager.cleanupOldItems(olderThan: max(1, self.userPreferences.persistenceDays / 2))
+            }
+        }
     }
     
     private func checkClipboard() {
@@ -102,34 +157,21 @@ class ClipboardMonitor: ObservableObject {
     
     private func addToHistory(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            // Use a concrete, non-optional string for logging to avoid optional interpolation warnings
-            let display = item.displayText ?? item.previewText
-            Logging.debug("🔍 Adding to history: \(display) (Type: \(item.type))")
-            Logging.debug("📊 Current history count: \(self.clipboardHistory.count)")
-            
             // Remove duplicates (same content)
-            let duplicatesFound = self.clipboardHistory.filter { existing in
-                let isEqual = existing.contentEquals(item)
-                if isEqual {
-                    let existingDisplay = existing.displayText ?? existing.previewText
-                    Logging.debug("🔍 Found duplicate: \(existingDisplay) == \(display)")
-                }
-                return isEqual
-            }
-            
-            Logging.debug("🗑️ Removing \(duplicatesFound.count) duplicates")
             self.clipboardHistory.removeAll { existing in
                 existing.contentEquals(item)
             }
             
+            
             // Add to beginning of array
             self.clipboardHistory.insert(item, at: 0)
-            Logging.debug("✅ Added item. New history count: \(self.clipboardHistory.count)")
+            
+            // Save to persistence
+            self.saveItemToPersistence(item)
             
             // Limit to max items
-            if self.clipboardHistory.count > self.maxItems {
-                self.clipboardHistory.removeLast(self.clipboardHistory.count - self.maxItems)
-                Logging.debug("✂️ Trimmed to max items: \(self.clipboardHistory.count)")
+            if self.clipboardHistory.count > self.userPreferences.maxClipboardItems {
+                self.clipboardHistory.removeLast(self.clipboardHistory.count - self.userPreferences.maxClipboardItems)
             }
         }
     }
@@ -139,11 +181,10 @@ class ClipboardMonitor: ObservableObject {
             guard let self = self else { return }
             
             // Trim history if new limit is smaller than current count
-            let currentLimit = self.maxItems
+            let currentLimit = self.userPreferences.maxClipboardItems
             if self.clipboardHistory.count > currentLimit {
                 let itemsToRemove = self.clipboardHistory.count - currentLimit
                 self.clipboardHistory.removeLast(itemsToRemove)
-                Logging.debug("📊 Preferences changed: Trimmed history to \(currentLimit) items (removed \(itemsToRemove) items)")
             }
         }
     }
@@ -191,6 +232,15 @@ class ClipboardMonitor: ObservableObject {
         DispatchQueue.main.async {
             self.clipboardHistory.removeAll()
         }
+        
+        // Also clear persistent storage if enabled
+        /*
+        if userPreferences.persistenceEnabled {
+            DispatchQueue.global(qos: .utility).async {
+                self.persistenceManager.clearAllData()
+            }
+        }
+        */
     }
 }
 
@@ -210,10 +260,7 @@ struct ClipboardItem: Identifiable, Equatable {
     }
     
     var previewText: String {
-    Logging.debug("🔍 Computing previewText for item: \(id), type: \(type), displayText: \(String(describing: displayText))")
-        
         if let displayText = displayText {
-            Logging.debug("🔍 Using displayText: \(displayText)")
             return displayText
         }
         
@@ -223,20 +270,16 @@ struct ClipboardItem: Identifiable, Equatable {
                 // Limit preview to first line and 100 characters
                 let firstLine = text.components(separatedBy: .newlines).first ?? ""
                 let preview = String(firstLine.prefix(100))
-                Logging.debug("🔍 Generated text preview: \(preview)")
                 return preview
             }
         case .image:
-            Logging.debug("🔍 Using image preview")
             return "📷 Image"
         case .file:
             if let urls = content as? [URL] {
                 let preview = "📁 \(urls.count) file(s)"
-            Logging.debug("🔍 Generated file preview: \(preview)")
                 return preview
             }
         }
-    Logging.debug("🔍 Using fallback preview")
         return "Unknown content"
     }
     
@@ -255,35 +298,23 @@ struct ClipboardItem: Identifiable, Equatable {
     }
     
     func contentEquals(_ other: ClipboardItem) -> Bool {
-        guard self.type == other.type else { 
-            Logging.debug("🔍 contentEquals: Different types - \(self.type) vs \(other.type)")
-            return false 
-        }
+        guard self.type == other.type else { return false }
         
         switch type {
         case .text:
-            let result = (content as? String) == (other.content as? String)
-            Logging.debug("🔍 contentEquals text: \(result)")
-            return result
+            return (content as? String) == (other.content as? String)
         case .image:
             // For images, compare their data representations
-            guard let image1 = content as? NSImage,
-                  let image2 = other.content as? NSImage else { 
-                Logging.debug("🔍 contentEquals image: Failed to cast to NSImage")
-                return false 
-            }
-            
-            let data1 = image1.tiffRepresentation
-            let data2 = image2.tiffRepresentation
-            let result = data1 == data2
-            Logging.debug("🔍 contentEquals image: \(result) (data1: \(data1?.count ?? 0) bytes, data2: \(data2?.count ?? 0) bytes)")
-            return result
+        guard let image1 = content as? NSImage,
+            let image2 = other.content as? NSImage else { return false }
+
+        let data1 = image1.tiffRepresentation
+        let data2 = image2.tiffRepresentation
+        return data1 == data2
         case .file:
             let urls1 = content as? [URL] ?? []
             let urls2 = other.content as? [URL] ?? []
-            let result = urls1 == urls2
-            Logging.debug("🔍 contentEquals file: \(result)")
-            return result
+            return urls1 == urls2
         }
     }
     
@@ -292,8 +323,8 @@ struct ClipboardItem: Identifiable, Equatable {
     }
 }
 
-enum ClipboardContentType {
-    case text
-    case image
-    case file
+enum ClipboardContentType: Int {
+    case text = 0
+    case image = 1
+    case file = 2
 }

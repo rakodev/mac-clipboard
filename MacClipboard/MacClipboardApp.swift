@@ -20,7 +20,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         logAccessibilityState(context: "launch")
         handleAccessibilityPermissions()
-        menuBarController = MenuBarController()
+        // Defer creating the MenuBarController slightly to avoid race conditions with
+        // accessibility enabling and the app activation policy. Some macOS versions
+        // can cause status item event handling to be lost if created too early.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            self.menuBarController = MenuBarController(clipboardMonitor: ClipboardMonitor())
+        }
         if let window = NSApplication.shared.windows.first {
             window.close()
         }
@@ -31,19 +36,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func handleAccessibilityPermissions() {
-        let trusted = AXIsProcessTrusted()
-        Logging.debug("[AX][handle] Initial trust check: \(trusted)")
+    let trusted = AXIsProcessTrusted()
         
-        if trusted {
-            Logging.debug("✅ Accessibility already granted")
-            return
-        }
+        if trusted { return }
 
         // Always show prompt for permission when missing
-        Logging.debug("[AX][handle] Showing accessibility permission prompt")
+        
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-        let promptResult = AXIsProcessTrustedWithOptions(options)
-        Logging.debug("[AX][handle] Prompt result: \(promptResult)")
+    let promptResult = AXIsProcessTrustedWithOptions(options)
         
         if !promptResult {
             // Show onboarding window as backup
@@ -152,7 +152,6 @@ struct OnboardingView: View {
             let granted = AXIsProcessTrusted()
             if granted != isGranted {
                 isGranted = granted
-                Logging.debug("Accessibility permission state changed: \(granted)")
                 if granted {
                     // Close after short delay so user sees success
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {

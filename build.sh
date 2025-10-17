@@ -43,9 +43,9 @@ xcodebuild archive \
     -configuration "${CONFIGURATION}" \
     -archivePath "${ARCHIVE_PATH}" \
     -destination "generic/platform=macOS" \
-    CODE_SIGN_IDENTITY="" \
-    CODE_SIGNING_REQUIRED=NO \
-    CODE_SIGNING_ALLOWED=NO
+    CODE_SIGN_IDENTITY="-" \
+    CODE_SIGNING_REQUIRED=YES \
+    CODE_SIGNING_ALLOWED=YES
 
 # Create export options plist
 cat > build/ExportOptions.plist << EOF
@@ -100,3 +100,8 @@ fi
 
 echo ""
 echo -e "${GREEN}🎉 MacClipboard is ready for distribution!${NC}"
+echo ""
+echo -e "${YELLOW}⚠️  IMPORTANT: Accessibility Permission Notice${NC}"
+echo -e "${YELLOW}   This exported app has a different signature than the development version.${NC}"
+echo -e "${YELLOW}   You'll need to re-grant accessibility permissions in System Settings.${NC}"
+echo -e "${YELLOW}   Go to: System Settings > Privacy & Security > Accessibility${NC}"

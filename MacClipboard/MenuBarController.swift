@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import Carbon
 
-class MenuBarController: ObservableObject {
+class MenuBarController: NSObject, ObservableObject {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var clipboardMonitor: ClipboardMonitor
@@ -23,13 +23,38 @@ class MenuBarController: ObservableObject {
     
     private lazy var hotKeyID: EventHotKeyID = EventHotKeyID(signature: fourCharCode("ClpM"), id: 1)
     
-    init() {
-        self.clipboardMonitor = ClipboardMonitor()
+    init(clipboardMonitor: ClipboardMonitor) {
+        self.clipboardMonitor = clipboardMonitor
+    super.init()
         setupStatusItem()
+        setupPopover()
         setupGlobalHotkey()
+        
+        // Listen for app activation to ensure button remains responsive
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(applicationDidBecomeActive),
+            name: NSApplication.didBecomeActiveNotification,
+            object: nil
+        )
+        
+        // Ensure button is properly setup after a short delay
+        // This helps with timing issues on app launch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.ensureButtonIsResponsive()
+            self.verifyButtonSetup()
+        }
     }
     
     private func setupStatusItem() {
+        // Ensure we're on the main thread
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async {
+                self.setupStatusItem()
+            }
+            return
+        }
+        
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         
         if let button = statusItem?.button {
@@ -40,20 +65,27 @@ class MenuBarController: ObservableObject {
                 // Fallback to a simple text-based icon
                 button.title = "📋"
             }
+
+            // Clear any existing target/action first
+            button.target = nil
+            button.action = nil
             
-            button.action = #selector(statusItemClicked)
+            // Set up the target and action
             button.target = self
-            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            button.action = #selector(statusItemClicked(_:))
             
-            // Make sure the button is visible
+            // Use standard mouse events for better compatibility
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+            
+            // Make sure the button is visible and enabled
             button.isEnabled = true
+            button.isHidden = false
             
-            print("✅ Menu bar item created successfully")
+            // Force the button to recognize its target
+            button.needsDisplay = true
         } else {
-            print("❌ Failed to create menu bar button")
+            
         }
-        
-        setupPopover()
     }
     
     private func setupPopover() {
@@ -64,17 +96,71 @@ class MenuBarController: ObservableObject {
         popover?.contentViewController = NSHostingController(
             rootView: ContentView(clipboardMonitor: clipboardMonitor, menuBarController: self)
         )
-        
-        print("✅ Popover setup completed")
     }
     
-    @objc private func statusItemClicked() {
+    @objc private func statusItemClicked(_ sender: Any?) {
         guard let event = NSApp.currentEvent else { return }
-        
-        if event.type == .rightMouseUp {
+
+        if event.type == .rightMouseDown {
             showContextMenu()
         } else {
             togglePopover()
+        }
+    }
+    
+    @objc private func applicationDidBecomeActive() {
+        // Ensure the menu bar button is responsive when app becomes active
+        DispatchQueue.main.async {
+            self.ensureButtonIsResponsive()
+        }
+    }
+    
+    private func ensureButtonIsResponsive() {
+        guard let button = statusItem?.button else { return }
+
+        // Check if target or action is lost and re-establish if needed
+        if button.target !== self || button.action != #selector(statusItemClicked(_:)) {
+            // Re-setup the button
+            button.target = nil
+            button.action = nil
+
+            button.target = self
+            button.action = #selector(statusItemClicked(_:))
+            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+
+            // Ensure button is enabled and visible
+            button.isEnabled = true
+            button.isHidden = false
+            button.needsDisplay = true
+        }
+    }
+    
+    
+    // Debug method to verify button setup
+    private func verifyButtonSetup() {
+        if let button = statusItem?.button {
+            // If target or action is nil, reinitialize
+            if button.target == nil || button.action == nil {
+                button.target = self
+                button.action = #selector(statusItemClicked(_:))
+                button.sendAction(on: [NSEvent.EventTypeMask.leftMouseDown, NSEvent.EventTypeMask.rightMouseDown])
+            }
+        }
+    }
+    
+    // Public method to force button reinitialization if needed
+    func refreshMenuBarButton() {
+        // Remove old status item
+        if let oldStatusItem = statusItem {
+            NSStatusBar.system.removeStatusItem(oldStatusItem)
+        }
+
+        // Create fresh status item
+        setupStatusItem()
+
+        // Verify it worked
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.verifyButtonSetup()
         }
     }
     
@@ -147,7 +233,7 @@ class MenuBarController: ObservableObject {
         
         // Create and configure window with better size
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 500, height: 400),
+            contentRect: NSRect(x: 0, y: 0, width: 550, height: 500),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -157,7 +243,7 @@ class MenuBarController: ObservableObject {
         window.contentView = NSHostingView(rootView: settingsView)
         window.center()
         window.isReleasedWhenClosed = false
-        window.setContentSize(NSSize(width: 500, height: 400))
+        window.setContentSize(NSSize(width: 550, height: 500))
         
         // Ensure proper window ordering and focus
         window.level = .floating
@@ -173,19 +259,14 @@ class MenuBarController: ObservableObject {
     }
     
     @objc private func showPopover() {
-        guard let button = statusItem?.button else { 
-            print("❌ No status item button available")
-            return 
-        }
+        guard let button = statusItem?.button else { return }
         
         if popover?.isShown == true {
-            print("🔄 Closing popover")
             stopClickOutsideMonitoring()
             popover?.close()
         } else {
             // Capture the frontmost application BEFORE we activate ourselves
             previousApplication = NSWorkspace.shared.frontmostApplication
-            print("📱 (showPopover) Stored previous app: \(previousApplication?.localizedName ?? "unknown")")
 
             // Recreate the content view each time to force fresh state (resets selection/highlight)
             if let popover = popover {
@@ -194,10 +275,8 @@ class MenuBarController: ObservableObject {
                 )
             }
 
-            // Log current AX trust state every open for transparency
-            Logging.debug("[AX][popover-open] trusted=\(AXIsProcessTrusted())")
-
-            print("🔄 Opening popover")
+            // Log current AX trust state every open for transparency (kept minimal)
+            _ = AXIsProcessTrusted()
             popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             
             // Start monitoring for clicks outside
@@ -212,7 +291,11 @@ class MenuBarController: ObservableObject {
     }
     
     func togglePopover() {
-        showPopover()
+        if popover?.isShown == true {
+            hidePopover()
+        } else {
+            showPopover()
+        }
     }
     
     @objc private func clearHistory() {
@@ -233,12 +316,7 @@ class MenuBarController: ObservableObject {
     }
     
     func activatePreviousApplication() {
-        guard let previousApp = previousApplication else {
-            print("⚠️ No previous application stored")
-            return
-        }
-        
-        print("🔄 Activating previous app: \(previousApp.localizedName ?? "unknown")")
+                    guard let previousApp = previousApplication else { return }
         previousApp.activate(options: [.activateIgnoringOtherApps])
     }
     
@@ -257,33 +335,31 @@ class MenuBarController: ObservableObject {
         let start = Date()
         let timeout: TimeInterval = 2.0
         let pollInterval: TimeInterval = 0.08
-        Logging.debug("[Paste] Scheduling paste; timeout=\(timeout)s poll=\(pollInterval)s previous=\(previousApplication?.localizedName ?? "nil")")
+        
 
         func attempt() {
             // If we no longer have a previousApplication stored, just fire
             guard let previous = self.previousApplication else {
-                Logging.debug("[Paste] No previous app stored; firing paste now")
+                
                 self.simulatePasteKeypress()
                 return
             }
             if previous.isActive {
-                Logging.debug("[Paste] Previous app active (\(previous.localizedName ?? "unknown")); sending paste event")
                 // App is active; send paste event
                 self.simulatePasteKeypress()
                 return
             }
             if Date().timeIntervalSince(start) > timeout {
-                Logging.debug("[Paste] Timeout waiting for activation; firing paste anyway")
+                
                 self.simulatePasteKeypress()
                 return
             }
-            Logging.debug("[Paste] Previous app not yet active; retrying in \(pollInterval)s")
+            
             DispatchQueue.main.asyncAfter(deadline: .now() + pollInterval) { attempt() }
         }
 
         // Give a short grace period after activation attempt
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-            Logging.debug("[Paste] Starting activation polling")
             attempt()
         }
     }
@@ -292,26 +368,23 @@ class MenuBarController: ObservableObject {
         permissionManager.checkPermission() // Refresh permission status
         
         if !permissionManager.isAccessibilityGranted {
-            Logging.debug("[Paste][Diag] Permission not granted according to PermissionManager")
-            Logging.debug("[Paste][Diag] AXIsProcessTrusted() raw check: \(AXIsProcessTrusted())")
+            
             
             // Try prompting again (some cases require options variant to re-evaluate)
             if !didAttemptAXPrompt {
                 didAttemptAXPrompt = true
                 permissionManager.requestPermission()
-                Logging.debug("[Paste][Diag] Requested permission via PermissionManager")
+                
                 
                 // Wait a moment and check again
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                     if self.permissionManager.isAccessibilityGranted {
                         self.simulatePasteKeypress() // Retry the paste
                     } else {
-                        Logging.debug("[Paste][Diag] Still not granted after prompt; aborting paste simulation")
                     }
                 }
                 return
             } else {
-                Logging.debug("[Paste][Diag] Permission not available; aborting paste simulation")
                 return
             }
         }
@@ -320,27 +393,14 @@ class MenuBarController: ObservableObject {
         keyDownEvent.flags = .maskCommand
         guard let keyUpEvent = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else { return }
         keyUpEvent.flags = .maskCommand
-        Logging.debug("[Paste] Posting Cmd+V keyDown")
         keyDownEvent.post(tap: .cghidEventTap)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.012) {
-            Logging.debug("[Paste] Posting Cmd+V keyUp")
             keyUpEvent.post(tap: .cghidEventTap)
         }
     }
 
     @objc private func diagnosePaste() {
         permissionManager.checkPermission()
-        let trusted = AXIsProcessTrusted()
-        Logging.debug("[Diag] PermissionManager.isAccessibilityGranted: \(permissionManager.isAccessibilityGranted)")
-        Logging.debug("[Diag] AXIsProcessTrusted() raw: \(trusted)")
-        if let prev = previousApplication {
-            Logging.debug("[Diag] Previous app stored: bundle=\(prev.bundleIdentifier ?? "nil") name=\(prev.localizedName ?? "nil") active=\(prev.isActive)")
-        } else {
-            Logging.debug("[Diag] No previous application stored")
-        }
-        let front = NSWorkspace.shared.frontmostApplication
-        Logging.debug("[Diag] Frontmost now: bundle=\(front?.bundleIdentifier ?? "nil") name=\(front?.localizedName ?? "nil")")
-        // Fire a manual paste attempt
         simulatePasteKeypress()
     }
     
@@ -359,7 +419,6 @@ class MenuBarController: ObservableObject {
             GetEventParameter(event, OSType(kEventParamDirectObject), OSType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
             
             if hotKeyID.id == menuBarController.hotKeyID.id {
-                print("🔥 Global hotkey pressed!")
                 DispatchQueue.main.async {
                     menuBarController.togglePopover()
                 }
@@ -370,11 +429,7 @@ class MenuBarController: ObservableObject {
         
         let registerResult = RegisterEventHotKey(hotKeyCode, modifierKeys, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
         
-        if registerResult == noErr {
-            print("✅ Global hotkey Cmd+Shift+V registered successfully")
-        } else {
-            print("❌ Failed to register global hotkey, error: \(registerResult)")
-        }
+        _ = registerResult
     }
     
     // MARK: - Click Outside Monitoring
@@ -395,21 +450,18 @@ class MenuBarController: ObservableObject {
             
             // Check if the click is outside the popover bounds
             if !popoverWindow.frame.contains(screenLocation) {
-                print("🖱️ Click detected outside popover, closing...")
                 DispatchQueue.main.async {
-                    self.hidePopover()
+                    self.hidePopoverAndActivatePreviousApp()
                 }
             }
         }
         
-        print("👁️ Started monitoring for clicks outside popover")
     }
     
     private func stopClickOutsideMonitoring() {
         if let monitor = clickOutsideMonitor {
             NSEvent.removeMonitor(monitor)
             clickOutsideMonitor = nil
-            print("👁️ Stopped monitoring for clicks outside popover")
         }
     }
     
@@ -418,8 +470,13 @@ class MenuBarController: ObservableObject {
         if let hotKeyRef = hotKeyRef {
             UnregisterEventHotKey(hotKeyRef)
         }
+        NotificationCenter.default.removeObserver(self)
         statusItem = nil
         popover = nil
+    }
+    
+    deinit {
+        cleanup()
     }
 }
 
@@ -501,6 +558,90 @@ struct SimpleSettingsView: View {
                 
                 Divider()
                 
+                // Persistence Settings
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Clipboard Persistence")
+                        .font(.headline)
+                    
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Save clipboard history", isOn: $preferences.persistenceEnabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        
+                        if preferences.persistenceEnabled {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Toggle("Save images to disk", isOn: $preferences.saveImages)
+                                    .padding(.leading, 20)
+                                
+                                HStack {
+                                    Text("Storage limit:")
+                                        .frame(width: 100, alignment: .leading)
+                                        .padding(.leading, 20)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Slider(
+                                            value: Binding(
+                                                get: { Double(preferences.maxStorageSize) },
+                                                set: { preferences.maxStorageSize = Int($0) }
+                                            ),
+                                            in: 10...1000,
+                                            step: 10
+                                        ) {
+                                            Text("Storage Limit")
+                                        } minimumValueLabel: {
+                                            Text("10MB")
+                                                .font(.caption)
+                                        } maximumValueLabel: {
+                                            Text("1GB")
+                                                .font(.caption)
+                                        }
+                                        
+                                        Text("\(preferences.maxStorageSize) MB")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                                
+                                HStack {
+                                    Text("Keep items for:")
+                                        .frame(width: 100, alignment: .leading)
+                                        .padding(.leading, 20)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Slider(
+                                            value: Binding(
+                                                get: { Double(preferences.persistenceDays) },
+                                                set: { preferences.persistenceDays = Int($0) }
+                                            ),
+                                            in: 1...365,
+                                            step: 1
+                                        ) {
+                                            Text("Persistence Days")
+                                        } minimumValueLabel: {
+                                            Text("1")
+                                                .font(.caption)
+                                        } maximumValueLabel: {
+                                            Text("365")
+                                                .font(.caption)
+                                        }
+                                        
+                                        Text("\(preferences.persistenceDays) days")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                        
+                        Text(preferences.persistenceEnabled 
+                             ? "Clipboard items are saved to disk and restored when the app restarts."
+                             : "Clipboard history will be cleared when the app quits.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                Divider()
+                
                 // Additional Settings
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Global Hotkey")
@@ -538,7 +679,7 @@ struct SimpleSettingsView: View {
             }
             .padding(20)
         }
-        .frame(minWidth: 460, minHeight: 360)
+        .frame(minWidth: 520, minHeight: 460)
         .background(Color(NSColor.windowBackgroundColor))
     }
 }

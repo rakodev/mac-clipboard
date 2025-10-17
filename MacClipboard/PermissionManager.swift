@@ -31,10 +31,10 @@ class PermissionManager: ObservableObject {
         if actuallyWorking != isAccessibilityGranted {
             DispatchQueue.main.async {
                 self.isAccessibilityGranted = actuallyWorking
-                Logging.debug("[PermissionManager] Accessibility status changed: trusted=\(trusted), canCreateEvents=\(canCreateEvents), result=\(actuallyWorking)")
+                Logging.info("[PermissionManager] Accessibility status changed: trusted=\(trusted), canCreateEvents=\(canCreateEvents), result=\(actuallyWorking)")
                 
                 if trusted && !canCreateEvents {
-                    Logging.debug("[PermissionManager] ⚠️ AXIsProcessTrusted=true but CGEvent creation failed - permission mismatch!")
+                    Logging.info("[PermissionManager] AXIsProcessTrusted=true but CGEvent creation failed")
                 }
             }
         }
@@ -47,7 +47,7 @@ class PermissionManager: ObservableObject {
     
     /// Request accessibility permission with prompt
     func requestPermission() {
-        Logging.debug("[PermissionManager] Requesting accessibility permission")
+    Logging.info("[PermissionManager] Requesting accessibility permission")
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
         let result = AXIsProcessTrustedWithOptions(options)
         
@@ -56,26 +56,26 @@ class PermissionManager: ObservableObject {
             self.checkPermission()
         }
         
-        Logging.debug("[PermissionManager] Permission request result: \(result)")
+    Logging.info("[PermissionManager] Permission request result: \(result)")
     }
     
     /// Force a complete permission reset - shows system prompt
     func forcePermissionPrompt() {
-        Logging.debug("[PermissionManager] Forcing accessibility permission prompt")
+    Logging.info("[PermissionManager] Forcing accessibility permission prompt")
         
         // First check current status
         let currentTrusted = AXIsProcessTrusted()
-        Logging.debug("[PermissionManager] Current AXIsProcessTrusted: \(currentTrusted)")
+    Logging.info("[PermissionManager] Current AXIsProcessTrusted: \(currentTrusted)")
         
         // Always show the prompt to ensure this specific binary gets permission
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
         let promptResult = AXIsProcessTrustedWithOptions(options)
-        Logging.debug("[PermissionManager] Force prompt result: \(promptResult)")
+    Logging.info("[PermissionManager] Force prompt result: \(promptResult)")
         
         // Check again after a delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             self.checkPermission()
-            Logging.debug("[PermissionManager] Post-prompt check completed")
+            Logging.info("[PermissionManager] Post-prompt check completed")
         }
     }
     

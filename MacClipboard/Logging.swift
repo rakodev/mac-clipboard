@@ -16,4 +16,10 @@ enum Logging {
         guard isVerbose else { return }
         print(message())
     }
+
+    /// Emit an informational log message. These are always printed so they remain visible
+    /// in release builds for important state changes.
+    static func info(_ message: @autoclosure () -> String) {
+        print(message())
+    }
 }

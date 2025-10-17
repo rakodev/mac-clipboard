@@ -11,6 +11,10 @@ class UserPreferencesManager: ObservableObject {
         static let hotKeyEnabled = "hotKeyEnabled"
         static let showImagePreviews = "showImagePreviews"
         static let autoStartEnabled = "autoStartEnabled"
+        static let persistenceEnabled = "persistenceEnabled"
+        static let saveImages = "saveImages"
+        static let maxStorageSize = "maxStorageSize"
+        static let persistenceDays = "persistenceDays"
     }
     
     // Constants
@@ -52,6 +56,44 @@ class UserPreferencesManager: ObservableObject {
         }
     }
     
+    // Whether persistence is enabled
+    @Published var persistenceEnabled: Bool {
+        didSet {
+            defaults.set(persistenceEnabled, forKey: Keys.persistenceEnabled)
+        }
+    }
+    
+    // Whether to save images to persistent storage
+    @Published var saveImages: Bool {
+        didSet {
+            defaults.set(saveImages, forKey: Keys.saveImages)
+        }
+    }
+    
+    // Maximum storage size in MB
+    @Published var maxStorageSize: Int {
+        didSet {
+            let clampedValue = max(10, min(10000, maxStorageSize)) // 10MB to 10GB
+            if clampedValue != maxStorageSize {
+                maxStorageSize = clampedValue
+                return
+            }
+            defaults.set(maxStorageSize, forKey: Keys.maxStorageSize)
+        }
+    }
+    
+    // Number of days to keep items in persistent storage
+    @Published var persistenceDays: Int {
+        didSet {
+            let clampedValue = max(1, min(365, persistenceDays)) // 1 day to 1 year
+            if clampedValue != persistenceDays {
+                persistenceDays = clampedValue
+                return
+            }
+            defaults.set(persistenceDays, forKey: Keys.persistenceDays)
+        }
+    }
+    
     private init() {
         // Load saved preferences or set defaults
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
@@ -59,6 +101,12 @@ class UserPreferencesManager: ObservableObject {
         self.hotKeyEnabled = defaults.object(forKey: Keys.hotKeyEnabled) as? Bool ?? true
         self.showImagePreviews = defaults.object(forKey: Keys.showImagePreviews) as? Bool ?? true
         self.autoStartEnabled = defaults.object(forKey: Keys.autoStartEnabled) as? Bool ?? false
+        
+        // Persistence settings - enabled by default as requested
+        self.persistenceEnabled = defaults.object(forKey: Keys.persistenceEnabled) as? Bool ?? true
+        self.saveImages = defaults.object(forKey: Keys.saveImages) as? Bool ?? false // Images off by default due to size
+        self.maxStorageSize = defaults.object(forKey: Keys.maxStorageSize) as? Int ?? 500 // 500MB default
+        self.persistenceDays = defaults.object(forKey: Keys.persistenceDays) as? Int ?? 30 // 30 days default
     }
     
     func resetToDefaults() {
@@ -66,5 +114,9 @@ class UserPreferencesManager: ObservableObject {
         hotKeyEnabled = true
         showImagePreviews = true
         autoStartEnabled = false
+        persistenceEnabled = true
+        saveImages = false
+        maxStorageSize = 500
+        persistenceDays = 30
     }
 }
