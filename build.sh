@@ -277,7 +277,14 @@ xcodebuild -exportArchive \
 # preserving Accessibility permissions. Without this, cdhash changes every build.
 echo -e "${YELLOW}🔏 Re-signing with stable designated requirements...${NC}"
 BUNDLE_ID="com.macclipboard.MacClipboard"
-DESIGNATED_REQ="identifier \"${BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${TEAM_ID}\""
+
+# Full Developer ID designated requirement with proper certificate chain
+# - identifier: bundle ID
+# - anchor apple generic: certificate chain anchored to Apple
+# - certificate 1[field.1.2.840.113635.100.6.2.6]: Developer ID CA OID
+# - certificate leaf[field.1.2.840.113635.100.6.1.13]: Developer ID Application OID
+# - certificate leaf[subject.OU]: Team ID
+DESIGNATED_REQ="identifier \"${BUNDLE_ID}\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"${TEAM_ID}\""
 
 # Sign nested components first (without designated requirement)
 find "${APP_PATH}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
