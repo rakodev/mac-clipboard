@@ -272,9 +272,31 @@ xcodebuild -exportArchive \
     -exportPath "${EXPORT_PATH}" \
     -exportOptionsPlist build/ExportOptions.plist
 
+# Re-sign with proper designated requirements
+# This ensures macOS recognizes the app as the same app across updates,
+# preserving Accessibility permissions. Without this, cdhash changes every build.
+echo -e "${YELLOW}🔏 Re-signing with stable designated requirements...${NC}"
+BUNDLE_ID="com.macclipboard.MacClipboard"
+DESIGNATED_REQ="identifier \"${BUNDLE_ID}\" and anchor apple generic and certificate leaf[subject.OU] = \"${TEAM_ID}\""
+
+# Sign nested components first (without designated requirement)
+find "${APP_PATH}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
+    codesign --force --sign "${DEVELOPER_ID}" --options runtime {} \; 2>/dev/null || true
+
+# Sign the main app with designated requirement
+codesign --force --sign "${DEVELOPER_ID}" \
+    --options runtime \
+    -r="designated => ${DESIGNATED_REQ}" \
+    "${APP_PATH}"
+
 # Verify code signature
 echo -e "${YELLOW}🔍 Verifying code signature...${NC}"
 codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+
+# Verify designated requirements
+echo -e "${YELLOW}🔍 Verifying designated requirements...${NC}"
+codesign -d -r- "${APP_PATH}" 2>&1 | grep -q "identifier" && echo -e "${GREEN}✅ Designated requirements set correctly${NC}" || echo -e "${YELLOW}⚠️  Could not verify designated requirements${NC}"
+
 echo -e "${GREEN}✅ Code signature verified${NC}"
 
 # Notarization
