@@ -276,33 +276,26 @@ xcodebuild -exportArchive \
 # This ensures macOS recognizes the app as the same app across updates,
 # preserving Accessibility permissions. Without this, cdhash changes every build.
 echo -e "${YELLOW}🔏 Re-signing with stable designated requirements...${NC}"
-BUNDLE_ID="com.macclipboard.MacClipboard"
 
-# Full Developer ID designated requirement with proper certificate chain
-# - identifier: bundle ID
-# - anchor apple generic: certificate chain anchored to Apple
-# - certificate 1[field.1.2.840.113635.100.6.2.6]: Developer ID CA OID
-# - certificate leaf[field.1.2.840.113635.100.6.1.13]: Developer ID Application OID
-# - certificate leaf[subject.OU]: Team ID
-DESIGNATED_REQ="identifier \"${BUNDLE_ID}\" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"${TEAM_ID}\""
-
-# Sign nested components first (without designated requirement)
+# Sign nested components first
 find "${APP_PATH}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
     codesign --force --sign "${DEVELOPER_ID}" --options runtime {} \; 2>/dev/null || true
 
-# Sign the main app with designated requirement
+# Sign the main app with stable designated requirement
+# Using identifier + team ID (not cdhash) so macOS recognizes app across updates
+# This preserves Accessibility permissions after upgrades
 codesign --force --sign "${DEVELOPER_ID}" \
     --options runtime \
-    -r="designated => ${DESIGNATED_REQ}" \
+    -r='designated => identifier "com.macclipboard.MacClipboard" and anchor apple generic and certificate leaf[subject.OU] = "K542B2Z65M"' \
     "${APP_PATH}"
 
-# Verify code signature
+# Verify code signature (without --strict as it conflicts with custom designated requirements)
 echo -e "${YELLOW}🔍 Verifying code signature...${NC}"
-codesign --verify --deep --strict --verbose=2 "${APP_PATH}"
+codesign --verify --deep --verbose=2 "${APP_PATH}"
 
-# Verify designated requirements
-echo -e "${YELLOW}🔍 Verifying designated requirements...${NC}"
-codesign -d -r- "${APP_PATH}" 2>&1 | grep -q "identifier" && echo -e "${GREEN}✅ Designated requirements set correctly${NC}" || echo -e "${YELLOW}⚠️  Could not verify designated requirements${NC}"
+# Show the designated requirement that was set
+echo -e "${YELLOW}🔍 Checking designated requirements...${NC}"
+codesign -d -r- "${APP_PATH}" 2>&1
 
 echo -e "${GREEN}✅ Code signature verified${NC}"
 
