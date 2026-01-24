@@ -24,6 +24,10 @@ DEVELOPER_ID="Developer ID Application: Ramazan KORKMAZ (K542B2Z65M)"
 TEAM_ID="K542B2Z65M"
 KEYCHAIN_PROFILE="MacClipboard-Notarize"
 
+# Homebrew Tap Configuration
+HOMEBREW_TAP_PATH="../homebrew-tap"
+HOMEBREW_CASK_FILE="${HOMEBREW_TAP_PATH}/Casks/macclipboard.rb"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -418,6 +422,34 @@ if [ "$CREATE_RELEASE" = true ]; then
     REPO_URL=$(gh repo view --json url -q .url)
     echo ""
     echo -e "${GREEN}🔗 Release URL: ${REPO_URL}/releases/tag/${TAG}${NC}"
+
+    # =========================================================================
+    # UPDATE HOMEBREW TAP
+    # =========================================================================
+    echo ""
+    echo -e "${BLUE}🍺 Updating Homebrew tap...${NC}"
+
+    if [ -f "${HOMEBREW_CASK_FILE}" ]; then
+        # Get SHA256 of the DMG
+        DMG_SHA256=$(shasum -a 256 "${DMG_PATH}" | awk '{print $1}')
+
+        # Update version and SHA256 in cask file
+        sed -i '' "s/version \"[^\"]*\"/version \"${NEW_VERSION}\"/" "${HOMEBREW_CASK_FILE}"
+        sed -i '' "s/sha256 \"[^\"]*\"/sha256 \"${DMG_SHA256}\"/" "${HOMEBREW_CASK_FILE}"
+
+        # Commit and push
+        cd "${HOMEBREW_TAP_PATH}"
+        git add Casks/macclipboard.rb
+        git commit -m "Update macclipboard to v${NEW_VERSION}"
+        git push
+        cd - > /dev/null
+
+        echo -e "${GREEN}✅ Homebrew tap updated to v${NEW_VERSION}${NC}"
+        echo -e "${GREEN}   Users can now run: brew upgrade --cask macclipboard${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Homebrew cask file not found at ${HOMEBREW_CASK_FILE}${NC}"
+        echo -e "${YELLOW}   Skipping Homebrew tap update.${NC}"
+    fi
 fi
 
 echo ""

@@ -139,6 +139,19 @@ Access settings via the gear icon or right-click menu.
 
 macOS 13.0 (Ventura) or later.
 
+## Update
+
+### Homebrew
+
+```bash
+brew update
+brew upgrade --cask macclipboard
+```
+
+### Direct Download
+
+Download the latest version from [GitHub Releases](https://github.com/rakodev/mac-clipboard/releases) and replace the app in your Applications folder.
+
 ## Uninstall
 
 If installed via Homebrew:
