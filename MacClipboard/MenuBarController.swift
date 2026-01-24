@@ -233,8 +233,8 @@ class MenuBarController: NSObject, ObservableObject {
         
         // Create and configure window with better size
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 550, height: 500),
-            styleMask: [.titled, .closable, .miniaturizable],
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 380),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -500,251 +500,172 @@ struct SimpleSettingsView: View {
     }
     
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("MacClipboard Settings")
-                        .font(.title2)
-                        .fontWeight(.semibold)
-                    
-                    Text("Configure clipboard history and behavior")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-                
-                Divider()
-                
-                // Clipboard History Settings
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Clipboard History")
-                        .font(.headline)
-                    
+        VStack(alignment: .leading, spacing: 16) {
+            // Header
+            Text("Settings")
+                .font(.title2)
+                .fontWeight(.semibold)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Clipboard History
                     VStack(alignment: .leading, spacing: 8) {
+                        Text("Clipboard History")
+                            .font(.headline)
+
                         HStack {
-                            Text("Maximum items:")
-                                .frame(width: 120, alignment: .leading)
-                            
-                            VStack(alignment: .leading, spacing: 4) {
+                            Text("Max items:")
+                                .frame(width: 80, alignment: .leading)
+                            Slider(
+                                value: Binding(
+                                    get: { Double(preferences.maxClipboardItems) },
+                                    set: { preferences.maxClipboardItems = Int($0) }
+                                ),
+                                in: Double(UserPreferencesManager.minClipboardItems)...Double(UserPreferencesManager.maxClipboardItems),
+                                step: 10
+                            )
+                            Text("\(preferences.maxClipboardItems)")
+                                .frame(width: 45, alignment: .trailing)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    Divider()
+
+                    // Persistence
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Persistence")
+                            .font(.headline)
+
+                        Toggle("Save clipboard history", isOn: $preferences.persistenceEnabled)
+
+                        if preferences.persistenceEnabled {
+                            Toggle("Save images to disk", isOn: $preferences.saveImages)
+
+                            HStack {
+                                Text("Storage:")
+                                    .frame(width: 80, alignment: .leading)
                                 Slider(
                                     value: Binding(
-                                        get: { Double(preferences.maxClipboardItems) },
-                                        set: { preferences.maxClipboardItems = Int($0) }
+                                        get: { Double(preferences.maxStorageSize) },
+                                        set: { preferences.maxStorageSize = Int($0) }
                                     ),
-                                    in: Double(UserPreferencesManager.minClipboardItems)...Double(UserPreferencesManager.maxClipboardItems),
-                                    step: 10
-                                ) {
-                                    Text("Max Items")
-                                } minimumValueLabel: {
-                                    Text("\(UserPreferencesManager.minClipboardItems)")
-                                        .font(.caption)
-                                } maximumValueLabel: {
-                                    Text("\(UserPreferencesManager.maxClipboardItems)")
-                                        .font(.caption)
-                                }
-                                
-                                Text("\(preferences.maxClipboardItems) items")
-                                    .font(.caption)
+                                    in: 10...10000,
+                                    step: 50
+                                )
+                                Text(preferences.maxStorageSize >= 1000 ? String(format: "%.1fGB", Double(preferences.maxStorageSize) / 1000.0) : "\(preferences.maxStorageSize)MB")
+                                    .frame(width: 50, alignment: .trailing)
                                     .foregroundColor(.secondary)
                             }
+
+                            HStack {
+                                Text("Keep for:")
+                                    .frame(width: 80, alignment: .leading)
+                                Slider(
+                                    value: Binding(
+                                        get: { Double(preferences.persistenceDays) },
+                                        set: { preferences.persistenceDays = Int($0) }
+                                    ),
+                                    in: 1...365,
+                                    step: 1
+                                )
+                                Text("\(preferences.persistenceDays) days")
+                                    .frame(width: 60, alignment: .trailing)
+                                    .foregroundColor(.secondary)
+                            }
+
+                            Text("Favorites are kept indefinitely.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
                         }
-                        
-                        Text("Older items will be automatically removed when the limit is reached.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                            .padding(.leading, 120)
                     }
-                }
-                
-                Divider()
-                
-                // Persistence Settings
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Clipboard Persistence")
-                        .font(.headline)
-                    
+
+                    Divider()
+
+                    // Hotkey & Shortcuts
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Save clipboard history", isOn: $preferences.persistenceEnabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        
-                        if preferences.persistenceEnabled {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Toggle("Save images to disk", isOn: $preferences.saveImages)
-                                    .padding(.leading, 20)
-                                
-                                HStack {
-                                    Text("Storage limit:")
-                                        .frame(width: 100, alignment: .leading)
-                                        .padding(.leading, 20)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Slider(
-                                            value: Binding(
-                                                get: { Double(preferences.maxStorageSize) },
-                                                set: { preferences.maxStorageSize = Int($0) }
-                                            ),
-                                            in: 10...1000,
-                                            step: 10
-                                        ) {
-                                            Text("Storage Limit")
-                                        } minimumValueLabel: {
-                                            Text("10MB")
+                        Text("Shortcuts")
+                            .font(.headline)
+
+                        Toggle("Global hotkey (⌘ ⇧ V)", isOn: $preferences.hotKeyEnabled)
+                        Toggle("In-app shortcuts", isOn: $preferences.shortcutsEnabled)
+
+                        if preferences.shortcutsEnabled {
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 12) {
+                                    ForEach([("⌘ D", "Favorite"), ("⌘ F", "Filter"), ("⌘ Z", "Preview")], id: \.0) { shortcut in
+                                        HStack(spacing: 4) {
+                                            Text(shortcut.0)
+                                                .font(.system(.caption2, design: .monospaced))
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 2)
+                                                .background(Color.secondary.opacity(0.2))
+                                                .cornerRadius(3)
+                                            Text(shortcut.1)
                                                 .font(.caption)
-                                        } maximumValueLabel: {
-                                            Text("1GB")
-                                                .font(.caption)
+                                                .foregroundColor(.secondary)
                                         }
-                                        
-                                        Text("\(preferences.maxStorageSize) MB")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
                                     }
                                 }
-                                
-                                HStack {
-                                    Text("Keep items for:")
-                                        .frame(width: 100, alignment: .leading)
-                                        .padding(.leading, 20)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Slider(
-                                            value: Binding(
-                                                get: { Double(preferences.persistenceDays) },
-                                                set: { preferences.persistenceDays = Int($0) }
-                                            ),
-                                            in: 1...365,
-                                            step: 1
-                                        ) {
-                                            Text("Persistence Days")
-                                        } minimumValueLabel: {
-                                            Text("1")
-                                                .font(.caption)
-                                        } maximumValueLabel: {
-                                            Text("365")
-                                                .font(.caption)
-                                        }
-                                        
-                                        Text("\(preferences.persistenceDays) days")
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                    }
+                                HStack(spacing: 4) {
+                                    Text("⌘+Click")
+                                        .font(.system(.caption2, design: .monospaced))
+                                        .padding(.horizontal, 4)
+                                        .padding(.vertical, 2)
+                                        .background(Color.secondary.opacity(0.2))
+                                        .cornerRadius(3)
+                                    Text("Multi-select for deletion")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
                             }
+                            .padding(.leading, 16)
                         }
-                        
-                        Text(preferences.persistenceEnabled
-                             ? "Clipboard items are saved to disk and restored when the app restarts. Favorites are kept indefinitely."
-                             : "Clipboard history will be cleared when the app quits.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
                     }
-                }
-                
-                Divider()
-                
-                // Additional Settings
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Global Hotkey")
-                        .font(.headline)
-                    
-                    HStack {
-                        Toggle("Enable global hotkey (⌘⇧V)", isOn: $preferences.hotKeyEnabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    
-                    if !preferences.hotKeyEnabled {
-                        Text("Global hotkey is disabled. You can still access clipboard via menu bar.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Divider()
-
-                // Keyboard Shortcuts
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Keyboard Shortcuts")
-                        .font(.headline)
-
-                    Toggle("Enable keyboard shortcuts", isOn: $preferences.shortcutsEnabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-
-                    if preferences.shortcutsEnabled {
-                        VStack(alignment: .leading, spacing: 6) {
-                            HStack {
-                                Text("⌘D")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .cornerRadius(4)
-                                Text("Toggle favorite on selected item")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            HStack {
-                                Text("⌘F")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .cornerRadius(4)
-                                Text("Switch between All / Favorites view")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            HStack {
-                                Text("⌘Z")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .cornerRadius(4)
-                                Text("Open image preview (when image selected)")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            HStack {
-                                Text("⌘+Click")
-                                    .font(.system(.caption, design: .monospaced))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Color.secondary.opacity(0.2))
-                                    .cornerRadius(4)
-                                Text("Select multiple items for deletion")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                        }
-                        .padding(.leading, 20)
-                    } else {
-                        Text("Keyboard shortcuts are disabled.")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                Spacer(minLength: 40)
-                
-                // Bottom buttons
-                HStack {
-                    Button("Reset to Defaults") {
-                        preferences.resetToDefaults()
-                    }
-                    .buttonStyle(.borderless)
-                    
-                    Spacer()
-                    
-                    Button("Done") {
-                        onDismiss()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
                 }
             }
-            .padding(20)
+
+            Divider()
+
+            // Footer with version and links
+            HStack {
+                let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+                let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
+                Text("MacClipboard v\(version) (\(build))")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Text("·")
+                    .foregroundColor(.secondary)
+
+                Button("GitHub") {
+                    if let url = URL(string: "https://github.com/rakodev/mac-clipboard") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+
+                Spacer()
+
+                Button("Reset") {
+                    preferences.resetToDefaults()
+                }
+                .buttonStyle(.borderless)
+                .font(.caption)
+
+                Button("Done") {
+                    onDismiss()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+            }
         }
-        .frame(minWidth: 520, minHeight: 560)
+        .padding(16)
+        .frame(minWidth: 400, minHeight: 360)
         .background(Color(NSColor.windowBackgroundColor))
     }
 }

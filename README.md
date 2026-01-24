@@ -36,22 +36,31 @@ Or in one command:
 brew install --cask rakodev/tap/macclipboard
 ```
 
+After installation, launch MacClipboard and enable Accessibility permissions (see [After Installation](#after-installation-required)).
+
 ### Direct Download
 
 Download the latest release from [GitHub Releases](https://github.com/rakodev/mac-clipboard/releases):
 
 1. Download `MacClipboard-Installer.dmg` (or `MacClipboard.zip`)
 2. Open the DMG and drag MacClipboard to Applications
-3. Launch from Applications or Spotlight
-4. Grant accessibility permissions when prompted
+3. Launch MacClipboard from Applications or Spotlight
+4. **Enable permissions** (see below)
+
+### After Installation (Required)
+
+MacClipboard needs Accessibility permissions for the global hotkey and auto-paste to work:
+
+1. Open **System Settings**
+2. Go to **Privacy & Security** → **Accessibility**
+3. Find **MacClipboard** in the list and enable it
+4. If prompted, click "Open System Settings" to go there directly
+
+Without this permission, the `Cmd+Shift+V` hotkey and automatic paste won't work.
 
 ### Build from Source
 
-```bash
-git clone https://github.com/rakodev/mac-clipboard.git
-cd mac-clipboard
-make build
-```
+See [Development Guide](docs/DEVELOPMENT.md) for building from source and contributing.
 
 ## Quick Start
 
@@ -107,14 +116,14 @@ Access settings via the gear icon or right-click menu.
 
 ### Clipboard History
 
-* **Maximum items**: 10 - 1,000 items (default: 500)
+* **Maximum items**: 10 - 1,000 items (default: 200)
 * Older items automatically removed when limit is reached
 
 ### Clipboard Persistence
 
-* **Save clipboard history**: Enable/disable persistent storage
-* **Save images to disk**: Store images for faster loading
-* **Storage limit**: 10MB - 1GB (default: 1GB)
+* **Save clipboard history**: Enable/disable persistent storage (default: on)
+* **Save images to disk**: Store images for faster loading (default: on)
+* **Storage limit**: 10MB - 10GB (default: 1GB)
 * **Keep items for**: 1 - 365 days (default: 60 days)
 * **Favorites**: Kept indefinitely, regardless of retention settings
 
@@ -127,24 +136,8 @@ Access settings via the gear icon or right-click menu.
 * Enable/disable in-app keyboard shortcuts (`Cmd+D`, `Cmd+F`, `Cmd+Z`, etc.)
 
 ## Requirements
- 
-macOS 13.0+, Xcode 15+ (to build from source).
 
-## Development
-
-```bash
-make build     # release build with DMG/ZIP
-make dev       # fast debug build
-make run       # build and run
-make clean     # clean build artifacts
-```
-
-Or open in Xcode:
-
-```bash
-open MacClipboard.xcodeproj
-# Press ⌘+R to build and run
-```
+macOS 13.0 (Ventura) or later.
 
 ## Uninstall
 
@@ -161,34 +154,6 @@ rm -rf /Applications/MacClipboard.app
 defaults delete com.macclipboard.app 2>/dev/null || true
 ```
 
-## Project Structure
-
-```text
-MacClipboard/
-  MacClipboardApp.swift     App entry point & delegate
-  ClipboardMonitor.swift    Clipboard tracking & history
-  MenuBarController.swift   Status item, popover, hotkey
-  ContentView.swift         SwiftUI UI components
-  UserPreferences.swift     Settings persistence
-  Assets.xcassets/          Icons & assets
-```
-
-## Technical Details
-
-**Clipboard Monitoring**: Uses `NSPasteboard.general` with change count polling every 0.5 seconds for reliable clipboard tracking.
-
-**Content Support**:
-
-* Text via `NSPasteboard.string(forType: .string)`
-* Images via `NSImage` pasteboard objects
-* Files via `NSURL` pasteboard objects
-
-**Global Hotkey**: Implemented using Carbon framework's `RegisterEventHotKey` for system-wide `Cmd+Shift+V` support.
-
-**Data Storage**: Clipboard history persisted to `~/Library/Application Support/MacClipboard` using Core Data. Favorites are kept indefinitely.
-
-**UI Framework**: Native SwiftUI with `NSHostingController` embedded in `NSPopover` for modern, responsive interface.
-
 ## Privacy & Security
 
 * **No network access**: All data stays on your Mac
@@ -197,31 +162,9 @@ MacClipboard/
 * **Secure by design**: Only accesses clipboard when content changes
 * **Minimal permissions**: Only needs accessibility for hotkey and auto-paste
 
-## Goals
-
-* Fast, responsive clipboard access
-* Native macOS look and feel
-* Minimal resource usage
-* Privacy-focused design
-* Simple but powerful interface
-
-## Non-Goals
-
-* Cloud sync or backup
-* Advanced text editing
-* Clipboard encryption
-* Cross-platform support
-
 ## Contributing
 
-PRs welcome for:
-
-* Bug fixes and stability improvements
-* Performance optimizations
-* UI/UX enhancements (keeping simplicity in mind)
-* Additional content type support
-
-Please keep changes focused and maintain the lightweight philosophy.
+See [Development Guide](docs/DEVELOPMENT.md) for how to build, contribute, and submit PRs.
 
 ## Troubleshooting
 
