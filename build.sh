@@ -286,7 +286,7 @@ find "${APP_PATH}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
 # This preserves Accessibility permissions after upgrades
 codesign --force --sign "${DEVELOPER_ID}" \
     --options runtime \
-    -r='designated => identifier "com.macclipboard.MacClipboard" and anchor apple generic and certificate leaf[subject.OU] = "K542B2Z65M"' \
+    -r='designated => identifier "com.macclipboard.app" and anchor apple generic and certificate leaf[subject.OU] = "K542B2Z65M"' \
     "${APP_PATH}"
 
 # Verify code signature (without --strict as it conflicts with custom designated requirements)
