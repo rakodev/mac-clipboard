@@ -232,15 +232,36 @@ class ClipboardMonitor: ObservableObject {
         DispatchQueue.main.async {
             self.clipboardHistory.removeAll()
         }
-        
-        // Also clear persistent storage if enabled
-        /*
-        if userPreferences.persistenceEnabled {
-            DispatchQueue.global(qos: .utility).async {
-                self.persistenceManager.clearAllData()
+
+        // Also clear persistent storage permanently
+        DispatchQueue.global(qos: .utility).async {
+            self.persistenceManager.clearAllData()
+        }
+    }
+
+    func toggleFavorite(_ item: ClipboardItem) {
+        DispatchQueue.main.async {
+            if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                self.clipboardHistory[index].isFavorite.toggle()
+
+                // Update persistence
+                let itemId = item.id
+                DispatchQueue.global(qos: .utility).async {
+                    _ = self.persistenceManager.toggleFavorite(itemId: itemId)
+                }
             }
         }
-        */
+    }
+
+    func deleteItems(withIds ids: Set<UUID>) {
+        DispatchQueue.main.async {
+            self.clipboardHistory.removeAll { ids.contains($0.id) }
+        }
+
+        // Also delete from persistent storage
+        DispatchQueue.global(qos: .utility).async {
+            self.persistenceManager.deleteItems(withIds: ids)
+        }
     }
 }
 
@@ -250,13 +271,15 @@ struct ClipboardItem: Identifiable, Equatable {
     let type: ClipboardContentType
     let timestamp: Date
     let displayText: String?
-    
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil) {
+    var isFavorite: Bool
+
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false) {
         self.id = id
         self.content = content
         self.type = type
         self.timestamp = timestamp
         self.displayText = displayText
+        self.isFavorite = isFavorite
     }
     
     var previewText: String {

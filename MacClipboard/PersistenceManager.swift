@@ -57,6 +57,7 @@ class PersistenceManager: ObservableObject {
         persistedItem.updatedAt = Date()
         persistedItem.contentType = Int16(item.type.rawValue)
         persistedItem.displayText = item.displayText
+        persistedItem.isFavorite = item.isFavorite
         
         switch item.type {
         case .text:
@@ -135,12 +136,33 @@ class PersistenceManager: ObservableObject {
             content: content,
             type: contentType,
             timestamp: createdAt,
-            displayText: persistedItem.displayText
+            displayText: persistedItem.displayText,
+            isFavorite: persistedItem.isFavorite
         )
     }
     
+    // MARK: - Favorites
+
+    func toggleFavorite(itemId: UUID) -> Bool {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+        do {
+            let items = try context.fetch(request)
+            if let item = items.first {
+                item.isFavorite = !item.isFavorite
+                saveContext()
+                Logging.info("Toggled favorite for item \(itemId): \(item.isFavorite)")
+                return item.isFavorite
+            }
+        } catch {
+            print("Toggle favorite error: \(error)")
+        }
+        return false
+    }
+
     // MARK: - Storage Management
-    
+
     func getStorageSize() -> Int64 {
         let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
         
@@ -177,7 +199,8 @@ class PersistenceManager: ObservableObject {
     func cleanupOldItems(olderThan days: Int) {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
         let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "createdAt < %@", cutoffDate as NSDate)
+        // Skip favorites - they persist indefinitely
+        request.predicate = NSPredicate(format: "createdAt < %@ AND isFavorite == NO", cutoffDate as NSDate)
         
         let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
         
@@ -196,13 +219,28 @@ class PersistenceManager: ObservableObject {
     func clearAllData() {
         let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
         let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-        
+
         do {
             try context.execute(deleteRequest)
             context.refreshAllObjects()
             Logging.info("💾 Cleared all persistent data")
         } catch {
             print("💾 Clear all error: \(error)")
+        }
+    }
+
+    func deleteItems(withIds ids: Set<UUID>) {
+        let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id IN %@", ids as CVarArg)
+        let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+
+        do {
+            let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+            let deletedCount = result?.result as? Int ?? 0
+            context.refreshAllObjects()
+            Logging.info("💾 Deleted \(deletedCount) items from persistent storage")
+        } catch {
+            print("💾 Delete items error: \(error)")
         }
     }
 }

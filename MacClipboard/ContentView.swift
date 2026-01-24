@@ -9,10 +9,15 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
+    @State private var showFavoritesOnly = false
+    @State private var showClearConfirmation = false
+    @State private var showDeleteAllConfirmation = false  // Second confirmation for delete all
+    @State private var selectedItemIds: Set<UUID> = []  // For multi-selection
     @FocusState private var isSearchFocused: Bool
     @State private var timeAgoCache: [UUID: String] = [:]
-    
+
     @ObservedObject private var permissionManager: PermissionManager
+    @ObservedObject private var userPreferences = UserPreferencesManager.shared
     
     init(clipboardMonitor: ClipboardMonitor, menuBarController: MenuBarController) {
         self.clipboardMonitor = clipboardMonitor
@@ -21,23 +26,27 @@ struct ContentView: View {
     }
     
     private var filteredItems: [ClipboardItem] {
-        if searchText.isEmpty {
-            return clipboardMonitor.clipboardHistory
-        } else {
-            let filtered = clipboardMonitor.clipboardHistory.filter { item in
+        var items = clipboardMonitor.clipboardHistory
+
+        // Filter by favorites if enabled
+        if showFavoritesOnly {
+            items = items.filter { $0.isFavorite }
+        }
+
+        // Then filter by search text
+        if !searchText.isEmpty {
+            items = items.filter { item in
                 let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchText)
                 let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchText)
                 return previewMatch || fullTextMatch
             }
-            
-            
-            
-            return filtered
         }
+
+        return items
     }
     
     private var dynamicHeight: CGFloat {
-        let baseHeight: CGFloat = 50  // Reduced header + search + minimal padding
+        let baseHeight: CGFloat = 78  // header + search + filter picker + minimal padding
         let itemHeight: CGFloat = 32  // Compact row height
         
         // Calculate items to show based on available content
@@ -74,7 +83,8 @@ struct ContentView: View {
                 permissionBanner
             }
             searchBarView
-            
+            filterPickerView
+
             if filteredItems.isEmpty {
                 emptyStateView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -130,6 +140,48 @@ struct ContentView: View {
         .background(KeyEventHandler { keyEvent in
             handleKeyEvent(keyEvent)
         })
+        .alert(
+            selectedItemIds.isEmpty ? "Delete Items" : "Delete Selected Items?",
+            isPresented: $showClearConfirmation
+        ) {
+            if selectedItemIds.isEmpty {
+                // No multi-selection: offer to delete current item or all
+                Button("Cancel", role: .cancel) { }
+                if let currentItem = selectedItem {
+                    Button("Delete Current Item", role: .destructive) {
+                        clipboardMonitor.deleteItems(withIds: [currentItem.id])
+                    }
+                }
+                Button("Delete All \(clipboardMonitor.clipboardHistory.count) Items...") {
+                    // Show second confirmation for delete all
+                    showDeleteAllConfirmation = true
+                }
+            } else {
+                // Multi-selection: delete selected items
+                Button("Cancel", role: .cancel) { }
+                Button("Delete \(selectedItemIds.count) Item\(selectedItemIds.count == 1 ? "" : "s")", role: .destructive) {
+                    clipboardMonitor.deleteItems(withIds: selectedItemIds)
+                    selectedItemIds.removeAll()
+                }
+            }
+        } message: {
+            if selectedItemIds.isEmpty {
+                Text("Choose to delete the currently previewed item or clear all history.")
+            } else {
+                Text("This will permanently delete \(selectedItemIds.count) selected item\(selectedItemIds.count == 1 ? "" : "s"). This action cannot be undone.")
+            }
+        }
+        .alert(
+            "Delete All \(clipboardMonitor.clipboardHistory.count) Items?",
+            isPresented: $showDeleteAllConfirmation
+        ) {
+            Button("Cancel", role: .cancel) { }
+            Button("Yes, Delete All", role: .destructive) {
+                clipboardMonitor.clearHistory()
+            }
+        } message: {
+            Text("Are you sure? This will permanently delete ALL \(clipboardMonitor.clipboardHistory.count) items from your clipboard history. This action cannot be undone.")
+        }
     }
 
     private var permissionBanner: some View {
@@ -183,7 +235,7 @@ struct ContentView: View {
             .help("Settings")
             
             Button(action: {
-                clipboardMonitor.clearHistory()
+                showClearConfirmation = true
             }) {
                 Image(systemName: "trash")
                     .foregroundColor(.secondary)
@@ -226,7 +278,18 @@ struct ContentView: View {
         .padding(.vertical, 3)
         .background(Color(NSColor.controlBackgroundColor))
     }
-    
+
+    private var filterPickerView: some View {
+        Picker("", selection: $showFavoritesOnly) {
+            Text("All").tag(false)
+            Text("Favorites").tag(true)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
     private var emptyStateView: some View {
         VStack(spacing: 16) {
             Image(systemName: "doc.on.clipboard")
@@ -254,12 +317,24 @@ struct ContentView: View {
                             item: item,
                             index: index,
                             isSelected: selectedIndex == index,
-                            onSelect: { 
+                            isMultiSelected: selectedItemIds.contains(item.id),
+                            onSelect: {
                                 selectedIndex = index
+                                selectedItemIds.removeAll()  // Clear multi-selection on regular click
                                 updateSelectedItem()
                             },
                             onCopy: {
                                 pasteItem(item)
+                            },
+                            onToggleFavorite: {
+                                clipboardMonitor.toggleFavorite(item)
+                            },
+                            onToggleMultiSelect: {
+                                if selectedItemIds.contains(item.id) {
+                                    selectedItemIds.remove(item.id)
+                                } else {
+                                    selectedItemIds.insert(item.id)
+                                }
                             },
                             timeAgoText: timeAgoCache[item.id] ?? "unknown"
                         )
@@ -531,6 +606,28 @@ struct ContentView: View {
             Logging.debug("Escape pressed - hiding popover and restoring focus")
             menuBarController.hidePopoverAndActivatePreviousApp()
             return true
+        case 3: // F key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                Logging.debug("Cmd+F pressed - toggling favorites filter")
+                showFavoritesOnly.toggle()
+                return true
+            }
+        case 2: // D key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                if let item = selectedItem {
+                    Logging.debug("Cmd+D pressed - toggling favorite for selected item")
+                    clipboardMonitor.toggleFavorite(item)
+                    return true
+                }
+            }
+        case 6: // Z key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                if let item = selectedItem, item.type == .image {
+                    Logging.debug("Cmd+Z pressed - opening image preview")
+                    showImageModal = true
+                    return true
+                }
+            }
         case 48: // Tab
             Logging.debug("Tab pressed - toggling search focus")
             isSearchFocused.toggle()
@@ -613,10 +710,13 @@ struct ClipboardItemRow: View {
     let item: ClipboardItem
     let index: Int
     let isSelected: Bool
+    let isMultiSelected: Bool
     let onSelect: () -> Void
     let onCopy: () -> Void
+    let onToggleFavorite: () -> Void
+    let onToggleMultiSelect: () -> Void
     let timeAgoText: String
-    
+
     var body: some View {
         HStack(spacing: 8) {
             // Show number for first 10 items, icon for others
@@ -647,21 +747,32 @@ struct ClipboardItemRow: View {
                     .foregroundColor(iconColor)
                     .frame(width: 20, height: 20)
             }
-            
+
             // Content preview
             VStack(alignment: .leading, spacing: 1) {
                 Text(item.previewText)
                     .font(.system(.callout, design: .default))
                     .lineLimit(1)
                     .foregroundColor(.primary)
-                
+
                 Text(timeAgoText)
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
-            
+
             Spacer()
-            
+
+            // Star button (visible when favorited or selected)
+            Button(action: onToggleFavorite) {
+                Image(systemName: item.isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 10))
+                    .foregroundColor(item.isFavorite ? .yellow : .secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .opacity(item.isFavorite || isSelected ? 1 : 0)
+            .animation(.easeInOut(duration: 0.2), value: isSelected)
+            .animation(.easeInOut(duration: 0.2), value: item.isFavorite)
+
             // Copy button (only visible on hover)
             Button(action: onCopy) {
                 Image(systemName: "doc.on.doc")
@@ -674,13 +785,40 @@ struct ClipboardItemRow: View {
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
-        .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+        .background(
+            Group {
+                if isMultiSelected {
+                    Color.orange.opacity(0.3)
+                } else if isSelected {
+                    Color.accentColor.opacity(0.2)
+                } else {
+                    Color.clear
+                }
+            }
+        )
+        .overlay(
+            // Show checkmark for multi-selected items
+            Group {
+                if isMultiSelected {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 12))
+                            .foregroundColor(.orange)
+                            .padding(.trailing, 4)
+                    }
+                }
+            }
+        )
         .cornerRadius(3)
         .contentShape(Rectangle())
         .onTapGesture {
-            // Single click: just select, don't paste immediately
-            // This allows image preview to work properly
-            onSelect()
+            // Cmd+Click for multi-select, regular click for single select
+            if NSEvent.modifierFlags.contains(.command) {
+                onToggleMultiSelect()
+            } else {
+                onSelect()
+            }
         }
         .onTapGesture(count: 2) {
             // Double click: select and paste
@@ -842,15 +980,18 @@ struct ImageModalView: View {
             
             // Image view with improved zoom
             GeometryReader { geometry in
-                Image(nsImage: image)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .scaleEffect(scale)
-                    .offset(offset)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .clipped()
-                    .background(Color.black.opacity(0.1))
-                    .gesture(
+                ZStack {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .scaleEffect(scale)
+                        .offset(offset)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .clipped()
+                .contentShape(Rectangle()) // Constrain gesture area to frame bounds
+                .background(Color.black.opacity(0.1))
+                .gesture(
                         SimultaneousGesture(
                             // Magnification gesture
                             MagnificationGesture()

@@ -632,8 +632,8 @@ struct SimpleSettingsView: View {
                             }
                         }
                         
-                        Text(preferences.persistenceEnabled 
-                             ? "Clipboard items are saved to disk and restored when the app restarts."
+                        Text(preferences.persistenceEnabled
+                             ? "Clipboard items are saved to disk and restored when the app restarts. Favorites are kept indefinitely."
                              : "Clipboard history will be cleared when the app quits.")
                             .font(.caption)
                             .foregroundColor(.secondary)
@@ -658,7 +658,72 @@ struct SimpleSettingsView: View {
                             .foregroundColor(.secondary)
                     }
                 }
-                
+
+                Divider()
+
+                // Keyboard Shortcuts
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Keyboard Shortcuts")
+                        .font(.headline)
+
+                    Toggle("Enable keyboard shortcuts", isOn: $preferences.shortcutsEnabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if preferences.shortcutsEnabled {
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack {
+                                Text("⌘D")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.2))
+                                    .cornerRadius(4)
+                                Text("Toggle favorite on selected item")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            HStack {
+                                Text("⌘F")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.2))
+                                    .cornerRadius(4)
+                                Text("Switch between All / Favorites view")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            HStack {
+                                Text("⌘Z")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.2))
+                                    .cornerRadius(4)
+                                Text("Open image preview (when image selected)")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            HStack {
+                                Text("⌘+Click")
+                                    .font(.system(.caption, design: .monospaced))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.secondary.opacity(0.2))
+                                    .cornerRadius(4)
+                                Text("Select multiple items for deletion")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.leading, 20)
+                    } else {
+                        Text("Keyboard shortcuts are disabled.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
                 Spacer(minLength: 40)
                 
                 // Bottom buttons
@@ -679,7 +744,7 @@ struct SimpleSettingsView: View {
             }
             .padding(20)
         }
-        .frame(minWidth: 520, minHeight: 460)
+        .frame(minWidth: 520, minHeight: 560)
         .background(Color(NSColor.windowBackgroundColor))
     }
 }

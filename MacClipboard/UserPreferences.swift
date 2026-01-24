@@ -15,6 +15,7 @@ class UserPreferencesManager: ObservableObject {
         static let saveImages = "saveImages"
         static let maxStorageSize = "maxStorageSize"
         static let persistenceDays = "persistenceDays"
+        static let shortcutsEnabled = "shortcutsEnabled"
     }
     
     // Constants
@@ -93,7 +94,14 @@ class UserPreferencesManager: ObservableObject {
             defaults.set(persistenceDays, forKey: Keys.persistenceDays)
         }
     }
-    
+
+    // Whether keyboard shortcuts are enabled
+    @Published var shortcutsEnabled: Bool {
+        didSet {
+            defaults.set(shortcutsEnabled, forKey: Keys.shortcutsEnabled)
+        }
+    }
+
     private init() {
         // Load saved preferences or set defaults
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
@@ -107,6 +115,9 @@ class UserPreferencesManager: ObservableObject {
         self.saveImages = defaults.object(forKey: Keys.saveImages) as? Bool ?? false // Images off by default due to size
         self.maxStorageSize = defaults.object(forKey: Keys.maxStorageSize) as? Int ?? 500 // 500MB default
         self.persistenceDays = defaults.object(forKey: Keys.persistenceDays) as? Int ?? 30 // 30 days default
+
+        // Keyboard shortcuts - enabled by default
+        self.shortcutsEnabled = defaults.object(forKey: Keys.shortcutsEnabled) as? Bool ?? true
     }
     
     func resetToDefaults() {
@@ -118,5 +129,6 @@ class UserPreferencesManager: ObservableObject {
         saveImages = false
         maxStorageSize = 500
         persistenceDays = 30
+        shortcutsEnabled = true
     }
 }

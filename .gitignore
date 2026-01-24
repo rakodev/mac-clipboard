@@ -136,3 +136,8 @@ build/
 *.orig
 *.bak
 *~
+
+# Environment files (never commit secrets)
+.env
+.env.*
+*.env
