@@ -13,17 +13,69 @@ This guide covers how to build, develop, and contribute to MacClipboard.
 ```bash
 git clone https://github.com/rakodev/mac-clipboard.git
 cd mac-clipboard
-make run
+
+# One-time setup: Create dev signing certificate (preserves accessibility permissions)
+./scripts/setup-dev-signing.sh
+
+# Build and run
+./run.sh
 ```
 
 ## Build Commands
 
 ```bash
 make build     # Release build with DMG/ZIP
-make dev       # Fast debug build
-make run       # Build and run
+make dev       # Fast debug build only
+make run       # Build, sign with dev cert, and run (recommended)
 make clean     # Clean build artifacts
 ```
+
+## Development Signing Setup
+
+macOS requires accessibility permissions for the global hotkey and auto-paste features. During development, each rebuild normally creates a new code signature, which invalidates the permission and forces you to re-grant it.
+
+To avoid this, we use a self-signed certificate that provides a consistent signature across builds.
+
+### First-Time Setup (One-Time)
+
+```bash
+./scripts/setup-dev-signing.sh
+```
+
+This creates a "MacClipboard Dev" certificate in your login keychain. You may be prompted for your password.
+
+### Running the App
+
+```bash
+./run.sh
+```
+
+This script:
+1. Builds the app with `make dev`
+2. Copies it to `~/Applications/MacClipboard-Dev.app` (consistent location)
+3. Signs it with your dev certificate (consistent signature)
+4. Launches the app
+
+The first time you run, grant accessibility permission to "MacClipboard-Dev". This permission will persist across all future rebuilds.
+
+### Troubleshooting Signing
+
+**Certificate not found error:**
+```bash
+./scripts/setup-dev-signing.sh  # Re-run setup
+```
+
+**Permission still being requested after rebuild:**
+1. Open Keychain Access
+2. Find "MacClipboard Dev" certificate
+3. Double-click → Trust → Code Signing: "Always Trust"
+4. Delete old "MacClipboard-Dev" from Accessibility settings
+5. Run `./run.sh` and re-grant permission
+
+**Recreate certificate:**
+1. Open Keychain Access
+2. Delete "MacClipboard Dev" certificate and private key
+3. Run `./scripts/setup-dev-signing.sh` again
 
 ## Development in Xcode
 
@@ -166,10 +218,17 @@ PRs welcome for:
 - [ ] Clipboard monitoring captures text, images, files
 - [ ] Global hotkey `Cmd+Shift+V` works from any app
 - [ ] Favorites persist after app restart
+- [ ] Notes persist after app restart
+- [ ] Notes are searchable
 - [ ] Settings are saved correctly
 - [ ] Multi-select deletion works
-- [ ] Search filters items correctly
+- [ ] Search filters items correctly (content and notes)
 - [ ] Image preview opens with `Cmd+Z`
+- [ ] `Cmd+N` focuses note field
+- [ ] `Cmd+Backspace` shows delete confirmation
+- [ ] `Cmd+H` toggles sensitive mode on items
+- [ ] `Cmd+V` temporarily reveals sensitive content
+- [ ] Sensitive reveal auto-hides when switching items or closing popover
 
 ### Permissions Testing
 

@@ -7,6 +7,8 @@ struct ContentView: View {
     let menuBarController: MenuBarController
     @State private var selectedItem: ClipboardItem?
     @State private var searchText = ""
+    @State private var debouncedSearchText = ""
+    @State private var searchDebounceTask: Task<Void, Never>?
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
     @State private var showFavoritesOnly = false
@@ -14,7 +16,10 @@ struct ContentView: View {
     @State private var showDeleteAllConfirmation = false  // Second confirmation for delete all
     @State private var selectedItemIds: Set<UUID> = []  // For multi-selection
     @FocusState private var isSearchFocused: Bool
+    @FocusState private var isNoteFocused: Bool
     @State private var timeAgoCache: [UUID: String] = [:]
+    @State private var editingNote: String = ""
+    @State private var revealedSensitiveIds: Set<UUID> = []  // Temporarily revealed sensitive items
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
@@ -33,12 +38,13 @@ struct ContentView: View {
             items = items.filter { $0.isFavorite }
         }
 
-        // Then filter by search text
-        if !searchText.isEmpty {
+        // Then filter by search text (use debounced value for smooth typing)
+        if !debouncedSearchText.isEmpty {
             items = items.filter { item in
-                let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchText)
-                let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchText)
-                return previewMatch || fullTextMatch
+                let previewMatch = item.previewText.localizedCaseInsensitiveContains(debouncedSearchText)
+                let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(debouncedSearchText)
+                let noteMatch = item.note?.localizedCaseInsensitiveContains(debouncedSearchText) ?? false
+                return previewMatch || fullTextMatch || noteMatch
             }
         }
 
@@ -109,7 +115,7 @@ struct ContentView: View {
         .onAppear {
             // Initialize time cache when popover opens
             initializeTimeCache()
-            
+
             // Ensure we have items and properly select the first one
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 if !filteredItems.isEmpty {
@@ -118,6 +124,33 @@ struct ContentView: View {
                 }
                 // Update popover size after selection is set
                 updatePopoverSize()
+            }
+        }
+        .onDisappear {
+            // Save any pending note when popover closes
+            saveCurrentNote()
+            // Cancel any pending debounce task
+            searchDebounceTask?.cancel()
+            // Clear revealed sensitive items when popover closes
+            revealedSensitiveIds.removeAll()
+        }
+        .onChange(of: searchText) { newValue in
+            // Debounce search to keep typing smooth
+            searchDebounceTask?.cancel()
+
+            // Immediate update when clearing search (no delay needed)
+            if newValue.isEmpty {
+                debouncedSearchText = ""
+                return
+            }
+
+            searchDebounceTask = Task {
+                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+                if !Task.isCancelled {
+                    await MainActor.run {
+                        debouncedSearchText = newValue
+                    }
+                }
             }
         }
         .onChange(of: dynamicHeight) { newHeight in
@@ -318,6 +351,7 @@ struct ContentView: View {
                             index: index,
                             isSelected: selectedIndex == index,
                             isMultiSelected: selectedItemIds.contains(item.id),
+                            isRevealed: revealedSensitiveIds.contains(item.id),
                             onSelect: {
                                 selectedIndex = index
                                 selectedItemIds.removeAll()  // Clear multi-selection on regular click
@@ -334,6 +368,13 @@ struct ContentView: View {
                                     selectedItemIds.remove(item.id)
                                 } else {
                                     selectedItemIds.insert(item.id)
+                                }
+                            },
+                            onToggleReveal: {
+                                if revealedSensitiveIds.contains(item.id) {
+                                    revealedSensitiveIds.remove(item.id)
+                                } else {
+                                    revealedSensitiveIds.insert(item.id)
                                 }
                             },
                             timeAgoText: timeAgoCache[item.id] ?? "unknown"
@@ -409,15 +450,49 @@ struct ContentView: View {
     }
     
     private func compactPreviewView(for item: ClipboardItem) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        let isMasked = item.isSensitive && !revealedSensitiveIds.contains(item.id)
+
+        return VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text("Preview")
                     .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundColor(.primary)
-                
+
                 Spacer()
-                
+
+                // Toggle sensitive button
+                Button(action: {
+                    clipboardMonitor.toggleSensitive(item)
+                    // Update selectedItem immediately to keep preview in sync
+                    if var updatedItem = selectedItem {
+                        updatedItem.isSensitive.toggle()
+                        selectedItem = updatedItem
+                    }
+                }) {
+                    Image(systemName: item.isSensitive ? "lock.fill" : "lock.open")
+                        .font(.system(size: 12))
+                        .foregroundColor(item.isSensitive ? .orange : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(item.isSensitive ? "Remove sensitive flag (⌘H)" : "Mark as sensitive (⌘H)")
+
+                // Reveal/Hide button for sensitive items
+                if item.isSensitive {
+                    Button(action: {
+                        if revealedSensitiveIds.contains(item.id) {
+                            revealedSensitiveIds.remove(item.id)
+                        } else {
+                            revealedSensitiveIds.insert(item.id)
+                        }
+                    }) {
+                        Image(systemName: isMasked ? "eye" : "eye.slash")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.borderless)
+                    .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
+                }
+
                 Button("Copy") {
                     clipboardMonitor.copyToClipboard(item)
                     menuBarController.hidePopoverAndActivatePreviousApp()
@@ -426,63 +501,142 @@ struct ContentView: View {
                 .font(.caption)
                 .controlSize(.small)
             }
-            
+
             ScrollView {
-                switch item.type {
-                case .text:
-                    Text(item.fullText)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(nil)
-                case .image:
-                    if let image = item.content as? NSImage {
-                        ZStack {
-                            Image(nsImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxHeight: 120)
-                                .background(Color.gray.opacity(0.1))
-                                .cornerRadius(4)
-                            
-                            // Zoom icon overlay - more visible
-                            VStack {
-                                HStack {
-                                    Spacer()
-                                    Image(systemName: "magnifyingglass")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundColor(.white)
-                                        .frame(width: 24, height: 24)
-                                        .background(Circle().fill(Color.black.opacity(0.7)))
-                                }
-                                Spacer()
-                            }
-                            .padding(6)
+                if isMasked {
+                    // Masked content view
+                    VStack(spacing: 12) {
+                        Image(systemName: "eye.slash.fill")
+                            .font(.system(size: 32))
+                            .foregroundColor(.secondary)
+
+                        Text("Sensitive content hidden")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Button("Click to reveal") {
+                            revealedSensitiveIds.insert(item.id)
                         }
-                        .contentShape(Rectangle()) // Make entire area clickable
-                        .onTapGesture {
-                            showImageModal = true
-                        }
-                        .onHover { hovering in
-                            // Add visual feedback on hover (hover state is handled by UI)
-                        }
-                        .help("Click to view full size with zoom")
-                        .sheet(isPresented: $showImageModal) {
-                            ImageModalView(image: image)
-                        }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
                     }
-                case .file:
-                    Text(item.fullText)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(nil)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.vertical, 20)
+                } else {
+                    switch item.type {
+                    case .text:
+                        Text(item.fullText)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(nil)
+                    case .image:
+                        if let image = item.content as? NSImage {
+                            ZStack {
+                                Image(nsImage: image)
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fit)
+                                    .frame(maxHeight: 120)
+                                    .background(Color.gray.opacity(0.1))
+                                    .cornerRadius(4)
+
+                                // Zoom icon overlay - more visible
+                                VStack {
+                                    HStack {
+                                        Spacer()
+                                        Image(systemName: "magnifyingglass")
+                                            .font(.system(size: 14, weight: .semibold))
+                                            .foregroundColor(.white)
+                                            .frame(width: 24, height: 24)
+                                            .background(Circle().fill(Color.black.opacity(0.7)))
+                                    }
+                                    Spacer()
+                                }
+                                .padding(6)
+                            }
+                            .contentShape(Rectangle()) // Make entire area clickable
+                            .onTapGesture {
+                                showImageModal = true
+                            }
+                            .onHover { hovering in
+                                // Add visual feedback on hover (hover state is handled by UI)
+                            }
+                            .help("Click to view full size with zoom")
+                            .sheet(isPresented: $showImageModal) {
+                                ImageModalView(image: image)
+                            }
+                        }
+                    case .file:
+                        Text(item.fullText)
+                            .font(.system(.caption, design: .monospaced))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .lineLimit(nil)
+                    }
                 }
             }
+
+            Spacer()
+
+            // Note field - muted appearance
+            HStack(spacing: 4) {
+                Image(systemName: "note.text")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+
+                TextField("Add note...", text: $editingNote)
+                    .textFieldStyle(PlainTextFieldStyle())
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .focused($isNoteFocused)
+                    .onChange(of: editingNote) { newValue in
+                        // Limit to 100 characters
+                        if newValue.count > 100 {
+                            editingNote = String(newValue.prefix(100))
+                        }
+                    }
+                    .onSubmit {
+                        saveNote(for: item)
+                        isNoteFocused = false
+                    }
+                    .onChange(of: isNoteFocused) { focused in
+                        if !focused {
+                            saveNote(for: item)
+                        }
+                    }
+
+                // Character counter (shows when > 70 chars)
+                if editingNote.count > 70 {
+                    Text("\(editingNote.count)/100")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(editingNote.count >= 100 ? .orange : .secondary)
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+            .cornerRadius(4)
         }
         .padding(6)
         .background(Color(NSColor.controlBackgroundColor))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: selectedItem?.id) { _ in
+            // Update editingNote when selected item changes
+            editingNote = selectedItem?.note ?? ""
+        }
+        .onAppear {
+            editingNote = item.note ?? ""
+        }
+    }
+
+    private func saveNote(for item: ClipboardItem) {
+        let trimmedNote = editingNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noteToSave = trimmedNote.isEmpty ? nil : trimmedNote
+
+        // Only save if note actually changed
+        if noteToSave != item.note {
+            clipboardMonitor.updateNote(item, note: noteToSave)
+        }
     }
     
     // MARK: - Navigation Functions
@@ -514,22 +668,42 @@ struct ContentView: View {
     }
     
     private func updateSelectedItem() {
+        // Save any pending note for the current item before switching
+        saveCurrentNote()
+
+        // Clear revealed sensitive items when switching selection
+        revealedSensitiveIds.removeAll()
+
         guard !filteredItems.isEmpty else {
             selectedItem = nil
+            editingNote = ""
             Logging.debug("No filtered items - clearing selection")
             return
         }
-        
+
         // Ensure selectedIndex is within bounds
         selectedIndex = max(0, min(selectedIndex, filteredItems.count - 1))
-        
+
         // Update selected item
         if selectedIndex < filteredItems.count {
             selectedItem = filteredItems[selectedIndex]
+            editingNote = selectedItem?.note ?? ""
             Logging.debug("Selected item updated to index \(selectedIndex): \(selectedItem?.previewText ?? "nil")")
         } else {
             selectedItem = nil
+            editingNote = ""
             Logging.debug("selectedIndex out of bounds - clearing selection")
+        }
+    }
+
+    private func saveCurrentNote() {
+        guard let item = selectedItem else { return }
+        let trimmedNote = editingNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let noteToSave = trimmedNote.isEmpty ? nil : trimmedNote
+
+        // Only save if note actually changed
+        if noteToSave != item.note {
+            clipboardMonitor.updateNote(item, note: noteToSave)
         }
     }
     
@@ -615,6 +789,21 @@ struct ContentView: View {
                 return true
             }
         case 53: // Escape
+            // If note field is focused, unfocus it first
+            if isNoteFocused {
+                Logging.debug("Escape pressed - unfocusing note field")
+                if let item = selectedItem {
+                    saveNote(for: item)
+                }
+                isNoteFocused = false
+                return true
+            }
+            // If search is focused, unfocus it
+            if isSearchFocused {
+                Logging.debug("Escape pressed - unfocusing search")
+                isSearchFocused = false
+                return true
+            }
             Logging.debug("Escape pressed - hiding popover and restoring focus")
             menuBarController.hidePopoverAndActivatePreviousApp()
             return true
@@ -639,6 +828,52 @@ struct ContentView: View {
                     showImageModal = true
                     return true
                 }
+            }
+        case 4: // H key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                if var item = selectedItem {
+                    Logging.debug("Cmd+H pressed - toggling sensitive for selected item")
+                    // Toggle in the monitor (updates clipboardHistory)
+                    clipboardMonitor.toggleSensitive(item)
+                    // Also update selectedItem immediately to keep preview in sync
+                    item.isSensitive.toggle()
+                    selectedItem = item
+                    return true
+                }
+            }
+        case 9: // V key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                if let item = selectedItem, item.isSensitive {
+                    Logging.debug("Cmd+V pressed - toggling reveal for sensitive item")
+                    if revealedSensitiveIds.contains(item.id) {
+                        revealedSensitiveIds.remove(item.id)
+                    } else {
+                        revealedSensitiveIds.insert(item.id)
+                    }
+                    return true
+                }
+            }
+        case 45: // N key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                Logging.debug("Cmd+N pressed - toggling note focus")
+                if isNoteFocused {
+                    // Save note and unfocus
+                    if let item = selectedItem {
+                        saveNote(for: item)
+                    }
+                    isNoteFocused = false
+                } else {
+                    // Focus on note field
+                    isSearchFocused = false
+                    isNoteFocused = true
+                }
+                return true
+            }
+        case 51: // Backspace/Delete key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                Logging.debug("Cmd+Backspace pressed - showing delete confirmation")
+                showClearConfirmation = true
+                return true
             }
         case 48: // Tab
             Logging.debug("Tab pressed - toggling search focus")
@@ -666,9 +901,11 @@ struct ContentView: View {
             if !isSearchFocused { handleNumberKey(9); return true }
         default:
             // Check if this is a printable character that should trigger search
-            if let characters = keyEvent.characters, 
+            // Don't trigger if note field or search is already focused
+            if let characters = keyEvent.characters,
                !characters.isEmpty,
                !isSearchFocused,
+               !isNoteFocused,
                isPrintableCharacter(keyEvent) {
                 Logging.debug("Printable character '\(characters)' - focusing search and adding to search text")
                 // Focus first, then add the character to prevent text selection
@@ -723,11 +960,24 @@ struct ClipboardItemRow: View {
     let index: Int
     let isSelected: Bool
     let isMultiSelected: Bool
+    let isRevealed: Bool
     let onSelect: () -> Void
     let onCopy: () -> Void
     let onToggleFavorite: () -> Void
     let onToggleMultiSelect: () -> Void
+    let onToggleReveal: () -> Void
     let timeAgoText: String
+
+    private var shouldMask: Bool {
+        item.isSensitive && !isRevealed
+    }
+
+    private var displayText: String {
+        if shouldMask {
+            return "••••••••••••"
+        }
+        return item.previewText
+    }
 
     var body: some View {
         HStack(spacing: 8) {
@@ -743,7 +993,7 @@ struct ClipboardItemRow: View {
                         Circle()
                             .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
                     )
-            } else if item.type == .image, let image = item.content as? NSImage {
+            } else if item.type == .image, !shouldMask, let image = item.content as? NSImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -753,6 +1003,11 @@ struct ClipboardItemRow: View {
                         RoundedRectangle(cornerRadius: 3)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
                     )
+            } else if item.isSensitive {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 12))
+                    .foregroundColor(.orange)
+                    .frame(width: 20, height: 20)
             } else {
                 Image(systemName: iconName)
                     .font(.system(size: 12))
@@ -762,17 +1017,38 @@ struct ClipboardItemRow: View {
 
             // Content preview
             VStack(alignment: .leading, spacing: 1) {
-                Text(item.previewText)
+                Text(displayText)
                     .font(.system(.callout, design: .default))
                     .lineLimit(1)
-                    .foregroundColor(.primary)
+                    .foregroundColor(shouldMask ? .secondary : .primary)
 
-                Text(timeAgoText)
+                HStack(spacing: 4) {
+                    Text(timeAgoText)
+                    if item.note != nil && !(item.note?.isEmpty ?? true) {
+                        Image(systemName: "note.text")
+                            .font(.system(size: 8))
+                    }
+                    if item.isSensitive {
+                        Image(systemName: "eye.slash")
+                            .font(.system(size: 8))
+                    }
+                }
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
 
             Spacer()
+
+            // Reveal button for sensitive items
+            if item.isSensitive {
+                Button(action: onToggleReveal) {
+                    Image(systemName: isRevealed ? "eye.fill" : "eye.slash.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(isRevealed ? .blue : .orange)
+                }
+                .buttonStyle(PlainButtonStyle())
+                .help(isRevealed ? "Hide content" : "Reveal content")
+            }
 
             // Star button (visible when favorited or selected)
             Button(action: onToggleFavorite) {

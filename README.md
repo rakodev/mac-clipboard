@@ -11,7 +11,9 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 📋 **Automatic clipboard tracking** - Captures text, images, and files as you copy them
 * ⌨️ **Global hotkey** - Press `Cmd+Shift+V` to open clipboard history from anywhere
 * ⭐ **Favorites** - Save important items that persist indefinitely
-* 🔍 **Live search** - Find clipboard items quickly with real-time filtering
+* 🔒 **Sensitive mode** - Hide content from shoulder surfing with `Cmd+H` (reveal with `Cmd+V` or eye icon)
+* 📝 **Notes** - Add descriptions to items for easier searching (e.g., "work password", "API key")
+* 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
 * 👀 **Smart preview** - Click any item to see full content before pasting
 * 🖼️ **Image preview** - Full-size image preview with `Cmd+Z`
 * 🎯 **Quick paste** - Click, press Enter, or use number keys (0-9) to paste
@@ -81,19 +83,25 @@ After installation, the menu bar icon appears. Press `Cmd+Shift+V` or click it t
 | `Cmd+Shift+V` | Open clipboard history (global) |
 | `Cmd+F` | Switch between All / Favorites view |
 | `Cmd+D` | Toggle favorite on selected item |
+| `Cmd+H` | Toggle sensitive/hidden on selected item |
+| `Cmd+V` | Temporarily reveal sensitive item content |
+| `Cmd+N` | Focus note field for selected item |
+| `Cmd+Backspace` | Delete items (shows confirmation) |
 | `Cmd+Z` | Open image preview (when image selected) |
 | `Cmd+Click` | Select multiple items for deletion |
 | `0-9` | Quick paste item by number |
 | `Enter` | Paste selected item |
 | `↑` `↓` | Navigate between items |
-| `Escape` | Close clipboard window |
+| `Escape` | Close clipboard window / unfocus fields |
 
 ### Using Clipboard Items
 
 * **Preview**: Click any item to see full content in the preview panel
 * **Paste**: Click, press Enter, or use number keys (0-9) for quick paste
 * **Favorite**: Click the star icon or press `Cmd+D` to save important items
-* **Search**: Start typing to filter items instantly
+* **Sensitive**: Press `Cmd+H` to hide content - useful when showing clipboard in public. Press `Cmd+V` or click the eye icon to temporarily reveal (auto-hides when you switch items or close)
+* **Notes**: Add a note to any item (press `Cmd+N` or click the note field) - useful for labeling passwords, API keys, etc.
+* **Search**: Start typing to filter items instantly (searches content and notes)
 * **Multi-select**: Hold `Cmd` and click to select multiple items for deletion
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
@@ -133,7 +141,7 @@ Access settings via the gear icon or right-click menu.
 
 ### Keyboard Shortcuts
 
-* Enable/disable in-app keyboard shortcuts (`Cmd+D`, `Cmd+F`, `Cmd+Z`, etc.)
+* Enable/disable in-app keyboard shortcuts (`Cmd+D`, `Cmd+H`, `Cmd+F`, `Cmd+N`, `Cmd+Backspace`, `Cmd+Z`, etc.)
 
 ## Requirements
 

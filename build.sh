@@ -94,11 +94,12 @@ if [ "$CREATE_RELEASE" = true ]; then
     fi
 
     # -------------------------------------------------------------------------
-    # Handle uncommitted changes
+    # Handle uncommitted changes (only for app source files)
     # -------------------------------------------------------------------------
-    if [ -n "$(git status --porcelain)" ]; then
-        echo -e "${YELLOW}📝 You have uncommitted changes:${NC}"
-        git status --short
+    APP_CHANGES=$(git status --porcelain MacClipboard/ MacClipboard.xcodeproj/ 2>/dev/null)
+    if [ -n "$APP_CHANGES" ]; then
+        echo -e "${YELLOW}📝 You have uncommitted app changes:${NC}"
+        git status --short MacClipboard/ MacClipboard.xcodeproj/
         echo ""
 
         # Prompt for commit message
@@ -110,8 +111,8 @@ if [ "$CREATE_RELEASE" = true ]; then
             exit 1
         fi
 
-        # Stage and commit all changes
-        git add -A
+        # Stage and commit app changes
+        git add MacClipboard/ MacClipboard.xcodeproj/
         git commit -m "$COMMIT_MESSAGE"
         echo -e "${GREEN}✅ Changes committed${NC}"
     fi
@@ -169,6 +170,18 @@ if [ "$CREATE_RELEASE" = true ]; then
     esac
 
     echo -e "${GREEN}✅ New version: v${NEW_VERSION}${NC}"
+    echo ""
+
+    # -------------------------------------------------------------------------
+    # Release notes (prompt now so no interaction needed at the end)
+    # -------------------------------------------------------------------------
+    echo -e "${CYAN}Enter release notes (press Enter for default, or type custom notes):${NC}"
+    read -r RELEASE_NOTES
+
+    if [ -z "$RELEASE_NOTES" ]; then
+        RELEASE_NOTES="MacClipboard v${NEW_VERSION} - Clipboard history manager for macOS"
+    fi
+    echo -e "${GREEN}✅ Release notes saved${NC}"
     echo ""
 
     # -------------------------------------------------------------------------
@@ -412,15 +425,6 @@ if [ "$CREATE_RELEASE" = true ]; then
     RELEASE_ASSETS="${ZIP_PATH}"
     if [ -f "${DMG_PATH}" ]; then
         RELEASE_ASSETS="${RELEASE_ASSETS} ${DMG_PATH}"
-    fi
-
-    # Prompt for release notes
-    echo ""
-    echo -e "${CYAN}Enter release notes (press Enter for default, or type custom notes):${NC}"
-    read -r RELEASE_NOTES
-
-    if [ -z "$RELEASE_NOTES" ]; then
-        RELEASE_NOTES="MacClipboard ${TAG} - Clipboard history manager for macOS"
     fi
 
     # Create GitHub release

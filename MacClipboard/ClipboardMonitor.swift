@@ -157,18 +157,28 @@ class ClipboardMonitor: ObservableObject {
     
     private func addToHistory(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            // Remove duplicates (same content)
-            self.clipboardHistory.removeAll { existing in
-                existing.contentEquals(item)
+            // Check for existing duplicate and preserve its metadata (favorite, sensitive, note)
+            var itemToInsert = item
+            if let existingIndex = self.clipboardHistory.firstIndex(where: { $0.contentEquals(item) }) {
+                let existingItem = self.clipboardHistory[existingIndex]
+                // Preserve favorite status, sensitive flag, and note from existing item
+                itemToInsert.isFavorite = existingItem.isFavorite
+                itemToInsert.isSensitive = existingItem.isSensitive
+                itemToInsert.note = existingItem.note
+
+                // Remove the old item from persistence
+                self.persistenceManager.deleteItems(withIds: [existingItem.id])
+
+                // Remove from history
+                self.clipboardHistory.remove(at: existingIndex)
             }
-            
-            
+
             // Add to beginning of array
-            self.clipboardHistory.insert(item, at: 0)
-            
+            self.clipboardHistory.insert(itemToInsert, at: 0)
+
             // Save to persistence
-            self.saveItemToPersistence(item)
-            
+            self.saveItemToPersistence(itemToInsert)
+
             // Limit to max items
             if self.clipboardHistory.count > self.userPreferences.maxClipboardItems {
                 self.clipboardHistory.removeLast(self.clipboardHistory.count - self.userPreferences.maxClipboardItems)
@@ -253,6 +263,34 @@ class ClipboardMonitor: ObservableObject {
         }
     }
 
+    func updateNote(_ item: ClipboardItem, note: String?) {
+        DispatchQueue.main.async {
+            if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                self.clipboardHistory[index].note = note
+
+                // Update persistence
+                let itemId = item.id
+                DispatchQueue.global(qos: .utility).async {
+                    self.persistenceManager.updateNote(itemId: itemId, note: note)
+                }
+            }
+        }
+    }
+
+    func toggleSensitive(_ item: ClipboardItem) {
+        DispatchQueue.main.async {
+            if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                self.clipboardHistory[index].isSensitive.toggle()
+
+                // Update persistence
+                let itemId = item.id
+                DispatchQueue.global(qos: .utility).async {
+                    _ = self.persistenceManager.toggleSensitive(itemId: itemId)
+                }
+            }
+        }
+    }
+
     func deleteItems(withIds ids: Set<UUID>) {
         DispatchQueue.main.async {
             self.clipboardHistory.removeAll { ids.contains($0.id) }
@@ -272,14 +310,18 @@ struct ClipboardItem: Identifiable, Equatable {
     let timestamp: Date
     let displayText: String?
     var isFavorite: Bool
+    var isSensitive: Bool
+    var note: String?
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, note: String? = nil) {
         self.id = id
         self.content = content
         self.type = type
         self.timestamp = timestamp
         self.displayText = displayText
         self.isFavorite = isFavorite
+        self.isSensitive = isSensitive
+        self.note = note
     }
     
     var previewText: String {

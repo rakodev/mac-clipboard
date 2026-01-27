@@ -58,6 +58,8 @@ class PersistenceManager: ObservableObject {
         persistedItem.contentType = Int16(item.type.rawValue)
         persistedItem.displayText = item.displayText
         persistedItem.isFavorite = item.isFavorite
+        persistedItem.isSensitive = item.isSensitive
+        persistedItem.note = item.note
         
         switch item.type {
         case .text:
@@ -137,7 +139,9 @@ class PersistenceManager: ObservableObject {
             type: contentType,
             timestamp: createdAt,
             displayText: persistedItem.displayText,
-            isFavorite: persistedItem.isFavorite
+            isFavorite: persistedItem.isFavorite,
+            isSensitive: persistedItem.isSensitive,
+            note: persistedItem.note
         )
     }
     
@@ -157,6 +161,42 @@ class PersistenceManager: ObservableObject {
             }
         } catch {
             print("Toggle favorite error: \(error)")
+        }
+        return false
+    }
+
+    func updateNote(itemId: UUID, note: String?) {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+        do {
+            let items = try context.fetch(request)
+            if let item = items.first {
+                item.note = note
+                item.updatedAt = Date()
+                saveContext()
+                Logging.info("Updated note for item \(itemId)")
+            }
+        } catch {
+            print("Update note error: \(error)")
+        }
+    }
+
+    func toggleSensitive(itemId: UUID) -> Bool {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+        do {
+            let items = try context.fetch(request)
+            if let item = items.first {
+                item.isSensitive = !item.isSensitive
+                item.updatedAt = Date()
+                saveContext()
+                Logging.info("Toggled sensitive for item \(itemId): \(item.isSensitive)")
+                return item.isSensitive
+            }
+        } catch {
+            print("Toggle sensitive error: \(error)")
         }
         return false
     }

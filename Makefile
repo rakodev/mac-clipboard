@@ -1,10 +1,4 @@
-# Makefile f# Build for development
-dev:
-	@echo "�️ Building debug version..."
-	@xcodebuild -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug build
-	@echo "🔑 Code signing for accessibility stability..."
-	@codesign --force --deep --sign - ~/Library/Developer/Xcode/DerivedData/MacClipboard-*/Build/Products/Debug/MacClipboard.app 2>/dev/null || echo "⚠️ Code signing skipped"
-	@echo "✅ Debug build completed!"lipboard (renamed project/target)
+# Makefile for MacClipboard
 
 .PHONY: all build dev clean install run help
 
@@ -16,12 +10,10 @@ build:
 	@echo "🚀 Building MacClipboard for release..."
 	@./build.sh
 
-# Build for development
+# Build for development (use ./run.sh for full dev workflow with signing)
 dev:
-	@echo "�️ Building debug version..."
+	@echo "🔧 Building debug version..."
 	@xcodebuild -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug build
-	@echo "🔑 Code signing for accessibility stability..."
-	@codesign --force --deep --sign - build/Debug/MacClipboard.app 2>/dev/null || echo "⚠️ Code signing skipped"
 	@echo "✅ Debug build completed!"
 
 # Clean build artifacts
@@ -31,7 +23,7 @@ clean:
 	@rm -rf DerivedData/
 	@echo "✅ Clean completed!"
 
-# Run the application
+# Run the application (recommended for development)
 run:
 	@echo "🚀 Running MacClipboard..."
 	@./run.sh
@@ -56,13 +48,15 @@ help:
 	@echo ""
 	@echo "Available targets:"
 	@echo "  build    - Build for release distribution"
-	@echo "  dev      - Build for development"
-	@echo "  run      - Run the application (builds if needed)"
+	@echo "  dev      - Build debug version only"
+	@echo "  run      - Build, sign, and run (recommended for development)"
 	@echo "  clean    - Clean build artifacts"
 	@echo "  install  - Check and install dependencies"
 	@echo "  help     - Show this help message"
 	@echo ""
-	@echo "Usage examples:"
-	@echo "  make build   # Build release version"
-	@echo "  make dev     # Build development version"
-	@echo "  make clean   # Clean all build files"
+	@echo "Development workflow:"
+	@echo "  make run     # Build, sign with dev cert, and run"
+	@echo "  ./run.sh     # Same as above"
+	@echo ""
+	@echo "First time setup:"
+	@echo "  ./scripts/setup-dev-signing.sh"
