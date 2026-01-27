@@ -188,9 +188,13 @@ class MenuBarController: NSObject, ObservableObject {
         let aboutItem = NSMenuItem(title: "About MacClipboard", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
-        
+
+        let updateItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        updateItem.target = self
+        menu.addItem(updateItem)
+
         menu.addItem(NSMenuItem.separator())
-        
+
         let clearItem = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
         clearItem.target = self
         menu.addItem(clearItem)
@@ -215,7 +219,78 @@ class MenuBarController: NSObject, ObservableObject {
         NSApp.orderFrontStandardAboutPanel(options: options)
         NSApp.activate(ignoringOtherApps: true)
     }
-    
+
+    @objc func checkForUpdates() {
+        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        let repoURL = "https://api.github.com/repos/rakodev/mac-clipboard/releases/latest"
+
+        guard let url = URL(string: repoURL) else { return }
+
+        var request = URLRequest(url: url)
+        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            DispatchQueue.main.async {
+                if let error = error {
+                    self.showUpdateAlert(title: "Update Check Failed", message: "Could not check for updates: \(error.localizedDescription)")
+                    return
+                }
+
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tagName = json["tag_name"] as? String else {
+                    self.showUpdateAlert(title: "Update Check Failed", message: "Could not parse update information.")
+                    return
+                }
+
+                let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+
+                if self.isVersion(latestVersion, newerThan: currentVersion) {
+                    let alert = NSAlert()
+                    alert.messageText = "Update Available"
+                    alert.informativeText = "A new version (v\(latestVersion)) is available. You are currently running v\(currentVersion)."
+                    alert.alertStyle = .informational
+                    alert.addButton(withTitle: "Download")
+                    alert.addButton(withTitle: "Later")
+
+                    NSApp.activate(ignoringOtherApps: true)
+                    let response = alert.runModal()
+
+                    if response == .alertFirstButtonReturn {
+                        if let downloadURL = URL(string: "https://github.com/rakodev/mac-clipboard/releases/latest") {
+                            NSWorkspace.shared.open(downloadURL)
+                        }
+                    }
+                } else {
+                    self.showUpdateAlert(title: "You're Up to Date", message: "MacClipboard v\(currentVersion) is the latest version.")
+                }
+            }
+        }.resume()
+    }
+
+    private func showUpdateAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
+    }
+
+    private func isVersion(_ v1: String, newerThan v2: String) -> Bool {
+        let components1 = v1.split(separator: ".").compactMap { Int($0) }
+        let components2 = v2.split(separator: ".").compactMap { Int($0) }
+
+        for i in 0..<max(components1.count, components2.count) {
+            let c1 = i < components1.count ? components1[i] : 0
+            let c2 = i < components2.count ? components2[i] : 0
+            if c1 > c2 { return true }
+            if c1 < c2 { return false }
+        }
+        return false
+    }
+
     @objc func showSettings() {
         // Close existing settings window if open
         settingsWindow?.close()
@@ -226,10 +301,15 @@ class MenuBarController: NSObject, ObservableObject {
         }
         
         // Create settings view with window reference for proper dismissal
-        let settingsView = SimpleSettingsView { [weak self] in
-            self?.settingsWindow?.close()
-            self?.settingsWindow = nil
-        }
+        let settingsView = SimpleSettingsView(
+            onDismiss: { [weak self] in
+                self?.settingsWindow?.close()
+                self?.settingsWindow = nil
+            },
+            onCheckForUpdates: { [weak self] in
+                self?.checkForUpdates()
+            }
+        )
         
         // Create and configure window with better size
         let window = NSWindow(
@@ -494,9 +574,11 @@ private func fourCharCodeFrom(_ string: String) -> FourCharCode {
 struct SimpleSettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
     let onDismiss: () -> Void
-    
-    init(onDismiss: @escaping () -> Void = {}) {
+    let onCheckForUpdates: () -> Void
+
+    init(onDismiss: @escaping () -> Void = {}, onCheckForUpdates: @escaping () -> Void = {}) {
         self.onDismiss = onDismiss
+        self.onCheckForUpdates = onCheckForUpdates
     }
     
     var body: some View {
@@ -645,6 +727,15 @@ struct SimpleSettingsView: View {
                     if let url = URL(string: "https://github.com/rakodev/mac-clipboard") {
                         NSWorkspace.shared.open(url)
                     }
+                }
+                .buttonStyle(.link)
+                .font(.caption)
+
+                Text("·")
+                    .foregroundColor(.secondary)
+
+                Button("Check for Updates") {
+                    onCheckForUpdates()
                 }
                 .buttonStyle(.link)
                 .font(.caption)

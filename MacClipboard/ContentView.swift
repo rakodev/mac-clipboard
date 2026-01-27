@@ -596,6 +596,18 @@ struct ContentView: View {
             Logging.debug("Down arrow pressed")
             navigateDown()
             return true
+        case 123: // Left arrow
+            if !isSearchFocused {
+                Logging.debug("Left arrow pressed - switching to All")
+                showFavoritesOnly = false
+                return true
+            }
+        case 124: // Right arrow
+            if !isSearchFocused {
+                Logging.debug("Right arrow pressed - switching to Favorites")
+                showFavoritesOnly = true
+                return true
+            }
         case 36: // Return/Enter
             if !isSearchFocused {
                 Logging.debug("Enter pressed - pasting selected item")
