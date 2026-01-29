@@ -134,6 +134,16 @@ let hotKeyID = EventHotKeyID(signature: OSType("MCLP"), id: 1)
 RegisterEventHotKey(UInt32(kVK_ANSI_V), UInt32(cmdKey | shiftKey), hotKeyID, ...)
 ```
 
+### Launch at Login
+
+Uses `SMAppService` from the ServiceManagement framework (macOS 13+) to register as a login item.
+
+```swift
+// Register/unregister login item
+try SMAppService.mainApp.register()   // Enable launch at login
+try SMAppService.mainApp.unregister() // Disable launch at login
+```
+
 ### Data Storage
 
 Clipboard history persisted to `~/Library/Application Support/MacClipboard` using Core Data.

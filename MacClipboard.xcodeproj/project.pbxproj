@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		A01234567890123456789001 /* MacClipboardApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789002 /* MacClipboardApp.swift */; };
 		A01234567890123456789003 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789004 /* ContentView.swift */; };
+		A0SETTINGSVIEW0000000001 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0SETTINGSVIEW0000000000 /* SettingsView.swift */; };
 		A01234567890123456789005 /* ClipboardMonitor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789006 /* ClipboardMonitor.swift */; };
 		A01234567890123456789007 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789008 /* MenuBarController.swift */; };
 		A01234567890123456789009 /* UserPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789010 /* UserPreferences.swift */; };
@@ -30,6 +31,7 @@
 		A01234567890123456789013 /* MacClipboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacClipboard.entitlements; sourceTree = "<group>"; };
 		A0LOGGINGFILE00000000000000 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		A0PERMISSIONMGR000000000000 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
+		A0SETTINGSVIEW0000000000 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcdatamodel; path = ClipboardData.xcdatamodeld; sourceTree = "<group>"; };
 		2515D8D1089F4890B45C263D /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -63,6 +65,7 @@
 				A01234567890123456789010 /* UserPreferences.swift */,
 				A0LOGGINGFILE00000000000000 /* Logging.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
+				A0SETTINGSVIEW0000000000 /* SettingsView.swift */,
 				2515D8D1089F4890B45C263D /* PersistenceManager.swift */,
 				508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */,
 				A01234567890123456789012 /* Assets.xcassets */,
@@ -155,6 +158,7 @@
 				A01234567890123456789001 /* MacClipboardApp.swift in Sources */,
 				A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
+				A0SETTINGSVIEW0000000001 /* SettingsView.swift in Sources */,
 				E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */,
 				A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */,
 			);

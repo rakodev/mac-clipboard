@@ -1,4 +1,5 @@
 import Foundation
+import ServiceManagement
 
 class UserPreferencesManager: ObservableObject {
     static let shared = UserPreferencesManager()
@@ -50,11 +51,33 @@ class UserPreferencesManager: ObservableObject {
         }
     }
     
-    // Whether to auto-start with system
+    // Whether to auto-start with system (launch at login)
     @Published var autoStartEnabled: Bool {
         didSet {
             defaults.set(autoStartEnabled, forKey: Keys.autoStartEnabled)
+            updateLoginItem()
         }
+    }
+
+    /// Updates the login item registration based on autoStartEnabled preference
+    private func updateLoginItem() {
+        let shouldEnable = autoStartEnabled
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                if shouldEnable {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                Logging.debug("Failed to update login item: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Ensures login item state matches the preference (call on app launch)
+    func syncLoginItemState() {
+        updateLoginItem()
     }
     
     // Whether persistence is enabled
@@ -108,7 +131,7 @@ class UserPreferencesManager: ObservableObject {
         self.maxClipboardItems = max(Self.minClipboardItems, min(Self.maxClipboardItems, savedMaxItems))
         self.hotKeyEnabled = defaults.object(forKey: Keys.hotKeyEnabled) as? Bool ?? true
         self.showImagePreviews = defaults.object(forKey: Keys.showImagePreviews) as? Bool ?? true
-        self.autoStartEnabled = defaults.object(forKey: Keys.autoStartEnabled) as? Bool ?? false
+        self.autoStartEnabled = defaults.object(forKey: Keys.autoStartEnabled) as? Bool ?? true
         
         // Persistence settings - enabled by default as requested
         self.persistenceEnabled = defaults.object(forKey: Keys.persistenceEnabled) as? Bool ?? true
@@ -124,7 +147,7 @@ class UserPreferencesManager: ObservableObject {
         maxClipboardItems = Self.defaultClipboardItems
         hotKeyEnabled = true
         showImagePreviews = true
-        autoStartEnabled = false
+        autoStartEnabled = true
         persistenceEnabled = true
         saveImages = true
         maxStorageSize = 1000

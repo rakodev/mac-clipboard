@@ -20,6 +20,8 @@ struct ContentView: View {
     @State private var timeAgoCache: [UUID: String] = [:]
     @State private var editingNote: String = ""
     @State private var revealedSensitiveIds: Set<UUID> = []  // Temporarily revealed sensitive items
+    @State private var loadingImageIds: Set<UUID> = []  // Images currently being loaded from disk
+    @State private var loadedImages: [UUID: NSImage] = [:]  // Cache for lazy-loaded images
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
@@ -531,7 +533,10 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .lineLimit(nil)
                     case .image:
-                        if let image = item.content as? NSImage {
+                        // Get image from item or from lazy-loaded cache
+                        let displayImage = (item.content as? NSImage) ?? loadedImages[item.id]
+
+                        if let image = displayImage {
                             ZStack {
                                 Image(nsImage: image)
                                     .resizable()
@@ -564,6 +569,35 @@ struct ContentView: View {
                             .help("Click to view full size with zoom")
                             .sheet(isPresented: $showImageModal) {
                                 ImageModalView(image: image)
+                            }
+                        } else if loadingImageIds.contains(item.id) {
+                            // Loading indicator
+                            VStack(spacing: 8) {
+                                ProgressView()
+                                    .scaleEffect(0.8)
+                                Text("Loading image...")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: 120)
+                        } else {
+                            // Image needs to be loaded - trigger load
+                            VStack(spacing: 8) {
+                                Image(systemName: "photo")
+                                    .font(.system(size: 32))
+                                    .foregroundColor(.secondary)
+                                Text("Click to load image")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: 120)
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                loadLazyImage(item)
+                            }
+                            .onAppear {
+                                // Auto-load when selected
+                                loadLazyImage(item)
                             }
                         }
                     case .file:
@@ -642,57 +676,43 @@ struct ContentView: View {
     // MARK: - Navigation Functions
     
     private func navigateUp() {
-        Logging.debug("Navigate up called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         if isSearchFocused {
-            // If search is focused, move to list
             isSearchFocused = false
             selectedIndex = max(0, filteredItems.count - 1)
         } else {
             selectedIndex = max(0, selectedIndex - 1)
         }
-        Logging.debug("After navigate up - selectedIndex: \(selectedIndex)")
         updateSelectedItem()
     }
-    
+
     private func navigateDown() {
-        Logging.debug("Navigate down called - current selectedIndex: \(selectedIndex), isSearchFocused: \(isSearchFocused)")
         if isSearchFocused {
-            // If search is focused, move to list
             isSearchFocused = false
             selectedIndex = 0
         } else {
             selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
         }
-        Logging.debug("After navigate down - selectedIndex: \(selectedIndex)")
         updateSelectedItem()
     }
-    
-    private func updateSelectedItem() {
-        // Save any pending note for the current item before switching
-        saveCurrentNote()
 
-        // Clear revealed sensitive items when switching selection
+    private func updateSelectedItem() {
+        saveCurrentNote()
         revealedSensitiveIds.removeAll()
 
         guard !filteredItems.isEmpty else {
             selectedItem = nil
             editingNote = ""
-            Logging.debug("No filtered items - clearing selection")
             return
         }
 
-        // Ensure selectedIndex is within bounds
         selectedIndex = max(0, min(selectedIndex, filteredItems.count - 1))
 
-        // Update selected item
         if selectedIndex < filteredItems.count {
             selectedItem = filteredItems[selectedIndex]
             editingNote = selectedItem?.note ?? ""
-            Logging.debug("Selected item updated to index \(selectedIndex): \(selectedItem?.previewText ?? "nil")")
         } else {
             selectedItem = nil
             editingNote = ""
-            Logging.debug("selectedIndex out of bounds - clearing selection")
         }
     }
 
@@ -706,7 +726,31 @@ struct ContentView: View {
             clipboardMonitor.updateNote(item, note: noteToSave)
         }
     }
-    
+
+    /// Load a lazy-loaded image from disk
+    private func loadLazyImage(_ item: ClipboardItem) {
+        guard item.needsImageLoad,
+              !loadingImageIds.contains(item.id),
+              loadedImages[item.id] == nil else { return }
+
+        loadingImageIds.insert(item.id)
+
+        clipboardMonitor.loadImageIfNeeded(item) { image in
+            loadingImageIds.remove(item.id)
+            if let image = image {
+                loadedImages[item.id] = image
+                // Limit cache size to prevent memory bloat
+                if loadedImages.count > 20 {
+                    // Remove oldest entries (this is a simple approach)
+                    let keysToRemove = Array(loadedImages.keys.prefix(loadedImages.count - 20))
+                    for key in keysToRemove {
+                        loadedImages.removeValue(forKey: key)
+                    }
+                }
+            }
+        }
+    }
+
     private func handleNumberKey(_ number: Int) {
         guard !filteredItems.isEmpty else { return }
         
@@ -715,11 +759,8 @@ struct ContentView: View {
         
         if targetIndex < filteredItems.count {
             selectedIndex = targetIndex
-            isSearchFocused = false // Ensure we're not in search mode
+            isSearchFocused = false
             updateSelectedItem()
-            Logging.debug("Number \(number) pressed - jumped to index \(targetIndex)")
-        } else {
-            Logging.debug("Number \(number) pressed but not enough items (only \(filteredItems.count) available)")
         }
     }
     
@@ -759,64 +800,48 @@ struct ContentView: View {
     // MARK: - Key Event Handling
     
     private func handleKeyEvent(_ keyEvent: NSEvent) -> Bool {
-        Logging.debug("Key event received: keyCode = \(keyEvent.keyCode)")
-        
         switch keyEvent.keyCode {
         case 126: // Up arrow
-            Logging.debug("Up arrow pressed")
             navigateUp()
             return true
         case 125: // Down arrow
-            Logging.debug("Down arrow pressed")
             navigateDown()
             return true
         case 123: // Left arrow
             if !isSearchFocused {
-                Logging.debug("Left arrow pressed - switching to All")
                 showFavoritesOnly = false
                 return true
             }
         case 124: // Right arrow
             if !isSearchFocused {
-                Logging.debug("Right arrow pressed - switching to Favorites")
                 showFavoritesOnly = true
                 return true
             }
         case 36: // Return/Enter
             if !isSearchFocused {
-                Logging.debug("Enter pressed - pasting selected item")
                 pasteSelectedItem()
                 return true
             }
         case 53: // Escape
-            // If note field is focused, unfocus it first
             if isNoteFocused {
-                Logging.debug("Escape pressed - unfocusing note field")
-                if let item = selectedItem {
-                    saveNote(for: item)
-                }
+                if let item = selectedItem { saveNote(for: item) }
                 isNoteFocused = false
                 return true
             }
-            // If search is focused, unfocus it
             if isSearchFocused {
-                Logging.debug("Escape pressed - unfocusing search")
                 isSearchFocused = false
                 return true
             }
-            Logging.debug("Escape pressed - hiding popover and restoring focus")
             menuBarController.hidePopoverAndActivatePreviousApp()
             return true
         case 3: // F key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
-                Logging.debug("Cmd+F pressed - toggling favorites filter")
                 showFavoritesOnly.toggle()
                 return true
             }
         case 2: // D key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if let item = selectedItem {
-                    Logging.debug("Cmd+D pressed - toggling favorite for selected item")
                     clipboardMonitor.toggleFavorite(item)
                     return true
                 }
@@ -824,7 +849,6 @@ struct ContentView: View {
         case 6: // Z key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if let item = selectedItem, item.type == .image {
-                    Logging.debug("Cmd+Z pressed - opening image preview")
                     showImageModal = true
                     return true
                 }
@@ -832,10 +856,7 @@ struct ContentView: View {
         case 4: // H key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if var item = selectedItem {
-                    Logging.debug("Cmd+H pressed - toggling sensitive for selected item")
-                    // Toggle in the monitor (updates clipboardHistory)
                     clipboardMonitor.toggleSensitive(item)
-                    // Also update selectedItem immediately to keep preview in sync
                     item.isSensitive.toggle()
                     selectedItem = item
                     return true
@@ -844,7 +865,6 @@ struct ContentView: View {
         case 9: // V key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if let item = selectedItem, item.isSensitive {
-                    Logging.debug("Cmd+V pressed - toggling reveal for sensitive item")
                     if revealedSensitiveIds.contains(item.id) {
                         revealedSensitiveIds.remove(item.id)
                     } else {
@@ -855,15 +875,10 @@ struct ContentView: View {
             }
         case 45: // N key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
-                Logging.debug("Cmd+N pressed - toggling note focus")
                 if isNoteFocused {
-                    // Save note and unfocus
-                    if let item = selectedItem {
-                        saveNote(for: item)
-                    }
+                    if let item = selectedItem { saveNote(for: item) }
                     isNoteFocused = false
                 } else {
-                    // Focus on note field
                     isSearchFocused = false
                     isNoteFocused = true
                 }
@@ -871,54 +886,36 @@ struct ContentView: View {
             }
         case 51: // Backspace/Delete key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
-                Logging.debug("Cmd+Backspace pressed - showing delete confirmation")
                 showClearConfirmation = true
                 return true
             }
         case 48: // Tab
-            Logging.debug("Tab pressed - toggling search focus")
             isSearchFocused.toggle()
             return true
-        case 29: // 0
-            if !isSearchFocused { handleNumberKey(0); return true }
-        case 18: // 1
-            if !isSearchFocused { handleNumberKey(1); return true }
-        case 19: // 2
-            if !isSearchFocused { handleNumberKey(2); return true }
-        case 20: // 3
-            if !isSearchFocused { handleNumberKey(3); return true }
-        case 21: // 4
-            if !isSearchFocused { handleNumberKey(4); return true }
-        case 23: // 5
-            if !isSearchFocused { handleNumberKey(5); return true }
-        case 22: // 6
-            if !isSearchFocused { handleNumberKey(6); return true }
-        case 26: // 7
-            if !isSearchFocused { handleNumberKey(7); return true }
-        case 28: // 8
-            if !isSearchFocused { handleNumberKey(8); return true }
-        case 25: // 9
-            if !isSearchFocused { handleNumberKey(9); return true }
+        case 29: if !isSearchFocused { handleNumberKey(0); return true }
+        case 18: if !isSearchFocused { handleNumberKey(1); return true }
+        case 19: if !isSearchFocused { handleNumberKey(2); return true }
+        case 20: if !isSearchFocused { handleNumberKey(3); return true }
+        case 21: if !isSearchFocused { handleNumberKey(4); return true }
+        case 23: if !isSearchFocused { handleNumberKey(5); return true }
+        case 22: if !isSearchFocused { handleNumberKey(6); return true }
+        case 26: if !isSearchFocused { handleNumberKey(7); return true }
+        case 28: if !isSearchFocused { handleNumberKey(8); return true }
+        case 25: if !isSearchFocused { handleNumberKey(9); return true }
         default:
-            // Check if this is a printable character that should trigger search
-            // Don't trigger if note field or search is already focused
             if let characters = keyEvent.characters,
                !characters.isEmpty,
                !isSearchFocused,
                !isNoteFocused,
                isPrintableCharacter(keyEvent) {
-                Logging.debug("Printable character '\(characters)' - focusing search and adding to search text")
-                // Focus first, then add the character to prevent text selection
                 DispatchQueue.main.async {
                     self.isSearchFocused = true
-                    // Add a small delay to ensure focus is set before adding text
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
                         self.searchText = characters
                     }
                 }
                 return true
             }
-            Logging.debug("Unhandled key: \(keyEvent.keyCode)")
             return false
         }
         return false
@@ -993,7 +990,7 @@ struct ClipboardItemRow: View {
                         Circle()
                             .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
                     )
-            } else if item.type == .image, !shouldMask, let image = item.content as? NSImage {
+            } else if item.type == .image, !shouldMask, item.isImageLoaded, let image = item.content as? NSImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)

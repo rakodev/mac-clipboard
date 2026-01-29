@@ -40,7 +40,7 @@ class PersistenceManager: ObservableObject {
         if context.hasChanges {
             do {
                 try context.save()
-                Logging.info("💾 Context saved successfully")
+                Logging.debug("💾 Context saved successfully")
             } catch {
                 print("💾 Save error: \(error)")
             }
@@ -81,15 +81,29 @@ class PersistenceManager: ObservableObject {
         saveContext()
     }
     
+    /// Number of recent images to load into memory at startup (older images are lazy-loaded)
+    private let maxPreloadedImages = 15
+
     func loadClipboardHistory(limit: Int = 1000) -> [ClipboardItem] {
         let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
         request.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
         request.fetchLimit = limit
-        
+
         do {
             let persistedItems = try context.fetch(request)
-            let clipboardItems = persistedItems.compactMap { convertToClipboardItem($0) }
-            Logging.info("💾 Loaded \(clipboardItems.count) items from storage")
+            var imageCount = 0
+            let clipboardItems = persistedItems.compactMap { item -> ClipboardItem? in
+                let isImage = item.contentType == Int16(ClipboardContentType.image.rawValue)
+                if isImage {
+                    imageCount += 1
+                    // Only load first N images into memory, rest are lazy-loaded
+                    let shouldLoadImage = imageCount <= maxPreloadedImages
+                    return convertToClipboardItem(item, loadImageData: shouldLoadImage)
+                }
+                return convertToClipboardItem(item, loadImageData: true)
+            }
+            let lazyCount = max(0, imageCount - maxPreloadedImages)
+            Logging.debug("💾 Loaded \(clipboardItems.count) items (\(imageCount) images, \(lazyCount) lazy)")
             return clipboardItems
         } catch {
             print("💾 Load error: \(error)")
@@ -97,29 +111,36 @@ class PersistenceManager: ObservableObject {
         }
     }
     
-    private func convertToClipboardItem(_ persistedItem: PersistedClipboardItem) -> ClipboardItem? {
+    private func convertToClipboardItem(_ persistedItem: PersistedClipboardItem, loadImageData: Bool = true) -> ClipboardItem? {
         guard let id = persistedItem.id,
               let createdAt = persistedItem.createdAt else {
             print("💾 Invalid persisted item: missing id or createdAt")
             return nil
         }
-        
+
         let contentType = ClipboardContentType(rawValue: Int(persistedItem.contentType)) ?? .text
         var content: Any = ""
-        
+        var isImageLoaded = true
+
         switch contentType {
         case .text:
             content = persistedItem.textContent ?? ""
-            
+
         case .image:
-            if let imageData = persistedItem.imageData,
-               let image = NSImage(data: imageData) {
-                content = image
+            if loadImageData {
+                if let imageData = persistedItem.imageData,
+                   let image = NSImage(data: imageData) {
+                    content = image
+                } else {
+                    // If image data is missing, skip this item
+                    return nil
+                }
             } else {
-                // If image data is missing, skip this item
-                return nil
+                // Lazy load: don't load image data yet, use placeholder
+                content = NSNull()  // Placeholder for unloaded image
+                isImageLoaded = false
             }
-            
+
         case .file:
             if let urls = persistedItem.fileURLs as? [URL] {
                 // Validate that files still exist
@@ -132,7 +153,7 @@ class PersistenceManager: ObservableObject {
                 return nil
             }
         }
-        
+
         return ClipboardItem(
             id: id,
             content: content,
@@ -141,8 +162,27 @@ class PersistenceManager: ObservableObject {
             displayText: persistedItem.displayText,
             isFavorite: persistedItem.isFavorite,
             isSensitive: persistedItem.isSensitive,
-            note: persistedItem.note
+            note: persistedItem.note,
+            isImageLoaded: isImageLoaded
         )
+    }
+
+    /// Load image data for a specific item (for lazy loading)
+    func loadImageData(for itemId: UUID) -> NSImage? {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+        request.fetchLimit = 1
+
+        do {
+            if let item = try context.fetch(request).first,
+               let imageData = item.imageData,
+               let image = NSImage(data: imageData) {
+                return image
+            }
+        } catch {
+            print("💾 Error loading image data: \(error)")
+        }
+        return nil
     }
     
     // MARK: - Favorites
@@ -156,7 +196,7 @@ class PersistenceManager: ObservableObject {
             if let item = items.first {
                 item.isFavorite = !item.isFavorite
                 saveContext()
-                Logging.info("Toggled favorite for item \(itemId): \(item.isFavorite)")
+                Logging.debug("Toggled favorite for item \(itemId): \(item.isFavorite)")
                 return item.isFavorite
             }
         } catch {
@@ -175,7 +215,7 @@ class PersistenceManager: ObservableObject {
                 item.note = note
                 item.updatedAt = Date()
                 saveContext()
-                Logging.info("Updated note for item \(itemId)")
+                Logging.debug("Updated note for item \(itemId)")
             }
         } catch {
             print("Update note error: \(error)")
@@ -192,7 +232,7 @@ class PersistenceManager: ObservableObject {
                 item.isSensitive = !item.isSensitive
                 item.updatedAt = Date()
                 saveContext()
-                Logging.info("Toggled sensitive for item \(itemId): \(item.isSensitive)")
+                Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive)")
                 return item.isSensitive
             }
         } catch {
@@ -247,7 +287,7 @@ class PersistenceManager: ObservableObject {
         do {
             let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
             let deletedCount = result?.result as? Int ?? 0
-            Logging.info("💾 Cleaned up \(deletedCount) old items")
+            Logging.debug("💾 Cleaned up \(deletedCount) old items")
             
             // Refresh the context
             context.refreshAllObjects()
@@ -263,7 +303,7 @@ class PersistenceManager: ObservableObject {
         do {
             try context.execute(deleteRequest)
             context.refreshAllObjects()
-            Logging.info("💾 Cleared all persistent data")
+            Logging.debug("💾 Cleared all persistent data")
         } catch {
             print("💾 Clear all error: \(error)")
         }
@@ -278,7 +318,7 @@ class PersistenceManager: ObservableObject {
             let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
             let deletedCount = result?.result as? Int ?? 0
             context.refreshAllObjects()
-            Logging.info("💾 Deleted \(deletedCount) items from persistent storage")
+            Logging.debug("💾 Deleted \(deletedCount) items from persistent storage")
         } catch {
             print("💾 Delete items error: \(error)")
         }

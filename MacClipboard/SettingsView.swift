@@ -2,18 +2,28 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
-    @Environment(\.dismiss) private var dismiss
+    let onDismiss: () -> Void
+    let onCheckForUpdates: () -> Void
+
+    init(onDismiss: @escaping () -> Void = {}, onCheckForUpdates: @escaping () -> Void = {}) {
+        self.onDismiss = onDismiss
+        self.onCheckForUpdates = onCheckForUpdates
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("Settings")
-                .font(.title)
-                .fontWeight(.bold)
-
-            Divider()
-
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    // General Settings
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("General")
+                            .font(.headline)
+
+                        Toggle("Launch at login", isOn: $preferences.autoStartEnabled)
+                    }
+
+                    Divider()
+
                     // Clipboard History Settings
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Clipboard History")
@@ -147,7 +157,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
 
                 Button("Check for Updates") {
-                    // Placeholder for update check
+                    onCheckForUpdates()
                 }
                 .buttonStyle(.link)
                 .font(.caption)
@@ -160,7 +170,7 @@ struct SettingsView: View {
                 .buttonStyle(.borderless)
 
                 Button("Done") {
-                    dismiss()
+                    onDismiss()
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -211,5 +221,5 @@ struct ShortcutHint: View {
 }
 
 #Preview {
-    SettingsView()
+    SettingsView(onDismiss: {}, onCheckForUpdates: {})
 }

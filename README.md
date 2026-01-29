@@ -22,6 +22,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 🗑️ **Bulk delete** - Select multiple items with `Cmd+Click` for deletion
 * ⚡ **Minimal footprint** - Native SwiftUI app with low memory usage
 * 🔧 **Highly configurable** - Adjust history size, storage limits, retention days
+* 🚀 **Launch at login** - Starts automatically when you log in (enabled by default)
 
 ## Installation
 
@@ -121,6 +122,10 @@ MacClipboard automatically requests:
 ## Settings
 
 Access settings via the gear icon or right-click menu.
+
+### General
+
+* **Launch at login**: Start MacClipboard automatically when you log in (enabled by default)
 
 ### Clipboard History
 

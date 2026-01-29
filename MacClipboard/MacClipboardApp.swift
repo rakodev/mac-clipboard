@@ -20,6 +20,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         logAccessibilityState(context: "launch")
         handleAccessibilityPermissions()
+
+        // Sync login item state with user preference (runs async to avoid blocking startup)
+        UserPreferencesManager.shared.syncLoginItemState()
         // Defer creating the MenuBarController slightly to avoid race conditions with
         // accessibility enabling and the app activation policy. Some macOS versions
         // can cause status item event handling to be lost if created too early.

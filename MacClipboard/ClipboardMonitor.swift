@@ -37,8 +37,8 @@ class ClipboardMonitor: ObservableObject {
     }
     
     private func startMonitoring() {
-        // Check clipboard every 0.5 seconds
-        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+        // Check clipboard every 0.8 seconds (balanced between responsiveness and CPU usage)
+        timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
         
@@ -103,7 +103,7 @@ class ClipboardMonitor: ObservableObject {
     private func checkClipboard() {
         // Skip monitoring if we're currently pasting
         guard !isPausing else { return }
-        
+
         let pasteboard = NSPasteboard.general
         
         // Check if clipboard content changed
@@ -122,6 +122,13 @@ class ClipboardMonitor: ObservableObject {
         
         // Check for text content first
         if let string = pasteboard.string(forType: .string), !string.isEmpty {
+            // Skip extremely large text to prevent memory issues (max 1MB)
+            let maxTextBytes = 1 * 1024 * 1024
+            if string.utf8.count > maxTextBytes {
+                Logging.debug("⚠️ Skipped large text (\(string.utf8.count / 1024)KB) - exceeds 1MB limit")
+                return nil
+            }
+
             return ClipboardItem(
                 id: UUID(),
                 content: string,
@@ -132,6 +139,13 @@ class ClipboardMonitor: ObservableObject {
         
         // Check for image content
         if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
+            // Skip very large images to prevent memory/storage bloat (max 10MB)
+            let maxImageBytes = 10 * 1024 * 1024
+            if let tiffData = image.tiffRepresentation, tiffData.count > maxImageBytes {
+                Logging.debug("⚠️ Skipped large image (\(tiffData.count / 1024 / 1024)MB) - exceeds 10MB limit")
+                return nil
+            }
+
             return ClipboardItem(
                 id: UUID(),
                 content: image,
@@ -158,9 +172,25 @@ class ClipboardMonitor: ObservableObject {
     private func addToHistory(_ item: ClipboardItem) {
         DispatchQueue.main.async {
             // Check for existing duplicate and preserve its metadata (favorite, sensitive, note)
+            // For performance: limit duplicate checking for large content
+            // - Images: only check last 10 items (TIFF comparison is expensive)
+            // - Large text (≥10KB): only check last 10 items
+            // - Small text/files: check all items (fast enough)
             var itemToInsert = item
-            if let existingIndex = self.clipboardHistory.firstIndex(where: { $0.contentEquals(item) }) {
-                let existingItem = self.clipboardHistory[existingIndex]
+            let isLargeContent = item.type == .image ||
+                (item.type == .text && ((item.content as? String)?.count ?? 0) >= 10_000)
+            let itemsToCheck = isLargeContent
+                ? Array(self.clipboardHistory.prefix(10))
+                : self.clipboardHistory
+
+            if let matchIndex = itemsToCheck.firstIndex(where: { $0.contentEquals(item) }),
+               let actualIndex = self.clipboardHistory.firstIndex(where: { $0.id == itemsToCheck[matchIndex].id }) {
+                // If duplicate is already at the top, do nothing (common case: user copies same thing multiple times to be sure)
+                if actualIndex == 0 {
+                    return
+                }
+
+                let existingItem = self.clipboardHistory[actualIndex]
                 // Preserve favorite status, sensitive flag, and note from existing item
                 itemToInsert.isFavorite = existingItem.isFavorite
                 itemToInsert.isSensitive = existingItem.isSensitive
@@ -170,7 +200,7 @@ class ClipboardMonitor: ObservableObject {
                 self.persistenceManager.deleteItems(withIds: [existingItem.id])
 
                 // Remove from history
-                self.clipboardHistory.remove(at: existingIndex)
+                self.clipboardHistory.remove(at: actualIndex)
             }
 
             // Add to beginning of array
@@ -182,6 +212,29 @@ class ClipboardMonitor: ObservableObject {
             // Limit to max items
             if self.clipboardHistory.count > self.userPreferences.maxClipboardItems {
                 self.clipboardHistory.removeLast(self.clipboardHistory.count - self.userPreferences.maxClipboardItems)
+            }
+
+            // Unload old images from memory to prevent memory bloat
+            self.unloadOldImages()
+        }
+    }
+
+    /// Maximum number of images to keep loaded in memory
+    private static let maxLoadedImages = 15
+
+    /// Unload images beyond the first N to free memory
+    private func unloadOldImages() {
+        var loadedImageCount = 0
+
+        for i in 0..<clipboardHistory.count {
+            if clipboardHistory[i].type == .image && clipboardHistory[i].isImageLoaded {
+                loadedImageCount += 1
+
+                // Unload images beyond the limit
+                if loadedImageCount > Self.maxLoadedImages {
+                    clipboardHistory[i].content = NSNull()
+                    clipboardHistory[i].isImageLoaded = false
+                }
             }
         }
     }
@@ -202,18 +255,29 @@ class ClipboardMonitor: ObservableObject {
     func copyToClipboard(_ item: ClipboardItem) {
         // Pause monitoring to prevent duplicate entries
         isPausing = true
-        
+
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        
+
         switch item.type {
         case .text:
             if let text = item.content as? String {
                 pasteboard.setString(text, forType: .string)
             }
         case .image:
+            // Handle lazy-loaded images
             if let image = item.content as? NSImage {
                 pasteboard.writeObjects([image])
+            } else if item.needsImageLoad {
+                // Load image synchronously for copy operation
+                if let image = persistenceManager.loadImageData(for: item.id) {
+                    pasteboard.writeObjects([image])
+                    // Also update the item in history
+                    if let index = clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                        clipboardHistory[index].content = image
+                        clipboardHistory[index].isImageLoaded = true
+                    }
+                }
             }
         case .file:
             if let urls = item.content as? [URL] {
@@ -301,19 +365,44 @@ class ClipboardMonitor: ObservableObject {
             self.persistenceManager.deleteItems(withIds: ids)
         }
     }
+
+    /// Load image data for a lazy-loaded item (call when user selects the item)
+    func loadImageIfNeeded(_ item: ClipboardItem, completion: @escaping (NSImage?) -> Void) {
+        guard item.needsImageLoad else {
+            // Already loaded
+            completion(item.content as? NSImage)
+            return
+        }
+
+        // Load from disk on background thread
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = self.persistenceManager.loadImageData(for: item.id)
+
+            DispatchQueue.main.async {
+                // Update the item in history with loaded image
+                if let image = image,
+                   let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                    self.clipboardHistory[index].content = image
+                    self.clipboardHistory[index].isImageLoaded = true
+                }
+                completion(image)
+            }
+        }
+    }
 }
 
 struct ClipboardItem: Identifiable, Equatable {
     let id: UUID
-    let content: Any
+    var content: Any  // Can be nil for lazy-loaded images
     let type: ClipboardContentType
     let timestamp: Date
     let displayText: String?
     var isFavorite: Bool
     var isSensitive: Bool
     var note: String?
+    var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, note: String? = nil) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -322,6 +411,12 @@ struct ClipboardItem: Identifiable, Equatable {
         self.isFavorite = isFavorite
         self.isSensitive = isSensitive
         self.note = note
+        self.isImageLoaded = (type != .image) || isImageLoaded  // Non-images are always "loaded"
+    }
+
+    /// Returns true if this is an image that needs to be loaded from disk
+    var needsImageLoad: Bool {
+        return type == .image && !isImageLoaded
     }
     
     var previewText: String {
@@ -367,15 +462,44 @@ struct ClipboardItem: Identifiable, Equatable {
         
         switch type {
         case .text:
-            return (content as? String) == (other.content as? String)
+            guard let text1 = content as? String,
+                  let text2 = other.content as? String else { return false }
+            // Quick rejection: different lengths = different content
+            if text1.count != text2.count { return false }
+            return text1 == text2
         case .image:
-            // For images, compare their data representations
-        guard let image1 = content as? NSImage,
-            let image2 = other.content as? NSImage else { return false }
+            // For images, use fast dimension comparison first
+            // Full data comparison is too slow for large images
+            guard let image1 = content as? NSImage,
+                  let image2 = other.content as? NSImage else { return false }
 
-        let data1 = image1.tiffRepresentation
-        let data2 = image2.tiffRepresentation
-        return data1 == data2
+            // Quick rejection: different dimensions = different images
+            if image1.size != image2.size {
+                return false
+            }
+
+            // For same dimensions, compare a small sample of pixels via hash
+            // This is much faster than full TIFF comparison
+            guard let data1 = image1.tiffRepresentation,
+                  let data2 = image2.tiffRepresentation else { return false }
+
+            // Compare sizes first (fast)
+            if data1.count != data2.count {
+                return false
+            }
+
+            // Compare hash of first 1KB + last 1KB instead of full data
+            let sampleSize = min(1024, data1.count)
+            let prefix1 = data1.prefix(sampleSize)
+            let prefix2 = data2.prefix(sampleSize)
+            if prefix1 != prefix2 {
+                return false
+            }
+
+            // If prefixes match and sizes match, likely the same image
+            let suffix1 = data1.suffix(sampleSize)
+            let suffix2 = data2.suffix(sampleSize)
+            return suffix1 == suffix2
         case .file:
             let urls1 = content as? [URL] ?? []
             let urls2 = other.content as? [URL] ?? []
