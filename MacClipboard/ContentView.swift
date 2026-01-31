@@ -16,6 +16,9 @@ struct ContentView: View {
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
     @State private var searchDebounceTask: Task<Void, Never>?
+    @State private var filterTask: Task<Void, Never>?
+    @State private var computedFilteredItems: [ClipboardItem] = []
+    @State private var pendingSearchCharacter: String?
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
     @State private var selectedFilter: FilterTab = .all
@@ -40,31 +43,56 @@ struct ContentView: View {
     }
     
     private var filteredItems: [ClipboardItem] {
-        var items = clipboardMonitor.clipboardHistory
+        return computedFilteredItems
+    }
 
-        // Filter by selected tab
-        switch selectedFilter {
-        case .all:
-            break // Show all items
-        case .favorites:
-            items = items.filter { $0.isFavorite }
-        case .images:
-            items = items.filter { $0.type == .image }
-        case .hidden:
-            items = items.filter { $0.isSensitive }
-        }
+    /// Compute filtered items on background thread to keep typing smooth
+    private func recomputeFilteredItems() {
+        filterTask?.cancel()
 
-        // Then filter by search text (use debounced value for smooth typing)
-        if !debouncedSearchText.isEmpty {
-            items = items.filter { item in
-                let previewMatch = item.previewText.localizedCaseInsensitiveContains(debouncedSearchText)
-                let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(debouncedSearchText)
-                let noteMatch = item.note?.localizedCaseInsensitiveContains(debouncedSearchText) ?? false
-                return previewMatch || fullTextMatch || noteMatch
+        let items = clipboardMonitor.clipboardHistory
+        let filter = selectedFilter
+        let searchQuery = debouncedSearchText
+
+        filterTask = Task.detached(priority: .userInitiated) {
+            // Filter by selected tab
+            var filtered: [ClipboardItem]
+            switch filter {
+            case .all:
+                filtered = items
+            case .favorites:
+                filtered = items.filter { $0.isFavorite }
+            case .images:
+                filtered = items.filter { $0.type == .image }
+            case .hidden:
+                filtered = items.filter { $0.isSensitive }
+            }
+
+            // Then filter by search text
+            if !searchQuery.isEmpty {
+                filtered = filtered.filter { item in
+                    let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchQuery)
+                    let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchQuery)
+                    let noteMatch = item.note?.localizedCaseInsensitiveContains(searchQuery) ?? false
+                    return previewMatch || fullTextMatch || noteMatch
+                }
+
+                // Sort search results: favorites first, then items with notes, then rest
+                filtered = filtered.sorted { item1, item2 in
+                    let score1 = (item1.isFavorite ? 2 : 0) + ((item1.note?.isEmpty == false) ? 1 : 0)
+                    let score2 = (item2.isFavorite ? 2 : 0) + ((item2.note?.isEmpty == false) ? 1 : 0)
+                    return score1 > score2
+                }
+            }
+
+            // Check if cancelled before updating UI
+            let finalResult = filtered
+            if !Task.isCancelled {
+                await MainActor.run {
+                    computedFilteredItems = finalResult
+                }
             }
         }
-
-        return items
     }
     
     private var dynamicHeight: CGFloat {
@@ -132,6 +160,10 @@ struct ContentView: View {
             // Initialize time cache when popover opens
             initializeTimeCache()
 
+            // Initialize filtered items immediately
+            computedFilteredItems = clipboardMonitor.clipboardHistory
+            recomputeFilteredItems()
+
             // Ensure we have items and properly select the first one
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
                 if !filteredItems.isEmpty {
@@ -145,8 +177,9 @@ struct ContentView: View {
         .onDisappear {
             // Save any pending note when popover closes
             saveCurrentNote()
-            // Cancel any pending debounce task
+            // Cancel any pending tasks
             searchDebounceTask?.cancel()
+            filterTask?.cancel()
             // Clear revealed sensitive items when popover closes
             revealedSensitiveIds.removeAll()
         }
@@ -157,14 +190,16 @@ struct ContentView: View {
             // Immediate update when clearing search (no delay needed)
             if newValue.isEmpty {
                 debouncedSearchText = ""
+                recomputeFilteredItems()
                 return
             }
 
             searchDebounceTask = Task {
-                try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce for smooth typing
                 if !Task.isCancelled {
                     await MainActor.run {
                         debouncedSearchText = newValue
+                        recomputeFilteredItems()
                     }
                 }
             }
@@ -172,18 +207,35 @@ struct ContentView: View {
         .onChange(of: dynamicHeight) { newHeight in
             updatePopoverSize()
         }
-        .onChange(of: filteredItems) { newItems in
+        .onChange(of: computedFilteredItems) { newItems in
             // Reset selection when filter changes
             selectedIndex = 0
             updateSelectedItem()
             // Update size when items change
             updatePopoverSize()
         }
+        .onChange(of: selectedFilter) { _ in
+            // Recompute when filter tab changes
+            recomputeFilteredItems()
+        }
         .onChange(of: clipboardMonitor.clipboardHistory) { _ in
-            // Reset selection when clipboard history changes
+            // Recompute when clipboard history changes
+            recomputeFilteredItems()
+            // Reset selection if needed
             if !filteredItems.isEmpty && selectedIndex >= filteredItems.count {
                 selectedIndex = 0
                 updateSelectedItem()
+            }
+        }
+        .onChange(of: isSearchFocused) { focused in
+            // Apply pending character after search field gains focus
+            if focused, let char = pendingSearchCharacter {
+                pendingSearchCharacter = nil
+                // Small delay to ensure TextField is ready and any auto-selection has occurred
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                    // Setting searchText replaces any selection
+                    self.searchText = char
+                }
             }
         }
         .background(KeyEventHandler { keyEvent in
@@ -316,12 +368,9 @@ struct ContentView: View {
                 .textFieldStyle(PlainTextFieldStyle())
                 .focused($isSearchFocused)
                 .onSubmit {
-                    // When user presses enter in search, focus on list
+                    // When user presses enter in search, paste the selected item immediately
                     isSearchFocused = false
-                    if !filteredItems.isEmpty {
-                        selectedIndex = 0
-                        updateSelectedItem()
-                    }
+                    pasteSelectedItem()
                 }
         }
         .padding(.horizontal, 8)
@@ -802,22 +851,20 @@ struct ContentView: View {
     // MARK: - Navigation Functions
     
     private func navigateUp() {
+        // Always navigate, unfocus search if needed
         if isSearchFocused {
             isSearchFocused = false
-            selectedIndex = max(0, filteredItems.count - 1)
-        } else {
-            selectedIndex = max(0, selectedIndex - 1)
         }
+        selectedIndex = max(0, selectedIndex - 1)
         updateSelectedItem()
     }
 
     private func navigateDown() {
+        // Always navigate, unfocus search if needed
         if isSearchFocused {
             isSearchFocused = false
-            selectedIndex = 0
-        } else {
-            selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
         }
+        selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
         updateSelectedItem()
     }
 
@@ -950,10 +997,12 @@ struct ContentView: View {
                 return true
             }
         case 36: // Return/Enter
-            if !isSearchFocused {
-                pasteSelectedItem()
-                return true
+            // Always paste the selected item, unfocus search if needed
+            if isSearchFocused {
+                isSearchFocused = false
             }
+            pasteSelectedItem()
+            return true
         case 53: // Escape
             if isNoteFocused {
                 if let item = selectedItem { saveNote(for: item) }
@@ -1040,12 +1089,10 @@ struct ContentView: View {
                !isSearchFocused,
                !isNoteFocused,
                isPrintableCharacter(keyEvent) {
-                DispatchQueue.main.async {
-                    self.isSearchFocused = true
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.01) {
-                        self.searchText = characters
-                    }
-                }
+                // Store the character and focus the search field
+                // The character will be applied after focus is confirmed
+                pendingSearchCharacter = characters
+                isSearchFocused = true
                 return true
             }
             return false
