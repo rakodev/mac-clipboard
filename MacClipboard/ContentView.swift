@@ -396,7 +396,7 @@ struct ContentView: View {
         case .all:
             return "Copy something to get started"
         case .favorites:
-            return "Star items to add them to favorites"
+            return "Star items to keep them permanently — favorites are never auto-deleted"
         case .images:
             return "Copy an image to see it here"
         case .hidden:
@@ -663,7 +663,7 @@ struct ContentView: View {
                                             .font(.system(size: 14, weight: .semibold))
                                             .foregroundColor(.white)
                                             .frame(width: 24, height: 24)
-                                            .background(Circle().fill(Color.black.opacity(0.7)))
+                                            .background(Circle().fill(Color.primary.opacity(0.7)))
                                     }
                                     Spacer()
                                 }
@@ -1391,7 +1391,7 @@ struct ImageModalView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .clipped()
                 .contentShape(Rectangle()) // Constrain gesture area to frame bounds
-                .background(Color.black.opacity(0.1))
+                .background(Color.gray.opacity(0.1))
                 .gesture(
                         SimultaneousGesture(
                             // Magnification gesture

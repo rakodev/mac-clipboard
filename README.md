@@ -20,6 +20,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 💾 **Persistent storage** - History saved to disk, survives app restarts
 * 📁 **Multiple content types** - Supports text, images, and file paths
 * 🗑️ **Bulk delete** - Select multiple items with `Cmd+Click` for deletion
+* 🌗 **Dark & Light mode** - Automatically matches your system appearance
 * ⚡ **Minimal footprint** - Native SwiftUI app with low memory usage
 * 🔧 **Highly configurable** - Adjust history size, storage limits, retention days
 * 🚀 **Launch at login** - Starts automatically when you log in (enabled by default)
