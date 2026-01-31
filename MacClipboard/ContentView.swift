@@ -2,6 +2,13 @@ import SwiftUI
 import CoreGraphics
 import ApplicationServices
 
+enum FilterTab: String, CaseIterable {
+    case all = "All"
+    case favorites = "Favorites"
+    case images = "Images"
+    case hidden = "Hidden"
+}
+
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
     let menuBarController: MenuBarController
@@ -11,7 +18,7 @@ struct ContentView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
-    @State private var showFavoritesOnly = false
+    @State private var selectedFilter: FilterTab = .all
     @State private var showClearConfirmation = false
     @State private var showDeleteAllConfirmation = false  // Second confirmation for delete all
     @State private var selectedItemIds: Set<UUID> = []  // For multi-selection
@@ -35,9 +42,16 @@ struct ContentView: View {
     private var filteredItems: [ClipboardItem] {
         var items = clipboardMonitor.clipboardHistory
 
-        // Filter by favorites if enabled
-        if showFavoritesOnly {
+        // Filter by selected tab
+        switch selectedFilter {
+        case .all:
+            break // Show all items
+        case .favorites:
             items = items.filter { $0.isFavorite }
+        case .images:
+            items = items.filter { $0.type == .image }
+        case .hidden:
+            items = items.filter { $0.isSensitive }
         }
 
         // Then filter by search text (use debounced value for smooth typing)
@@ -287,11 +301,12 @@ struct ContentView: View {
             .buttonStyle(PlainButtonStyle())
             .help("Close")
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 4)
         .background(Color(NSColor.controlBackgroundColor))
     }
-    
+
     private var searchBarView: some View {
         HStack {
             Image(systemName: "magnifyingglass")
@@ -315,9 +330,10 @@ struct ContentView: View {
     }
 
     private var filterPickerView: some View {
-        Picker("", selection: $showFavoritesOnly) {
-            Text("All").tag(false)
-            Text("Favorites").tag(true)
+        Picker("", selection: $selectedFilter) {
+            ForEach(FilterTab.allCases, id: \.self) { tab in
+                Text(tab.rawValue).tag(tab)
+            }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
@@ -327,19 +343,78 @@ struct ContentView: View {
 
     private var emptyStateView: some View {
         VStack(spacing: 16) {
-            Image(systemName: "doc.on.clipboard")
+            Image(systemName: emptyStateIcon)
                 .font(.system(size: 48))
                 .foregroundColor(.secondary)
-            
-            Text("No clipboard history")
+
+            Text(emptyStateTitle)
                 .font(.title2)
                 .foregroundColor(.secondary)
-            
-            Text("Copy something to get started")
+
+            Text(emptyStateSubtitle)
                 .font(.body)
                 .foregroundColor(Color.secondary)
+
+            if let shortcut = emptyStateShortcut {
+                Text(shortcut)
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.top, 4)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var emptyStateIcon: String {
+        switch selectedFilter {
+        case .all:
+            return "doc.on.clipboard"
+        case .favorites:
+            return "star"
+        case .images:
+            return "photo"
+        case .hidden:
+            return "eye.slash"
+        }
+    }
+
+    private var emptyStateTitle: String {
+        switch selectedFilter {
+        case .all:
+            return "No clipboard history"
+        case .favorites:
+            return "No favorites"
+        case .images:
+            return "No images"
+        case .hidden:
+            return "No hidden items"
+        }
+    }
+
+    private var emptyStateSubtitle: String {
+        switch selectedFilter {
+        case .all:
+            return "Copy something to get started"
+        case .favorites:
+            return "Star items to add them to favorites"
+        case .images:
+            return "Copy an image to see it here"
+        case .hidden:
+            return "Mark items as sensitive to hide them"
+        }
+    }
+
+    private var emptyStateShortcut: String? {
+        switch selectedFilter {
+        case .all:
+            return nil
+        case .favorites:
+            return "⌘D to toggle favorite"
+        case .images:
+            return "⌘Z to zoom images"
+        case .hidden:
+            return "⌘H to toggle sensitive"
+        }
     }
     
     private var clipboardListView: some View {
@@ -495,14 +570,49 @@ struct ContentView: View {
                     .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
                 }
 
-                Button("Copy") {
+                Button("Copy ⏎") {
                     clipboardMonitor.copyToClipboard(item)
                     menuBarController.hidePopoverAndActivatePreviousApp()
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.bordered)
                 .font(.caption)
                 .controlSize(.small)
             }
+
+            // Metadata row
+            HStack(spacing: 8) {
+                if item.type == .text {
+                    let charCount = item.fullText.count
+                    let lineCount = item.fullText.components(separatedBy: .newlines).count
+                    Text("\(charCount) chars")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                    if lineCount > 1 {
+                        Text("•")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary.opacity(0.6))
+                        Text("\(lineCount) lines")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                } else if item.type == .image {
+                    if let image = (item.content as? NSImage) ?? loadedImages[item.id] {
+                        let width = Int(image.size.width)
+                        let height = Int(image.size.height)
+                        Text("\(width) × \(height) px")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                } else if item.type == .file {
+                    if let urls = item.content as? [URL] {
+                        Text("\(urls.count) file\(urls.count == 1 ? "" : "s")")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.top, 2)
 
             ScrollView {
                 if isMasked {
@@ -809,12 +919,18 @@ struct ContentView: View {
             return true
         case 123: // Left arrow
             if !isSearchFocused {
-                showFavoritesOnly = false
+                let allCases = FilterTab.allCases
+                if let currentIndex = allCases.firstIndex(of: selectedFilter), currentIndex > 0 {
+                    selectedFilter = allCases[currentIndex - 1]
+                }
                 return true
             }
         case 124: // Right arrow
             if !isSearchFocused {
-                showFavoritesOnly = true
+                let allCases = FilterTab.allCases
+                if let currentIndex = allCases.firstIndex(of: selectedFilter), currentIndex < allCases.count - 1 {
+                    selectedFilter = allCases[currentIndex + 1]
+                }
                 return true
             }
         case 36: // Return/Enter
@@ -836,7 +952,7 @@ struct ContentView: View {
             return true
         case 3: // F key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
-                showFavoritesOnly.toggle()
+                selectedFilter = selectedFilter == .favorites ? .all : .favorites
                 return true
             }
         case 2: // D key
