@@ -166,8 +166,8 @@ class UserPreferencesManager: ObservableObject {
         // Keyboard shortcuts - enabled by default
         self.shortcutsEnabled = defaults.object(forKey: Keys.shortcutsEnabled) as? Bool ?? true
 
-        // Auto-detect sensitive data - enabled by default
-        self.autoDetectSensitiveData = defaults.object(forKey: Keys.autoDetectSensitiveData) as? Bool ?? true
+        // Auto-detect sensitive data - disabled by default, let user decide
+        self.autoDetectSensitiveData = defaults.object(forKey: Keys.autoDetectSensitiveData) as? Bool ?? false
 
         // Auto-hide password-like strings - disabled by default (can have false positives)
         self.autoHidePasswordLikeStrings = defaults.object(forKey: Keys.autoHidePasswordLikeStrings) as? Bool ?? false
@@ -183,7 +183,7 @@ class UserPreferencesManager: ObservableObject {
         maxStorageSize = 1000
         persistenceDays = 60
         shortcutsEnabled = true
-        autoDetectSensitiveData = true
+        autoDetectSensitiveData = false
         autoHidePasswordLikeStrings = false
     }
 }
