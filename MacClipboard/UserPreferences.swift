@@ -17,6 +17,8 @@ class UserPreferencesManager: ObservableObject {
         static let maxStorageSize = "maxStorageSize"
         static let persistenceDays = "persistenceDays"
         static let shortcutsEnabled = "shortcutsEnabled"
+        static let autoDetectSensitiveData = "autoDetectSensitiveData"
+        static let autoHidePasswordLikeStrings = "autoHidePasswordLikeStrings"
     }
     
     // Constants
@@ -125,6 +127,28 @@ class UserPreferencesManager: ObservableObject {
         }
     }
 
+    // Whether to auto-detect and hide sensitive content (passwords, API keys, etc.)
+    @Published var autoDetectSensitiveData: Bool {
+        didSet {
+            defaults.set(autoDetectSensitiveData, forKey: Keys.autoDetectSensitiveData)
+            // Post notification when setting is turned ON to apply to existing items
+            if autoDetectSensitiveData {
+                NotificationCenter.default.post(name: .autoSensitiveSettingEnabled, object: nil)
+            }
+        }
+    }
+
+    // Whether to auto-hide password-like strings (high-entropy text)
+    @Published var autoHidePasswordLikeStrings: Bool {
+        didSet {
+            defaults.set(autoHidePasswordLikeStrings, forKey: Keys.autoHidePasswordLikeStrings)
+            // Post notification when setting is turned ON to apply to existing items
+            if autoHidePasswordLikeStrings {
+                NotificationCenter.default.post(name: .passwordLikeSettingEnabled, object: nil)
+            }
+        }
+    }
+
     private init() {
         // Load saved preferences or set defaults
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
@@ -141,6 +165,12 @@ class UserPreferencesManager: ObservableObject {
 
         // Keyboard shortcuts - enabled by default
         self.shortcutsEnabled = defaults.object(forKey: Keys.shortcutsEnabled) as? Bool ?? true
+
+        // Auto-detect sensitive data - enabled by default
+        self.autoDetectSensitiveData = defaults.object(forKey: Keys.autoDetectSensitiveData) as? Bool ?? true
+
+        // Auto-hide password-like strings - disabled by default (can have false positives)
+        self.autoHidePasswordLikeStrings = defaults.object(forKey: Keys.autoHidePasswordLikeStrings) as? Bool ?? false
     }
     
     func resetToDefaults() {
@@ -153,5 +183,14 @@ class UserPreferencesManager: ObservableObject {
         maxStorageSize = 1000
         persistenceDays = 60
         shortcutsEnabled = true
+        autoDetectSensitiveData = true
+        autoHidePasswordLikeStrings = false
     }
+}
+
+// MARK: - Notification Names
+
+extension Notification.Name {
+    static let autoSensitiveSettingEnabled = Notification.Name("autoSensitiveSettingEnabled")
+    static let passwordLikeSettingEnabled = Notification.Name("passwordLikeSettingEnabled")
 }

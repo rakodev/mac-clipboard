@@ -105,6 +105,31 @@ struct SettingsView: View {
 
                     Divider()
 
+                    // Privacy Settings
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Privacy")
+                            .font(.headline)
+
+                        Toggle("Auto-hide sensitive content", isOn: $preferences.autoDetectSensitiveData)
+
+                        Text("Automatically detect and hide API keys, tokens, and other sensitive data with known formats.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Toggle("Auto-hide password-like strings", isOn: $preferences.autoHidePasswordLikeStrings)
+
+                        Text("Hide text that looks like a password (8-64 chars with mixed case, numbers, and symbols). May have false positives.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        Text("Note: Auto-detection may not catch all sensitive data or could flag non-sensitive content. You can manually toggle items as sensitive (⌘ H).")
+                            .font(.caption)
+                            .foregroundColor(.orange)
+                            .padding(.top, 4)
+                    }
+
+                    Divider()
+
                     // Shortcuts Settings
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Shortcuts")

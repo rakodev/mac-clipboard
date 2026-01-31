@@ -1,6 +1,119 @@
 import Foundation
 import AppKit
 
+// MARK: - Sensitive Content Detection
+
+struct SensitiveContentDetector {
+    // Pasteboard types that indicate sensitive content (from password managers, etc.)
+    private static let sensitivePasteboardTypes: Set<String> = [
+        "org.nspasteboard.ConcealedType",
+        "org.nspasteboard.TransientType"
+    ]
+
+    // Maximum text size for pattern matching (100KB)
+    private static let maxPatternMatchSize = 100 * 1024
+
+    // Regex patterns for detecting sensitive content
+    private static let sensitivePatterns: [(pattern: String, description: String)] = [
+        // OpenAI/Stripe API keys
+        ("sk-[a-zA-Z0-9]{20,}", "API key"),
+        // AWS Access Key ID
+        ("AKIA[0-9A-Z]{16}", "AWS Access Key"),
+        // JWT tokens
+        ("eyJ[A-Za-z0-9-_]+\\.[A-Za-z0-9-_]+\\.[A-Za-z0-9-_]*", "JWT token"),
+        // Private keys
+        ("-----BEGIN[A-Z ]*PRIVATE KEY-----", "Private key"),
+        // GitHub tokens
+        ("ghp_[A-Za-z0-9]{36,}", "GitHub PAT"),
+        ("gho_[A-Za-z0-9]{36,}", "GitHub OAuth token"),
+        ("ghs_[A-Za-z0-9]{36,}", "GitHub server token"),
+        ("github_pat_[A-Za-z0-9_]{22,}", "GitHub fine-grained PAT"),
+        // Generic secrets with assignment
+        ("(?i)(password|passwd|secret|api_?key|auth_?token|access_?token)\\s*[=:]\\s*['\"]?[A-Za-z0-9+/=_-]{8,}['\"]?", "Generic secret"),
+        // Database connection strings with credentials
+        ("(?i)(mysql|postgres|postgresql|mongodb|redis)://[^:]+:[^@]+@", "Database connection string"),
+        // Slack tokens
+        ("xox[baprs]-[0-9A-Za-z-]+", "Slack token"),
+        // Google API key
+        ("AIza[0-9A-Za-z-_]{35}", "Google API key"),
+        // Heroku API key
+        ("[hH][eE][rR][oO][kK][uU].{0,30}[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}", "Heroku API key")
+    ]
+
+    /// Check if pasteboard contains sensitive type indicators
+    static func hasSensitivePasteboardType(_ pasteboard: NSPasteboard) -> Bool {
+        guard let types = pasteboard.types else { return false }
+        let typeStrings = Set(types.map { $0.rawValue })
+        return !typeStrings.isDisjoint(with: sensitivePasteboardTypes)
+    }
+
+    /// Check if text content matches any sensitive patterns
+    static func matchesSensitivePattern(_ text: String) -> Bool {
+        // Skip pattern matching for very large text
+        guard text.utf8.count <= maxPatternMatchSize else { return false }
+
+        for (pattern, _) in sensitivePatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) != nil {
+                Logging.debug("🔐 Detected sensitive pattern in clipboard content")
+                return true
+            }
+        }
+        return false
+    }
+
+    /// Comprehensive check for sensitive content
+    static func isSensitive(pasteboard: NSPasteboard, text: String?) -> Bool {
+        // Check pasteboard types first (instant)
+        if hasSensitivePasteboardType(pasteboard) {
+            Logging.debug("🔐 Detected sensitive pasteboard type")
+            return true
+        }
+
+        // Check text patterns if text is available
+        if let text = text, matchesSensitivePattern(text) {
+            return true
+        }
+
+        return false
+    }
+
+    /// Check if text looks like a password (high entropy string)
+    /// Criteria: 8-64 chars, no spaces, contains at least 3 of: uppercase, lowercase, digit, special char
+    static func looksLikePassword(_ text: String) -> Bool {
+        // Length check
+        guard text.count >= 8 && text.count <= 64 else { return false }
+
+        // No spaces allowed
+        guard !text.contains(" ") else { return false }
+
+        // No newlines (multi-line text is not a password)
+        guard !text.contains(where: { $0.isNewline }) else { return false }
+
+        // Count character types present
+        var hasUppercase = false
+        var hasLowercase = false
+        var hasDigit = false
+        var hasSpecial = false
+
+        for char in text {
+            if char.isUppercase { hasUppercase = true }
+            else if char.isLowercase { hasLowercase = true }
+            else if char.isNumber { hasDigit = true }
+            else if !char.isLetter && !char.isNumber { hasSpecial = true }
+        }
+
+        let typeCount = [hasUppercase, hasLowercase, hasDigit, hasSpecial].filter { $0 }.count
+
+        if typeCount >= 3 {
+            Logging.debug("🔑 Detected password-like string")
+            return true
+        }
+
+        return false
+    }
+}
+
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
     private var changeCount: Int = 0
@@ -26,6 +139,22 @@ class ClipboardMonitor: ObservableObject {
             self,
             selector: #selector(preferencesChanged),
             name: UserDefaults.didChangeNotification,
+            object: nil
+        )
+
+        // Listen for auto-sensitive setting being enabled
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(autoSensitiveSettingEnabled),
+            name: .autoSensitiveSettingEnabled,
+            object: nil
+        )
+
+        // Listen for password-like setting being enabled
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(passwordLikeSettingEnabled),
+            name: .passwordLikeSettingEnabled,
             object: nil
         )
     }
@@ -119,7 +248,10 @@ class ClipboardMonitor: ObservableObject {
     
     private func getClipboardContent() -> ClipboardItem? {
         let pasteboard = NSPasteboard.general
-        
+
+        // Check pasteboard types for sensitive indicators first (instant check)
+        let hasSensitivePasteboardType = SensitiveContentDetector.hasSensitivePasteboardType(pasteboard)
+
         // Check for text content first
         if let string = pasteboard.string(forType: .string), !string.isEmpty {
             // Skip extremely large text to prevent memory issues (max 1MB)
@@ -129,14 +261,27 @@ class ClipboardMonitor: ObservableObject {
                 return nil
             }
 
+            // Check for sensitive content (API keys, tokens, etc.)
+            let isAutoSensitive = hasSensitivePasteboardType || SensitiveContentDetector.matchesSensitivePattern(string)
+
+            // Check for password-like strings
+            let isPasswordLike = SensitiveContentDetector.looksLikePassword(string)
+
+            // Determine if should be hidden based on user preferences
+            let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
+                              (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+
             return ClipboardItem(
                 id: UUID(),
                 content: string,
                 type: .text,
-                timestamp: Date()
+                timestamp: Date(),
+                isSensitive: isSensitive,
+                isAutoSensitive: isAutoSensitive,
+                isPasswordLike: isPasswordLike
             )
         }
-        
+
         // Check for image content
         if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
             // Skip very large images to prevent memory/storage bloat (max 10MB)
@@ -146,26 +291,39 @@ class ClipboardMonitor: ObservableObject {
                 return nil
             }
 
+            // Images can also be sensitive (e.g., screenshot of password manager)
+            let isAutoSensitive = hasSensitivePasteboardType
+            let isSensitive = isAutoSensitive && userPreferences.autoDetectSensitiveData
+
             return ClipboardItem(
                 id: UUID(),
                 content: image,
                 type: .image,
-                timestamp: Date()
+                timestamp: Date(),
+                isSensitive: isSensitive,
+                isAutoSensitive: isAutoSensitive
             )
         }
-        
+
         // Check for file URLs
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: nil) as? [URL], !urls.isEmpty {
             let fileNames = urls.map { $0.lastPathComponent }.joined(separator: ", ")
+
+            // Files can also be sensitive based on pasteboard type
+            let isAutoSensitive = hasSensitivePasteboardType
+            let isSensitive = isAutoSensitive && userPreferences.autoDetectSensitiveData
+
             return ClipboardItem(
                 id: UUID(),
                 content: urls,
                 type: .file,
                 timestamp: Date(),
-                displayText: fileNames
+                displayText: fileNames,
+                isSensitive: isSensitive,
+                isAutoSensitive: isAutoSensitive
             )
         }
-        
+
         return nil
     }
     
@@ -191,9 +349,11 @@ class ClipboardMonitor: ObservableObject {
                 }
 
                 let existingItem = self.clipboardHistory[actualIndex]
-                // Preserve favorite status, sensitive flag, and note from existing item
+                // Preserve favorite status, sensitive flag, auto-sensitive flag, password-like flag, and note from existing item
                 itemToInsert.isFavorite = existingItem.isFavorite
                 itemToInsert.isSensitive = existingItem.isSensitive
+                itemToInsert.isAutoSensitive = existingItem.isAutoSensitive || itemToInsert.isAutoSensitive
+                itemToInsert.isPasswordLike = existingItem.isPasswordLike || itemToInsert.isPasswordLike
                 itemToInsert.note = existingItem.note
 
                 // Remove the old item from persistence
@@ -242,12 +402,58 @@ class ClipboardMonitor: ObservableObject {
     @objc private func preferencesChanged() {
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            
+
             // Trim history if new limit is smaller than current count
             let currentLimit = self.userPreferences.maxClipboardItems
             if self.clipboardHistory.count > currentLimit {
                 let itemsToRemove = self.clipboardHistory.count - currentLimit
                 self.clipboardHistory.removeLast(itemsToRemove)
+            }
+        }
+    }
+
+    @objc private func autoSensitiveSettingEnabled() {
+        // When auto-detect setting is turned ON, apply isSensitive to all isAutoSensitive items
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            var updatedIds: [UUID] = []
+            for i in 0..<self.clipboardHistory.count {
+                if self.clipboardHistory[i].isAutoSensitive && !self.clipboardHistory[i].isSensitive {
+                    self.clipboardHistory[i].isSensitive = true
+                    updatedIds.append(self.clipboardHistory[i].id)
+                }
+            }
+
+            // Update persistence
+            if !updatedIds.isEmpty {
+                DispatchQueue.global(qos: .utility).async {
+                    self.persistenceManager.applyAutoSensitiveFlag()
+                }
+                Logging.debug("🔐 Applied sensitive flag to \(updatedIds.count) auto-detected items")
+            }
+        }
+    }
+
+    @objc private func passwordLikeSettingEnabled() {
+        // When password-like setting is turned ON, apply isSensitive to all isPasswordLike items
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+
+            var updatedIds: [UUID] = []
+            for i in 0..<self.clipboardHistory.count {
+                if self.clipboardHistory[i].isPasswordLike && !self.clipboardHistory[i].isSensitive {
+                    self.clipboardHistory[i].isSensitive = true
+                    updatedIds.append(self.clipboardHistory[i].id)
+                }
+            }
+
+            // Update persistence
+            if !updatedIds.isEmpty {
+                DispatchQueue.global(qos: .utility).async {
+                    self.persistenceManager.applyPasswordLikeFlag()
+                }
+                Logging.debug("🔑 Applied sensitive flag to \(updatedIds.count) password-like items")
             }
         }
     }
@@ -399,10 +605,12 @@ struct ClipboardItem: Identifiable, Equatable {
     let displayText: String?
     var isFavorite: Bool
     var isSensitive: Bool
+    var isAutoSensitive: Bool  // True if auto-detected as sensitive (API keys, tokens, etc.)
+    var isPasswordLike: Bool   // True if detected as password-like string
     var note: String?
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -410,6 +618,8 @@ struct ClipboardItem: Identifiable, Equatable {
         self.displayText = displayText
         self.isFavorite = isFavorite
         self.isSensitive = isSensitive
+        self.isAutoSensitive = isAutoSensitive
+        self.isPasswordLike = isPasswordLike
         self.note = note
         self.isImageLoaded = (type != .image) || isImageLoaded  // Non-images are always "loaded"
     }

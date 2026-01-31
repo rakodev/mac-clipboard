@@ -59,6 +59,8 @@ class PersistenceManager: ObservableObject {
         persistedItem.displayText = item.displayText
         persistedItem.isFavorite = item.isFavorite
         persistedItem.isSensitive = item.isSensitive
+        persistedItem.isAutoSensitive = item.isAutoSensitive
+        persistedItem.isPasswordLike = item.isPasswordLike
         persistedItem.note = item.note
         
         switch item.type {
@@ -162,6 +164,8 @@ class PersistenceManager: ObservableObject {
             displayText: persistedItem.displayText,
             isFavorite: persistedItem.isFavorite,
             isSensitive: persistedItem.isSensitive,
+            isAutoSensitive: persistedItem.isAutoSensitive,
+            isPasswordLike: persistedItem.isPasswordLike,
             note: persistedItem.note,
             isImageLoaded: isImageLoaded
         )
@@ -239,6 +243,63 @@ class PersistenceManager: ObservableObject {
             print("Toggle sensitive error: \(error)")
         }
         return false
+    }
+
+    func setSensitive(itemId: UUID, value: Bool) {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+        do {
+            let items = try context.fetch(request)
+            if let item = items.first {
+                item.isSensitive = value
+                item.updatedAt = Date()
+                saveContext()
+                Logging.debug("Set sensitive for item \(itemId): \(value)")
+            }
+        } catch {
+            print("Set sensitive error: \(error)")
+        }
+    }
+
+    /// Apply isSensitive=true to all items with isAutoSensitive=true
+    func applyAutoSensitiveFlag() {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO")
+
+        do {
+            let items = try context.fetch(request)
+            for item in items {
+                item.isSensitive = true
+                item.updatedAt = Date()
+            }
+            if !items.isEmpty {
+                saveContext()
+                Logging.debug("💾 Applied sensitive flag to \(items.count) auto-detected items")
+            }
+        } catch {
+            print("Apply auto-sensitive flag error: \(error)")
+        }
+    }
+
+    /// Apply isSensitive=true to all items with isPasswordLike=true
+    func applyPasswordLikeFlag() {
+        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+        request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO")
+
+        do {
+            let items = try context.fetch(request)
+            for item in items {
+                item.isSensitive = true
+                item.updatedAt = Date()
+            }
+            if !items.isEmpty {
+                saveContext()
+                Logging.debug("💾 Applied sensitive flag to \(items.count) password-like items")
+            }
+        } catch {
+            print("Apply password-like flag error: \(error)")
+        }
     }
 
     // MARK: - Storage Management

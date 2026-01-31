@@ -73,8 +73,8 @@ struct ContentView: View {
         
         // Calculate items to show based on available content
         let itemCount = filteredItems.count
-        let minItemsToShow: Int = min(itemCount, 5)  // Show at least 5 items if available
-        let maxItemsToShow = min(itemCount, 12)     // Reduced max items for horizontal layout
+        let minItemsToShow: Int = min(itemCount, 6)  // Show at least 6 items if available
+        let maxItemsToShow = min(itemCount, 16)     // Max items for horizontal layout
         let itemsToShow = max(minItemsToShow, min(maxItemsToShow, itemCount))
         
         let listHeight = CGFloat(itemsToShow) * itemHeight
@@ -87,7 +87,7 @@ struct ContentView: View {
         
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
-        let minimumHeight: CGFloat = 250  // Enough space for header + search + list + preview
+        let minimumHeight: CGFloat = 325  // Enough space for header + search + list + preview
         
         // Get screen height and limit to reasonable size
         let screenHeight = NSScreen.main?.visibleFrame.height ?? 1000
@@ -115,10 +115,10 @@ struct ContentView: View {
                     // Horizontal layout with list and preview side by side
                     HStack(spacing: 0) {
                         clipboardListView
-                            .frame(width: 200)
+                            .frame(width: 260)
                         Divider()
                         compactPreviewView(for: selectedItem)
-                            .frame(width: 199)
+                            .frame(width: 259)
                     }
                 } else {
                     // Full width list when no preview
@@ -126,7 +126,7 @@ struct ContentView: View {
                 }
             }
         }
-        .frame(width: 400, height: dynamicHeight, alignment: .top)
+        .frame(width: 520, height: dynamicHeight, alignment: .top)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             // Initialize time cache when popover opens
@@ -538,6 +538,22 @@ struct ContentView: View {
 
                 Spacer()
 
+                // Toggle favorite button
+                Button(action: {
+                    clipboardMonitor.toggleFavorite(item)
+                    // Update selectedItem immediately to keep preview in sync
+                    if var updatedItem = selectedItem {
+                        updatedItem.isFavorite.toggle()
+                        selectedItem = updatedItem
+                    }
+                }) {
+                    Image(systemName: item.isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 12))
+                        .foregroundColor(item.isFavorite ? .yellow : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(item.isFavorite ? "Remove from favorites (⌘D)" : "Add to favorites (⌘D)")
+
                 // Toggle sensitive button
                 Button(action: {
                     clipboardMonitor.toggleSensitive(item)
@@ -888,7 +904,7 @@ struct ContentView: View {
     
     private func updatePopoverSize() {
         DispatchQueue.main.async {
-            self.menuBarController.updatePopoverSize(to: NSSize(width: 400, height: self.dynamicHeight))
+            self.menuBarController.updatePopoverSize(to: NSSize(width: 520, height: self.dynamicHeight))
         }
     }
     
@@ -1087,6 +1103,11 @@ struct ClipboardItemRow: View {
 
     private var displayText: String {
         if shouldMask {
+            // Show note as hint for hidden items (first 40 chars)
+            if let note = item.note, !note.isEmpty {
+                let hint = String(note.prefix(40))
+                return "••• \(hint)"
+            }
             return "••••••••••••"
         }
         return item.previewText
@@ -1141,9 +1162,24 @@ struct ClipboardItemRow: View {
                         Image(systemName: "note.text")
                             .font(.system(size: 8))
                     }
-                    if item.isSensitive {
-                        Image(systemName: "eye.slash")
-                            .font(.system(size: 8))
+                    // Show Auto/PWD badges only when item is hidden
+                    if item.isAutoSensitive && item.isSensitive {
+                        Text("Auto")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(.orange)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.orange.opacity(0.15))
+                            .cornerRadius(2)
+                    }
+                    if item.isPasswordLike && item.isSensitive {
+                        Text("PWD")
+                            .font(.system(size: 8, weight: .medium))
+                            .foregroundColor(.purple)
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(Color.purple.opacity(0.15))
+                            .cornerRadius(2)
                     }
                 }
                     .font(.caption2)
@@ -1151,17 +1187,6 @@ struct ClipboardItemRow: View {
             }
 
             Spacer()
-
-            // Reveal button for sensitive items
-            if item.isSensitive {
-                Button(action: onToggleReveal) {
-                    Image(systemName: isRevealed ? "eye.fill" : "eye.slash.fill")
-                        .font(.system(size: 10))
-                        .foregroundColor(isRevealed ? .blue : .orange)
-                }
-                .buttonStyle(PlainButtonStyle())
-                .help(isRevealed ? "Hide content" : "Reveal content")
-            }
 
             // Star button (visible when favorited or selected)
             Button(action: onToggleFavorite) {
@@ -1173,16 +1198,6 @@ struct ClipboardItemRow: View {
             .opacity(item.isFavorite || isSelected ? 1 : 0)
             .animation(.easeInOut(duration: 0.2), value: isSelected)
             .animation(.easeInOut(duration: 0.2), value: item.isFavorite)
-
-            // Copy button (only visible on hover)
-            Button(action: onCopy) {
-                Image(systemName: "doc.on.doc")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(PlainButtonStyle())
-            .opacity(isSelected ? 1 : 0)
-            .animation(.easeInOut(duration: 0.2), value: isSelected)
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)

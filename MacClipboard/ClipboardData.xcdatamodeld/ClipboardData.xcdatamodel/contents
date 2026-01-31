@@ -8,6 +8,8 @@
         <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="imageData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="isFavorite" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="isAutoSensitive" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
+        <attribute name="isPasswordLike" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="isSensitive" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="note" optional="YES" attributeType="String"/>
         <attribute name="textContent" optional="YES" attributeType="String"/>
