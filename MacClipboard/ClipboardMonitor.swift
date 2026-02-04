@@ -78,6 +78,43 @@ struct SensitiveContentDetector {
         return false
     }
 
+    // Patterns that should NOT be considered passwords (common false positives)
+    private static let nonPasswordPatterns: [(pattern: String, description: String)] = [
+        // URLs
+        ("^(https?|ftp|file|ssh|git)://", "URL"),
+        // Email addresses
+        ("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", "Email"),
+        // File paths (Unix and Windows)
+        ("^[~/]|^[A-Za-z]:\\\\", "File path"),
+        // UUIDs (standard format)
+        ("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$", "UUID"),
+        // IPv4 addresses (with optional port)
+        ("^\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}(:\\d+)?$", "IPv4"),
+        // IPv6 addresses
+        ("^([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}$", "IPv6"),
+        // MAC addresses
+        ("^([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}$", "MAC address"),
+        // ISO 8601 dates and timestamps
+        ("^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2})?", "ISO date"),
+        // Semantic versions
+        ("^v?\\d+\\.\\d+\\.\\d+(-[A-Za-z0-9.]+)?(\\+[A-Za-z0-9.]+)?$", "Version"),
+        // Domain names (with subdomains)
+        ("^([A-Za-z0-9-]+\\.)+[A-Za-z]{2,}$", "Domain"),
+        // Phone numbers (various formats)
+        ("^\\+?[0-9]{1,4}[-. ]?\\(?[0-9]{1,4}\\)?[-. ]?[0-9]{1,4}[-. ]?[0-9]{1,9}$", "Phone number"),
+    ]
+
+    /// Check if text matches any non-password pattern (URLs, emails, etc.)
+    private static func matchesNonPasswordPattern(_ text: String) -> Bool {
+        for (pattern, _) in nonPasswordPatterns {
+            if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+               regex.firstMatch(in: text, options: [], range: NSRange(text.startIndex..., in: text)) != nil {
+                return true
+            }
+        }
+        return false
+    }
+
     /// Check if text looks like a password (high entropy string)
     /// Criteria: 8-64 chars, no spaces, contains at least 3 of: uppercase, lowercase, digit, special char
     static func looksLikePassword(_ text: String) -> Bool {
@@ -89,6 +126,11 @@ struct SensitiveContentDetector {
 
         // No newlines (multi-line text is not a password)
         guard !text.contains(where: { $0.isNewline }) else { return false }
+
+        // Exclude common non-password patterns (URLs, emails, file paths, etc.)
+        if matchesNonPasswordPattern(text) {
+            return false
+        }
 
         // Count character types present
         var hasUppercase = false

@@ -123,6 +123,42 @@ Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
 * **Images**: `NSImage` pasteboard objects
 * **Files**: `NSURL` pasteboard objects
 
+### Sensitive Content Detection
+
+The app can auto-detect sensitive content using two methods:
+
+**1. Pasteboard Type Detection** - Instant detection via special pasteboard types set by password managers:
+* `org.nspasteboard.ConcealedType`
+* `org.nspasteboard.TransientType`
+
+**2. Pattern Matching** - Regex patterns for known secret formats:
+* API keys (OpenAI, Stripe, AWS, Google, GitHub, Slack, Heroku)
+* JWT tokens
+* Private keys (PEM format)
+* Database connection strings with credentials
+* Generic secrets with `password=`, `api_key=`, etc.
+
+**3. Password-like String Detection** - Heuristic detection for strings that look like passwords:
+* 8-64 characters, no spaces/newlines
+* Contains 3+ character types (uppercase, lowercase, digit, special)
+
+The password detection excludes common false positives:
+
+| Pattern | Examples |
+|---------|----------|
+| URLs | `https://example.com/path` |
+| Emails | `user@example.com` |
+| File paths | `/Users/max/file.txt`, `C:\Users\` |
+| UUIDs | `550e8400-e29b-41d4-a716-446655440000` |
+| IP addresses | `192.168.1.1:8080`, `fe80::1` |
+| MAC addresses | `00:1A:2B:3C:4D:5E` |
+| ISO dates | `2024-01-15T10:30:00` |
+| Versions | `v1.2.3-beta` |
+| Domains | `sub.example.com` |
+| Phone numbers | `+1-555-123-4567` |
+
+See `SensitiveContentDetector` in `ClipboardMonitor.swift` for implementation details.
+
 ### Global Hotkey
 
 Implemented using Carbon framework's `RegisterEventHotKey` for system-wide `Cmd+Shift+V` support.
