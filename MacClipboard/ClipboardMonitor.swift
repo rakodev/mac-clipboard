@@ -82,8 +82,8 @@ struct SensitiveContentDetector {
     private static let nonPasswordPatterns: [(pattern: String, description: String)] = [
         // URLs
         ("^(https?|ftp|file|ssh|git)://", "URL"),
-        // Email addresses
-        ("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$", "Email"),
+        // Email addresses (loose pattern - anything with @ and a dot after)
+        ("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z0-9]{2,}", "Email"),
         // File paths (Unix and Windows)
         ("^[~/]|^[A-Za-z]:\\\\", "File path"),
         // UUIDs (standard format)
@@ -116,7 +116,7 @@ struct SensitiveContentDetector {
     }
 
     /// Check if text looks like a password (high entropy string)
-    /// Criteria: 8-64 chars, no spaces, contains at least 3 of: uppercase, lowercase, digit, special char
+    /// Criteria: 8-64 chars, no spaces, contains all of: uppercase, lowercase, digit, special char
     static func looksLikePassword(_ text: String) -> Bool {
         // Length check
         guard text.count >= 8 && text.count <= 64 else { return false }
@@ -147,7 +147,7 @@ struct SensitiveContentDetector {
 
         let typeCount = [hasUppercase, hasLowercase, hasDigit, hasSpecial].filter { $0 }.count
 
-        if typeCount >= 3 {
+        if typeCount >= 4 {
             Logging.debug("🔑 Detected password-like string")
             return true
         }
