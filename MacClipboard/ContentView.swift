@@ -32,6 +32,8 @@ struct ContentView: View {
     @State private var revealedSensitiveIds: Set<UUID> = []  // Temporarily revealed sensitive items
     @State private var loadingImageIds: Set<UUID> = []  // Images currently being loaded from disk
     @State private var loadedImages: [UUID: NSImage] = [:]  // Cache for lazy-loaded images
+    @State private var showShortcuts: Bool = false
+    @State private var isScrolledDown: Bool = false
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
@@ -135,7 +137,9 @@ struct ContentView: View {
             searchBarView
             filterPickerView
 
-            if filteredItems.isEmpty {
+            if showShortcuts {
+                shortcutsView
+            } else if filteredItems.isEmpty {
                 emptyStateView
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -208,13 +212,23 @@ struct ContentView: View {
             updatePopoverSize()
         }
         .onChange(of: computedFilteredItems) { newItems in
-            // Reset selection when filter changes
-            selectedIndex = 0
-            updateSelectedItem()
+            // Try to preserve the currently selected item
+            if let currentItem = selectedItem,
+               let newIndex = newItems.firstIndex(where: { $0.id == currentItem.id }) {
+                selectedIndex = newIndex
+                // Update selectedItem with fresh data (e.g., toggled isSensitive/isFavorite)
+                selectedItem = newItems[newIndex]
+            } else {
+                // Item no longer in filtered list (e.g., un-favorited while on Favorites tab)
+                selectedIndex = 0
+                updateSelectedItem()
+            }
             // Update size when items change
             updatePopoverSize()
         }
         .onChange(of: selectedFilter) { _ in
+            // Dismiss shortcuts view when switching tabs
+            showShortcuts = false
             // Recompute when filter tab changes
             recomputeFilteredItems()
         }
@@ -325,7 +339,16 @@ struct ContentView: View {
                 .foregroundColor(.primary)
             
             Spacer()
-            
+
+            Button(action: {
+                showShortcuts.toggle()
+            }) {
+                Image(systemName: "keyboard")
+                    .foregroundColor(showShortcuts ? .accentColor : .secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .help("Keyboard Shortcuts (⌘/)")
+
             Button(action: {
                 menuBarController.showSettings()
             }) {
@@ -466,56 +489,145 @@ struct ContentView: View {
         }
     }
     
-    private var clipboardListView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 0) {
-                    ForEach(0..<filteredItems.count, id: \.self) { index in
-                        let item = filteredItems[index]
-                        ClipboardItemRow(
-                            item: item,
-                            index: index,
-                            isSelected: selectedIndex == index,
-                            isMultiSelected: selectedItemIds.contains(item.id),
-                            isRevealed: revealedSensitiveIds.contains(item.id),
-                            onSelect: {
-                                selectedIndex = index
-                                selectedItemIds.removeAll()  // Clear multi-selection on regular click
-                                updateSelectedItem()
-                            },
-                            onCopy: {
-                                pasteItem(item)
-                            },
-                            onToggleFavorite: {
-                                clipboardMonitor.toggleFavorite(item)
-                            },
-                            onToggleMultiSelect: {
-                                if selectedItemIds.contains(item.id) {
-                                    selectedItemIds.remove(item.id)
-                                } else {
-                                    selectedItemIds.insert(item.id)
-                                }
-                            },
-                            onToggleReveal: {
-                                if revealedSensitiveIds.contains(item.id) {
-                                    revealedSensitiveIds.remove(item.id)
-                                } else {
-                                    revealedSensitiveIds.insert(item.id)
-                                }
-                            },
-                            timeAgoText: timeAgoCache[item.id] ?? "unknown"
-                        )
-                        .id("filtered-\(item.id)-\(index)")
-                    }
+    // MARK: - Shortcuts Reference View
+
+    private var shortcutsView: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                shortcutsSection("Global", shortcuts: [
+                    ("⌘⇧V", "Open clipboard"),
+                ])
+
+                shortcutsSection("Navigation", shortcuts: [
+                    ("↑ / ↓", "Navigate items"),
+                    ("⌘↑", "Scroll to top"),
+                    ("← / →", "Switch filter tabs"),
+                    ("0–9", "Quick paste by position"),
+                    ("Tab", "Focus search"),
+                ])
+
+                shortcutsSection("Actions", shortcuts: [
+                    ("Enter", "Paste selected item"),
+                    ("⌘D", "Toggle favorite"),
+                    ("⌘H", "Toggle sensitive"),
+                    ("⌘V", "Reveal sensitive item"),
+                    ("⌘N", "Focus note field"),
+                    ("⌘Z", "Full-size image preview"),
+                    ("⌘⌫", "Delete item(s)"),
+                    ("⌘F", "Toggle favorites filter"),
+                    ("⌘/", "Show shortcuts"),
+                    ("Esc", "Close / unfocus"),
+                ])
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    private func shortcutsSection(_ title: String, shortcuts: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+
+            ForEach(shortcuts, id: \.0) { key, action in
+                HStack {
+                    Text(key)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.accentColor)
+                        .frame(width: 100, alignment: .trailing)
+
+                    Text(action)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+
+                    Spacer()
                 }
             }
-            .frame(maxWidth: .infinity)
-            .id("listview-\(searchText)") // Force refresh when search changes
-            .onChange(of: selectedIndex) { newIndex in
-                withAnimation(.easeInOut(duration: 0.2)) {
-                    if newIndex < filteredItems.count {
-                        proxy.scrollTo("filtered-\(filteredItems[newIndex].id)-\(newIndex)", anchor: .center)
+        }
+    }
+
+    private var clipboardListView: some View {
+        ScrollViewReader { proxy in
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(0..<filteredItems.count, id: \.self) { index in
+                            let item = filteredItems[index]
+                            ClipboardItemRow(
+                                item: item,
+                                index: index,
+                                isSelected: selectedIndex == index,
+                                isMultiSelected: selectedItemIds.contains(item.id),
+                                isRevealed: revealedSensitiveIds.contains(item.id),
+                                onSelect: {
+                                    selectedIndex = index
+                                    selectedItemIds.removeAll()  // Clear multi-selection on regular click
+                                    updateSelectedItem()
+                                },
+                                onCopy: {
+                                    pasteItem(item)
+                                },
+                                onToggleFavorite: {
+                                    clipboardMonitor.toggleFavorite(item)
+                                },
+                                onToggleMultiSelect: {
+                                    if selectedItemIds.contains(item.id) {
+                                        selectedItemIds.remove(item.id)
+                                    } else {
+                                        selectedItemIds.insert(item.id)
+                                    }
+                                },
+                                onToggleReveal: {
+                                    if revealedSensitiveIds.contains(item.id) {
+                                        revealedSensitiveIds.remove(item.id)
+                                    } else {
+                                        revealedSensitiveIds.insert(item.id)
+                                    }
+                                },
+                                timeAgoText: timeAgoCache[item.id] ?? "unknown"
+                            )
+                            .id("filtered-\(item.id)-\(index)-\(revealedSensitiveIds.contains(item.id))")
+                            .onAppear {
+                                if index == 0 { isScrolledDown = false }
+                            }
+                            .onDisappear {
+                                if index == 0 { isScrolledDown = true }
+                            }
+                        }
                     }
+                }
+                .frame(maxWidth: .infinity)
+                .id("listview-\(searchText)") // Force refresh when search changes
+                .onChange(of: selectedIndex) { newIndex in
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        if newIndex < filteredItems.count {
+                            proxy.scrollTo("filtered-\(filteredItems[newIndex].id)-\(newIndex)-\(revealedSensitiveIds.contains(filteredItems[newIndex].id))", anchor: .center)
+                        }
+                    }
+                }
+
+                if isScrolledDown {
+                    Button(action: {
+                        selectedIndex = 0
+                        updateSelectedItem()
+                        if !filteredItems.isEmpty {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                proxy.scrollTo("filtered-\(filteredItems[0].id)-0-\(revealedSensitiveIds.contains(filteredItems[0].id))", anchor: .top)
+                            }
+                        }
+                    }) {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundColor(.accentColor)
+                            .background(Circle().fill(Color(NSColor.windowBackgroundColor)).padding(2))
+                            .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                    }
+                    .buttonStyle(PlainButtonStyle())
+                    .padding(6)
+                    .help("Scroll to top (⌘↑)")
                 }
             }
         }
@@ -609,6 +721,9 @@ struct ContentView: View {
                     // Update selectedItem immediately to keep preview in sync
                     if var updatedItem = selectedItem {
                         updatedItem.isSensitive.toggle()
+                        if updatedItem.isAutoSensitive || updatedItem.isPasswordLike {
+                            updatedItem.isManuallyUnsensitive = !updatedItem.isSensitive
+                        }
                         selectedItem = updatedItem
                     }
                 }) {
@@ -975,6 +1090,11 @@ struct ContentView: View {
     private func handleKeyEvent(_ keyEvent: NSEvent) -> Bool {
         switch keyEvent.keyCode {
         case 126: // Up arrow
+            if keyEvent.modifierFlags.contains(.command) {
+                selectedIndex = 0
+                updateSelectedItem()
+                return true
+            }
             navigateUp()
             return true
         case 125: // Down arrow
@@ -1003,7 +1123,16 @@ struct ContentView: View {
             }
             pasteSelectedItem()
             return true
+        case 44: // / key (slash)
+            if keyEvent.modifierFlags.contains(.command) {
+                showShortcuts.toggle()
+                return true
+            }
         case 53: // Escape
+            if showShortcuts {
+                showShortcuts = false
+                return true
+            }
             if isNoteFocused {
                 if let item = selectedItem { saveNote(for: item) }
                 isNoteFocused = false
@@ -1039,6 +1168,9 @@ struct ContentView: View {
                 if var item = selectedItem {
                     clipboardMonitor.toggleSensitive(item)
                     item.isSensitive.toggle()
+                    if item.isAutoSensitive || item.isPasswordLike {
+                        item.isManuallyUnsensitive = !item.isSensitive
+                    }
                     selectedItem = item
                     return true
                 }
@@ -1184,7 +1316,7 @@ struct ClipboardItemRow: View {
                         RoundedRectangle(cornerRadius: 3)
                             .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
                     )
-            } else if item.isSensitive {
+            } else if shouldMask {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 12))
                     .foregroundColor(.orange)
@@ -1209,8 +1341,8 @@ struct ClipboardItemRow: View {
                         Image(systemName: "note.text")
                             .font(.system(size: 8))
                     }
-                    // Show Auto/PWD badges only when item is hidden
-                    if item.isAutoSensitive && item.isSensitive {
+                    // Show Auto/PWD badges only when item is masked
+                    if item.isAutoSensitive && shouldMask {
                         Text("Auto")
                             .font(.system(size: 8, weight: .medium))
                             .foregroundColor(.orange)
@@ -1219,7 +1351,7 @@ struct ClipboardItemRow: View {
                             .background(Color.orange.opacity(0.15))
                             .cornerRadius(2)
                     }
-                    if item.isPasswordLike && item.isSensitive {
+                    if item.isPasswordLike && shouldMask {
                         Text("PWD")
                             .font(.system(size: 8, weight: .medium))
                             .foregroundColor(.purple)

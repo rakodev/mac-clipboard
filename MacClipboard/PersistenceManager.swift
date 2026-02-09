@@ -61,6 +61,7 @@ class PersistenceManager: ObservableObject {
         persistedItem.isSensitive = item.isSensitive
         persistedItem.isAutoSensitive = item.isAutoSensitive
         persistedItem.isPasswordLike = item.isPasswordLike
+        persistedItem.isManuallyUnsensitive = item.isManuallyUnsensitive
         persistedItem.note = item.note
         
         switch item.type {
@@ -166,6 +167,7 @@ class PersistenceManager: ObservableObject {
             isSensitive: persistedItem.isSensitive,
             isAutoSensitive: persistedItem.isAutoSensitive,
             isPasswordLike: persistedItem.isPasswordLike,
+            isManuallyUnsensitive: persistedItem.isManuallyUnsensitive,
             note: persistedItem.note,
             isImageLoaded: isImageLoaded
         )
@@ -226,7 +228,7 @@ class PersistenceManager: ObservableObject {
         }
     }
 
-    func toggleSensitive(itemId: UUID) -> Bool {
+    func toggleSensitive(itemId: UUID, isManuallyUnsensitive: Bool) -> Bool {
         let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
         request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
 
@@ -234,9 +236,10 @@ class PersistenceManager: ObservableObject {
             let items = try context.fetch(request)
             if let item = items.first {
                 item.isSensitive = !item.isSensitive
+                item.isManuallyUnsensitive = isManuallyUnsensitive
                 item.updatedAt = Date()
                 saveContext()
-                Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive)")
+                Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive), manuallyUnsensitive: \(isManuallyUnsensitive)")
                 return item.isSensitive
             }
         } catch {
@@ -262,10 +265,10 @@ class PersistenceManager: ObservableObject {
         }
     }
 
-    /// Apply isSensitive=true to all items with isAutoSensitive=true
+    /// Apply isSensitive=true to all items with isAutoSensitive=true (skip manually unsensitive)
     func applyAutoSensitiveFlag() {
         let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO")
+        request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
 
         do {
             let items = try context.fetch(request)
@@ -282,10 +285,10 @@ class PersistenceManager: ObservableObject {
         }
     }
 
-    /// Apply isSensitive=true to all items with isPasswordLike=true
+    /// Apply isSensitive=true to all items with isPasswordLike=true (skip manually unsensitive)
     func applyPasswordLikeFlag() {
         let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO")
+        request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
 
         do {
             let items = try context.fetch(request)

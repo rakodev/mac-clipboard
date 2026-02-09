@@ -141,7 +141,7 @@ The app can auto-detect sensitive content using two methods:
 
 **3. Password-like String Detection** - Heuristic detection for strings that look like passwords:
 * 8-64 characters, no spaces/newlines
-* Contains 3+ character types (uppercase, lowercase, digit, special)
+* Contains all 4 character types (uppercase, lowercase, digit, special)
 
 The password detection excludes common false positives:
 

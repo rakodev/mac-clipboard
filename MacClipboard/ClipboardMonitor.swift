@@ -391,11 +391,12 @@ class ClipboardMonitor: ObservableObject {
                 }
 
                 let existingItem = self.clipboardHistory[actualIndex]
-                // Preserve favorite status, sensitive flag, auto-sensitive flag, password-like flag, and note from existing item
+                // Preserve favorite status, sensitive flag, auto-sensitive flag, password-like flag, manual unsensitive, and note from existing item
                 itemToInsert.isFavorite = existingItem.isFavorite
                 itemToInsert.isSensitive = existingItem.isSensitive
                 itemToInsert.isAutoSensitive = existingItem.isAutoSensitive || itemToInsert.isAutoSensitive
                 itemToInsert.isPasswordLike = existingItem.isPasswordLike || itemToInsert.isPasswordLike
+                itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
                 itemToInsert.note = existingItem.note
 
                 // Remove the old item from persistence
@@ -456,12 +457,13 @@ class ClipboardMonitor: ObservableObject {
 
     @objc private func autoSensitiveSettingEnabled() {
         // When auto-detect setting is turned ON, apply isSensitive to all isAutoSensitive items
+        // Skip items the user explicitly un-marked (isManuallyUnsensitive)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             var updatedIds: [UUID] = []
             for i in 0..<self.clipboardHistory.count {
-                if self.clipboardHistory[i].isAutoSensitive && !self.clipboardHistory[i].isSensitive {
+                if self.clipboardHistory[i].isAutoSensitive && !self.clipboardHistory[i].isSensitive && !self.clipboardHistory[i].isManuallyUnsensitive {
                     self.clipboardHistory[i].isSensitive = true
                     updatedIds.append(self.clipboardHistory[i].id)
                 }
@@ -479,12 +481,13 @@ class ClipboardMonitor: ObservableObject {
 
     @objc private func passwordLikeSettingEnabled() {
         // When password-like setting is turned ON, apply isSensitive to all isPasswordLike items
+        // Skip items the user explicitly un-marked (isManuallyUnsensitive)
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
 
             var updatedIds: [UUID] = []
             for i in 0..<self.clipboardHistory.count {
-                if self.clipboardHistory[i].isPasswordLike && !self.clipboardHistory[i].isSensitive {
+                if self.clipboardHistory[i].isPasswordLike && !self.clipboardHistory[i].isSensitive && !self.clipboardHistory[i].isManuallyUnsensitive {
                     self.clipboardHistory[i].isSensitive = true
                     updatedIds.append(self.clipboardHistory[i].id)
                 }
@@ -592,12 +595,21 @@ class ClipboardMonitor: ObservableObject {
     func toggleSensitive(_ item: ClipboardItem) {
         DispatchQueue.main.async {
             if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
+                let wasAutoDetected = self.clipboardHistory[index].isAutoSensitive || self.clipboardHistory[index].isPasswordLike
+                let willBeUnsensitive = self.clipboardHistory[index].isSensitive // currently sensitive → toggling OFF
                 self.clipboardHistory[index].isSensitive.toggle()
+
+                // Mark as manually unsensitive when user un-hides an auto-detected item
+                // Clear the flag when user re-hides it
+                if wasAutoDetected {
+                    self.clipboardHistory[index].isManuallyUnsensitive = willBeUnsensitive
+                }
 
                 // Update persistence
                 let itemId = item.id
+                let manuallyUnsensitive = self.clipboardHistory[index].isManuallyUnsensitive
                 DispatchQueue.global(qos: .utility).async {
-                    _ = self.persistenceManager.toggleSensitive(itemId: itemId)
+                    _ = self.persistenceManager.toggleSensitive(itemId: itemId, isManuallyUnsensitive: manuallyUnsensitive)
                 }
             }
         }
@@ -649,10 +661,11 @@ struct ClipboardItem: Identifiable, Equatable {
     var isSensitive: Bool
     var isAutoSensitive: Bool  // True if auto-detected as sensitive (API keys, tokens, etc.)
     var isPasswordLike: Bool   // True if detected as password-like string
+    var isManuallyUnsensitive: Bool  // True if user explicitly un-marked as sensitive (prevents re-apply)
     var note: String?
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -662,6 +675,7 @@ struct ClipboardItem: Identifiable, Equatable {
         self.isSensitive = isSensitive
         self.isAutoSensitive = isAutoSensitive
         self.isPasswordLike = isPasswordLike
+        self.isManuallyUnsensitive = isManuallyUnsensitive
         self.note = note
         self.isImageLoaded = (type != .image) || isImageLoaded  // Non-images are always "loaded"
     }
@@ -760,7 +774,14 @@ struct ClipboardItem: Identifiable, Equatable {
     }
     
     static func == (lhs: ClipboardItem, rhs: ClipboardItem) -> Bool {
-        return lhs.id == rhs.id
+        return lhs.id == rhs.id &&
+               lhs.isSensitive == rhs.isSensitive &&
+               lhs.isFavorite == rhs.isFavorite &&
+               lhs.isAutoSensitive == rhs.isAutoSensitive &&
+               lhs.isPasswordLike == rhs.isPasswordLike &&
+               lhs.isManuallyUnsensitive == rhs.isManuallyUnsensitive &&
+               lhs.note == rhs.note &&
+               lhs.isImageLoaded == rhs.isImageLoaded
     }
 }
 
