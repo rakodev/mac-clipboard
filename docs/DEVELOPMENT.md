@@ -27,6 +27,7 @@ cd mac-clipboard
 make build     # Release build with DMG/ZIP
 make dev       # Fast debug build only
 make run       # Build, sign with dev cert, and run (recommended)
+make release   # Build, sign, notarize, and create GitHub release
 make clean     # Clean build artifacts
 ```
 

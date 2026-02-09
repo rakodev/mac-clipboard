@@ -1,6 +1,6 @@
 # Makefile for MacClipboard
 
-.PHONY: all build dev clean install run help
+.PHONY: all build dev clean install run release help
 
 # Default target
 all: build
@@ -22,6 +22,11 @@ clean:
 	@rm -rf build/
 	@rm -rf DerivedData/
 	@echo "✅ Clean completed!"
+
+# Build, sign, notarize, and create a GitHub release
+release:
+	@echo "📦 Building and releasing MacClipboard..."
+	@./build.sh release
 
 # Run the application (recommended for development)
 run:
@@ -50,6 +55,7 @@ help:
 	@echo "  build    - Build for release distribution"
 	@echo "  dev      - Build debug version only"
 	@echo "  run      - Build, sign, and run (recommended for development)"
+	@echo "  release  - Build, sign, notarize, and create GitHub release"
 	@echo "  clean    - Clean build artifacts"
 	@echo "  install  - Check and install dependencies"
 	@echo "  help     - Show this help message"
