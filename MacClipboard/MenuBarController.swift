@@ -56,7 +56,8 @@ class MenuBarController: NSObject, ObservableObject {
         }
         
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        
+        statusItem?.autosaveName = "MacClipboardStatusItem"
+
         if let button = statusItem?.button {
             // Try system symbol first, fallback to a simple text icon
             if let clipboardImage = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Clipboard Manager") {
