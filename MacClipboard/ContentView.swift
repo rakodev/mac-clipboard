@@ -665,10 +665,23 @@ struct ContentView: View {
                         .padding(.vertical, 4)
                 case .image:
                     if let image = item.content as? NSImage {
-                        Image(nsImage: image)
-                            .resizable()
-                            .aspectRatio(contentMode: .fit)
-                            .frame(maxHeight: 150)
+                        VStack(alignment: .leading, spacing: 8) {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(maxHeight: 150)
+
+                            if let associatedText = item.associatedText,
+                               !associatedText.isEmpty {
+                                Text("Text representation")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text(associatedText)
+                                    .font(.system(.body, design: .monospaced))
+                                    .textSelection(.enabled)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
                     }
                 case .file:
                     Text(item.fullText)
@@ -889,6 +902,20 @@ struct ContentView: View {
                                 // Auto-load when selected
                                 loadLazyImage(item)
                             }
+                        }
+
+                        if let associatedText = item.associatedText,
+                           !associatedText.isEmpty {
+                            Divider()
+                                .padding(.vertical, 4)
+                            Text("Text representation")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(.secondary)
+                            Text(associatedText)
+                                .font(.system(.caption, design: .monospaced))
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .lineLimit(nil)
                         }
                     case .file:
                         Text(item.fullText)

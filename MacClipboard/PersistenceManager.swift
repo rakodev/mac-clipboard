@@ -33,67 +33,109 @@ class PersistenceManager: ObservableObject {
     private var context: NSManagedObjectContext {
         return persistentContainer.viewContext
     }
+
+    private func performOnContext<T>(_ work: () throws -> T) throws -> T {
+        var result: Result<T, Error>!
+        context.performAndWait {
+            do {
+                result = .success(try work())
+            } catch {
+                result = .failure(error)
+            }
+        }
+        return try result.get()
+    }
     
     // MARK: - Save Operations
     
     func saveContext() {
-        if context.hasChanges {
-            do {
-                try context.save()
-                Logging.debug("💾 Context saved successfully")
-            } catch {
-                print("💾 Save error: \(error)")
+        do {
+            try performOnContext {
+                if context.hasChanges {
+                    try context.save()
+                    Logging.debug("💾 Context saved successfully")
+                }
             }
+        } catch {
+            print("💾 Save error: \(error)")
         }
     }
     
     // MARK: - Clipboard Item Persistence
     
     func saveClipboardItem(_ item: ClipboardItem, saveImages: Bool = false) {
-        let persistedItem = PersistedClipboardItem(context: context)
-        
-        persistedItem.id = item.id
-        persistedItem.createdAt = item.timestamp
-        persistedItem.updatedAt = Date()
-        persistedItem.contentType = Int16(item.type.rawValue)
-        persistedItem.displayText = item.displayText
-        persistedItem.isFavorite = item.isFavorite
-        persistedItem.isSensitive = item.isSensitive
-        persistedItem.isAutoSensitive = item.isAutoSensitive
-        persistedItem.isPasswordLike = item.isPasswordLike
-        persistedItem.isManuallyUnsensitive = item.isManuallyUnsensitive
-        persistedItem.note = item.note
-        
-        switch item.type {
-        case .text:
-            if let text = item.content as? String {
-                persistedItem.textContent = text
+        do {
+            try performOnContext {
+                let persistedItem = PersistedClipboardItem(context: context)
+
+                persistedItem.id = item.id
+                persistedItem.createdAt = item.timestamp
+                persistedItem.updatedAt = Date()
+                persistedItem.contentType = Int16(item.type.rawValue)
+                persistedItem.displayText = item.displayText
+                persistedItem.isFavorite = item.isFavorite
+                persistedItem.isSensitive = item.isSensitive
+                persistedItem.isAutoSensitive = item.isAutoSensitive
+                persistedItem.isPasswordLike = item.isPasswordLike
+                persistedItem.isManuallyUnsensitive = item.isManuallyUnsensitive
+                persistedItem.note = item.note
+
+                switch item.type {
+                case .text:
+                    if let text = item.content as? String {
+                        persistedItem.textContent = text
+                    }
+
+                case .image:
+                    // Preserve text representation for mixed clipboard payloads (image + text)
+                    persistedItem.textContent = item.associatedText
+                    if saveImages, let image = item.content as? NSImage {
+                        persistedItem.imageData = image.tiffRepresentation
+                    }
+
+                case .file:
+                    if let urls = item.content as? [URL] {
+                        persistedItem.fileURLs = urls as NSObject
+                    }
+                }
+
+                if context.hasChanges {
+                    try context.save()
+                    Logging.debug("💾 Context saved successfully")
+                }
             }
-            
-        case .image:
-            if saveImages, let image = item.content as? NSImage {
-                persistedItem.imageData = image.tiffRepresentation
-            }
-            
-        case .file:
-            if let urls = item.content as? [URL] {
-                persistedItem.fileURLs = urls as NSObject
-            }
+        } catch {
+            print("💾 Save error: \(error)")
         }
-        
-        saveContext()
     }
     
     /// Number of recent images to load into memory at startup (older images are lazy-loaded)
     private let maxPreloadedImages = 15
 
     func loadClipboardHistory(limit: Int = 1000) -> [ClipboardItem] {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
-        request.fetchLimit = limit
-
         do {
-            let persistedItems = try context.fetch(request)
+            let persistedItems: [PersistedClipboardItem] = try performOnContext {
+                let favoritesRequest: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                favoritesRequest.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
+                favoritesRequest.predicate = NSPredicate(format: "isFavorite == YES")
+
+                let favoriteItems = try context.fetch(favoritesRequest)
+
+                let nonFavoriteLimit = max(0, limit - favoriteItems.count)
+                var nonFavoriteItems: [PersistedClipboardItem] = []
+                if nonFavoriteLimit > 0 {
+                    let nonFavoritesRequest: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                    nonFavoritesRequest.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
+                    nonFavoritesRequest.predicate = NSPredicate(format: "isFavorite == NO")
+                    nonFavoritesRequest.fetchLimit = nonFavoriteLimit
+                    nonFavoriteItems = try context.fetch(nonFavoritesRequest)
+                }
+
+                return (favoriteItems + nonFavoriteItems).sorted {
+                    ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+                }
+            }
+
             var imageCount = 0
             let clipboardItems = persistedItems.compactMap { item -> ClipboardItem? in
                 let isImage = item.contentType == Int16(ClipboardContentType.image.rawValue)
@@ -169,18 +211,22 @@ class PersistenceManager: ObservableObject {
             isPasswordLike: persistedItem.isPasswordLike,
             isManuallyUnsensitive: persistedItem.isManuallyUnsensitive,
             note: persistedItem.note,
+            associatedText: contentType == .image ? persistedItem.textContent : nil,
             isImageLoaded: isImageLoaded
         )
     }
 
     /// Load image data for a specific item (for lazy loading)
     func loadImageData(for itemId: UUID) -> NSImage? {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
-        request.fetchLimit = 1
-
         do {
-            if let item = try context.fetch(request).first,
+            let item: PersistedClipboardItem? = try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+                request.fetchLimit = 1
+                return try context.fetch(request).first
+            }
+
+            if let item,
                let imageData = item.imageData,
                let image = NSImage(data: imageData) {
                 return image
@@ -194,16 +240,22 @@ class PersistenceManager: ObservableObject {
     // MARK: - Favorites
 
     func toggleFavorite(itemId: UUID) -> Bool {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
-
         do {
-            let items = try context.fetch(request)
-            if let item = items.first {
-                item.isFavorite = !item.isFavorite
-                saveContext()
-                Logging.debug("Toggled favorite for item \(itemId): \(item.isFavorite)")
-                return item.isFavorite
+            return try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+                let items = try context.fetch(request)
+                if let item = items.first {
+                    item.isFavorite = !item.isFavorite
+                    item.updatedAt = Date()
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("Toggled favorite for item \(itemId): \(item.isFavorite)")
+                    return item.isFavorite
+                }
+                return false
             }
         } catch {
             print("Toggle favorite error: \(error)")
@@ -212,16 +264,20 @@ class PersistenceManager: ObservableObject {
     }
 
     func updateNote(itemId: UUID, note: String?) {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
-
         do {
-            let items = try context.fetch(request)
-            if let item = items.first {
-                item.note = note
-                item.updatedAt = Date()
-                saveContext()
-                Logging.debug("Updated note for item \(itemId)")
+            try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+                let items = try context.fetch(request)
+                if let item = items.first {
+                    item.note = note
+                    item.updatedAt = Date()
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("Updated note for item \(itemId)")
+                }
             }
         } catch {
             print("Update note error: \(error)")
@@ -229,18 +285,23 @@ class PersistenceManager: ObservableObject {
     }
 
     func toggleSensitive(itemId: UUID, isManuallyUnsensitive: Bool) -> Bool {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
-
         do {
-            let items = try context.fetch(request)
-            if let item = items.first {
-                item.isSensitive = !item.isSensitive
-                item.isManuallyUnsensitive = isManuallyUnsensitive
-                item.updatedAt = Date()
-                saveContext()
-                Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive), manuallyUnsensitive: \(isManuallyUnsensitive)")
-                return item.isSensitive
+            return try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+                let items = try context.fetch(request)
+                if let item = items.first {
+                    item.isSensitive = !item.isSensitive
+                    item.isManuallyUnsensitive = isManuallyUnsensitive
+                    item.updatedAt = Date()
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive), manuallyUnsensitive: \(isManuallyUnsensitive)")
+                    return item.isSensitive
+                }
+                return false
             }
         } catch {
             print("Toggle sensitive error: \(error)")
@@ -249,16 +310,20 @@ class PersistenceManager: ObservableObject {
     }
 
     func setSensitive(itemId: UUID, value: Bool) {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
-
         do {
-            let items = try context.fetch(request)
-            if let item = items.first {
-                item.isSensitive = value
-                item.updatedAt = Date()
-                saveContext()
-                Logging.debug("Set sensitive for item \(itemId): \(value)")
+            try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+                let items = try context.fetch(request)
+                if let item = items.first {
+                    item.isSensitive = value
+                    item.updatedAt = Date()
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("Set sensitive for item \(itemId): \(value)")
+                }
             }
         } catch {
             print("Set sensitive error: \(error)")
@@ -267,18 +332,22 @@ class PersistenceManager: ObservableObject {
 
     /// Apply isSensitive=true to all items with isAutoSensitive=true (skip manually unsensitive)
     func applyAutoSensitiveFlag() {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
-
         do {
-            let items = try context.fetch(request)
-            for item in items {
-                item.isSensitive = true
-                item.updatedAt = Date()
-            }
-            if !items.isEmpty {
-                saveContext()
-                Logging.debug("💾 Applied sensitive flag to \(items.count) auto-detected items")
+            try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
+
+                let items = try context.fetch(request)
+                for item in items {
+                    item.isSensitive = true
+                    item.updatedAt = Date()
+                }
+                if !items.isEmpty {
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("💾 Applied sensitive flag to \(items.count) auto-detected items")
+                }
             }
         } catch {
             print("Apply auto-sensitive flag error: \(error)")
@@ -287,18 +356,22 @@ class PersistenceManager: ObservableObject {
 
     /// Apply isSensitive=true to all items with isPasswordLike=true (skip manually unsensitive)
     func applyPasswordLikeFlag() {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
-
         do {
-            let items = try context.fetch(request)
-            for item in items {
-                item.isSensitive = true
-                item.updatedAt = Date()
-            }
-            if !items.isEmpty {
-                saveContext()
-                Logging.debug("💾 Applied sensitive flag to \(items.count) password-like items")
+            try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
+
+                let items = try context.fetch(request)
+                for item in items {
+                    item.isSensitive = true
+                    item.updatedAt = Date()
+                }
+                if !items.isEmpty {
+                    if context.hasChanges {
+                        try context.save()
+                    }
+                    Logging.debug("💾 Applied sensitive flag to \(items.count) password-like items")
+                }
             }
         } catch {
             print("Apply password-like flag error: \(error)")
@@ -308,10 +381,11 @@ class PersistenceManager: ObservableObject {
     // MARK: - Storage Management
 
     func getStorageSize() -> Int64 {
-        let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-        
         do {
-            let items = try context.fetch(request)
+            let items: [PersistedClipboardItem] = try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                return try context.fetch(request)
+            }
             let totalSize = items.reduce(0) { total, item in
                 var itemSize: Int64 = 0
                 
@@ -342,47 +416,52 @@ class PersistenceManager: ObservableObject {
     
     func cleanupOldItems(olderThan days: Int) {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
-        let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-        // Skip favorites - they persist indefinitely
-        request.predicate = NSPredicate(format: "createdAt < %@ AND isFavorite == NO", cutoffDate as NSDate)
-        
-        let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-        
+
         do {
-            let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
-            let deletedCount = result?.result as? Int ?? 0
-            Logging.debug("💾 Cleaned up \(deletedCount) old items")
-            
-            // Refresh the context
-            context.refreshAllObjects()
+            try performOnContext {
+                let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
+                // Skip favorites - they persist indefinitely
+                request.predicate = NSPredicate(format: "createdAt < %@ AND isFavorite == NO", cutoffDate as NSDate)
+
+                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                let deletedCount = result?.result as? Int ?? 0
+                Logging.debug("💾 Cleaned up \(deletedCount) old items")
+
+                // Refresh the context
+                context.refreshAllObjects()
+            }
         } catch {
             print("💾 Cleanup error: \(error)")
         }
     }
     
     func clearAllData() {
-        let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-        let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-
         do {
-            try context.execute(deleteRequest)
-            context.refreshAllObjects()
-            Logging.debug("💾 Cleared all persistent data")
+            try performOnContext {
+                let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
+                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+                try context.execute(deleteRequest)
+                context.refreshAllObjects()
+                Logging.debug("💾 Cleared all persistent data")
+            }
         } catch {
             print("💾 Clear all error: \(error)")
         }
     }
 
     func deleteItems(withIds ids: Set<UUID>) {
-        let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-        request.predicate = NSPredicate(format: "id IN %@", ids as CVarArg)
-        let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-
         do {
-            let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
-            let deletedCount = result?.result as? Int ?? 0
-            context.refreshAllObjects()
-            Logging.debug("💾 Deleted \(deletedCount) items from persistent storage")
+            try performOnContext {
+                let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id IN %@", ids as CVarArg)
+                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
+
+                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                let deletedCount = result?.result as? Int ?? 0
+                context.refreshAllObjects()
+                Logging.debug("💾 Deleted \(deletedCount) items from persistent storage")
+            }
         } catch {
             print("💾 Delete items error: \(error)")
         }

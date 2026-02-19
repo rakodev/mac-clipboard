@@ -294,8 +294,60 @@ class ClipboardMonitor: ObservableObject {
         // Check pasteboard types for sensitive indicators first (instant check)
         let hasSensitivePasteboardType = SensitiveContentDetector.hasSensitivePasteboardType(pasteboard)
 
+        let textContent = pasteboard.string(forType: .string)
+        let hasText = (textContent?.isEmpty == false)
+        let imageContent = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage
+        let hasImage = imageContent != nil
+
+        // Prefer image item when both text and image are present, preserving text as secondary payload
+        if hasImage, let image = imageContent {
+            // Skip very large images to prevent memory/storage bloat (max 10MB)
+            let maxImageBytes = 10 * 1024 * 1024
+            if let tiffData = image.tiffRepresentation, tiffData.count > maxImageBytes {
+                Logging.debug("⚠️ Skipped large image (\(tiffData.count / 1024 / 1024)MB) - exceeds 10MB limit")
+                // Fallback to text representation if available
+                if hasText, let string = textContent {
+                    let maxTextBytes = 1 * 1024 * 1024
+                    if string.utf8.count <= maxTextBytes {
+                        let isAutoSensitive = hasSensitivePasteboardType || SensitiveContentDetector.matchesSensitivePattern(string)
+                        let isPasswordLike = SensitiveContentDetector.looksLikePassword(string)
+                        let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
+                                          (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+
+                        return ClipboardItem(
+                            id: UUID(),
+                            content: string,
+                            type: .text,
+                            timestamp: Date(),
+                            isSensitive: isSensitive,
+                            isAutoSensitive: isAutoSensitive,
+                            isPasswordLike: isPasswordLike
+                        )
+                    }
+                }
+                return nil
+            }
+
+            let attachedText = hasText ? textContent : nil
+            let isAutoSensitive = hasSensitivePasteboardType || (attachedText.map { SensitiveContentDetector.matchesSensitivePattern($0) } ?? false)
+            let isPasswordLike = attachedText.map { SensitiveContentDetector.looksLikePassword($0) } ?? false
+            let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
+                              (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+
+            return ClipboardItem(
+                id: UUID(),
+                content: image,
+                type: .image,
+                timestamp: Date(),
+                isSensitive: isSensitive,
+                isAutoSensitive: isAutoSensitive,
+                isPasswordLike: isPasswordLike,
+                associatedText: attachedText
+            )
+        }
+
         // Check for text content first
-        if let string = pasteboard.string(forType: .string), !string.isEmpty {
+        if let string = textContent, !string.isEmpty {
             // Skip extremely large text to prevent memory issues (max 1MB)
             let maxTextBytes = 1 * 1024 * 1024
             if string.utf8.count > maxTextBytes {
@@ -321,29 +373,6 @@ class ClipboardMonitor: ObservableObject {
                 isSensitive: isSensitive,
                 isAutoSensitive: isAutoSensitive,
                 isPasswordLike: isPasswordLike
-            )
-        }
-
-        // Check for image content
-        if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
-            // Skip very large images to prevent memory/storage bloat (max 10MB)
-            let maxImageBytes = 10 * 1024 * 1024
-            if let tiffData = image.tiffRepresentation, tiffData.count > maxImageBytes {
-                Logging.debug("⚠️ Skipped large image (\(tiffData.count / 1024 / 1024)MB) - exceeds 10MB limit")
-                return nil
-            }
-
-            // Images can also be sensitive (e.g., screenshot of password manager)
-            let isAutoSensitive = hasSensitivePasteboardType
-            let isSensitive = isAutoSensitive && userPreferences.autoDetectSensitiveData
-
-            return ClipboardItem(
-                id: UUID(),
-                content: image,
-                type: .image,
-                timestamp: Date(),
-                isSensitive: isSensitive,
-                isAutoSensitive: isAutoSensitive
             )
         }
 
@@ -398,6 +427,7 @@ class ClipboardMonitor: ObservableObject {
                 itemToInsert.isPasswordLike = existingItem.isPasswordLike || itemToInsert.isPasswordLike
                 itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
                 itemToInsert.note = existingItem.note
+                itemToInsert.associatedText = itemToInsert.associatedText ?? existingItem.associatedText
 
                 // Remove the old item from persistence
                 self.persistenceManager.deleteItems(withIds: [existingItem.id])
@@ -413,9 +443,7 @@ class ClipboardMonitor: ObservableObject {
             self.saveItemToPersistence(itemToInsert)
 
             // Limit to max items
-            if self.clipboardHistory.count > self.userPreferences.maxClipboardItems {
-                self.clipboardHistory.removeLast(self.clipboardHistory.count - self.userPreferences.maxClipboardItems)
-            }
+            self.trimHistoryToLimitPreservingFavorites()
 
             // Unload old images from memory to prevent memory bloat
             self.unloadOldImages()
@@ -447,11 +475,30 @@ class ClipboardMonitor: ObservableObject {
             guard let self = self else { return }
 
             // Trim history if new limit is smaller than current count
-            let currentLimit = self.userPreferences.maxClipboardItems
-            if self.clipboardHistory.count > currentLimit {
-                let itemsToRemove = self.clipboardHistory.count - currentLimit
-                self.clipboardHistory.removeLast(itemsToRemove)
+            self.trimHistoryToLimitPreservingFavorites()
+        }
+    }
+
+    private func trimHistoryToLimitPreservingFavorites() {
+        let currentLimit = userPreferences.maxClipboardItems
+        guard clipboardHistory.count > currentLimit else { return }
+
+        var overflow = clipboardHistory.count - currentLimit
+        var index = clipboardHistory.count - 1
+
+        // Remove oldest non-favorites first
+        while overflow > 0 && index >= 0 {
+            if !clipboardHistory[index].isFavorite {
+                clipboardHistory.remove(at: index)
+                overflow -= 1
             }
+            index -= 1
+        }
+
+        // If we still overflow, all remaining tail items are favorites.
+        // Keep favorites rather than silently evicting them.
+        if overflow > 0 {
+            Logging.debug("⭐ Keeping \(overflow) favorites above max item limit (\(currentLimit))")
         }
     }
 
@@ -519,10 +566,16 @@ class ClipboardMonitor: ObservableObject {
             // Handle lazy-loaded images
             if let image = item.content as? NSImage {
                 pasteboard.writeObjects([image])
+                if let associatedText = item.associatedText, !associatedText.isEmpty {
+                    pasteboard.setString(associatedText, forType: .string)
+                }
             } else if item.needsImageLoad {
                 // Load image synchronously for copy operation
                 if let image = persistenceManager.loadImageData(for: item.id) {
                     pasteboard.writeObjects([image])
+                    if let associatedText = item.associatedText, !associatedText.isEmpty {
+                        pasteboard.setString(associatedText, forType: .string)
+                    }
                     // Also update the item in history
                     if let index = clipboardHistory.firstIndex(where: { $0.id == item.id }) {
                         clipboardHistory[index].content = image
@@ -663,9 +716,10 @@ struct ClipboardItem: Identifiable, Equatable {
     var isPasswordLike: Bool   // True if detected as password-like string
     var isManuallyUnsensitive: Bool  // True if user explicitly un-marked as sensitive (prevents re-apply)
     var note: String?
+    var associatedText: String?  // Optional text representation when clipboard item is image + text
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, associatedText: String? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -677,6 +731,7 @@ struct ClipboardItem: Identifiable, Equatable {
         self.isPasswordLike = isPasswordLike
         self.isManuallyUnsensitive = isManuallyUnsensitive
         self.note = note
+        self.associatedText = associatedText
         self.isImageLoaded = (type != .image) || isImageLoaded  // Non-images are always "loaded"
     }
 
@@ -714,7 +769,7 @@ struct ClipboardItem: Identifiable, Equatable {
         case .text:
             return content as? String ?? ""
         case .image:
-            return "📷 Image content"
+            return associatedText?.isEmpty == false ? associatedText! : "📷 Image content"
         case .file:
             if let urls = content as? [URL] {
                 return urls.map { $0.path }.joined(separator: "\n")
@@ -765,7 +820,7 @@ struct ClipboardItem: Identifiable, Equatable {
             // If prefixes match and sizes match, likely the same image
             let suffix1 = data1.suffix(sampleSize)
             let suffix2 = data2.suffix(sampleSize)
-            return suffix1 == suffix2
+            return suffix1 == suffix2 && self.associatedText == other.associatedText
         case .file:
             let urls1 = content as? [URL] ?? []
             let urls2 = other.content as? [URL] ?? []
@@ -781,6 +836,7 @@ struct ClipboardItem: Identifiable, Equatable {
                lhs.isPasswordLike == rhs.isPasswordLike &&
                lhs.isManuallyUnsensitive == rhs.isManuallyUnsensitive &&
                lhs.note == rhs.note &&
+               lhs.associatedText == rhs.associatedText &&
                lhs.isImageLoaded == rhs.isImageLoaded
     }
 }
