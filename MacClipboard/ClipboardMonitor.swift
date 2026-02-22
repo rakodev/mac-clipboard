@@ -164,6 +164,11 @@ class ClipboardMonitor: ObservableObject {
     private var userPreferences: UserPreferencesManager
     private var persistenceManager: PersistenceManager
     private var maintenanceTimer: Timer?
+    private var pendingChangeCount: Int?
+    private var pendingCaptureAttempts: Int = 0
+    private var pendingCaptureRetryScheduled = false
+    private let maxPendingCaptureAttempts = 20
+    private let pendingCaptureRetryDelay: TimeInterval = 0.25
     
     init(userPreferences: UserPreferencesManager = UserPreferencesManager.shared,
          persistenceManager: PersistenceManager = PersistenceManager.shared) {
@@ -209,9 +214,11 @@ class ClipboardMonitor: ObservableObject {
     
     private func startMonitoring() {
         // Check clipboard every 0.8 seconds (balanced between responsiveness and CPU usage)
-        timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+        let monitoringTimer = Timer(timeInterval: 0.8, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
+        RunLoop.main.add(monitoringTimer, forMode: .common)
+        timer = monitoringTimer
         
         // Initial check
         checkClipboard()
@@ -280,12 +287,152 @@ class ClipboardMonitor: ObservableObject {
         // Check if clipboard content changed
         if pasteboard.changeCount != changeCount {
             changeCount = pasteboard.changeCount
+            pendingChangeCount = nil
+            pendingCaptureAttempts = 0
             
             // Get clipboard content
             if let content = getClipboardContent() {
                 addToHistory(content)
+            } else {
+                pendingChangeCount = changeCount
+                schedulePendingCaptureRetry()
             }
         }
+    }
+
+    private func schedulePendingCaptureRetry() {
+        guard !pendingCaptureRetryScheduled else { return }
+        guard let pending = pendingChangeCount, pending == changeCount else { return }
+        guard pendingCaptureAttempts < maxPendingCaptureAttempts else {
+            Logging.debug("ℹ️ Gave up deferred clipboard capture for changeCount \(changeCount)")
+            pendingChangeCount = nil
+            return
+        }
+
+        pendingCaptureRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + pendingCaptureRetryDelay) { [weak self] in
+            guard let self = self else { return }
+            self.pendingCaptureRetryScheduled = false
+            self.attemptPendingCapture(expectedChangeCount: pending)
+        }
+    }
+
+    private func attemptPendingCapture(expectedChangeCount: Int) {
+        guard !isPausing else {
+            schedulePendingCaptureRetry()
+            return
+        }
+
+        let pasteboard = NSPasteboard.general
+        // Clipboard changed again; pending capture is obsolete.
+        guard pasteboard.changeCount == expectedChangeCount, expectedChangeCount == changeCount else {
+            pendingChangeCount = nil
+            pendingCaptureAttempts = 0
+            return
+        }
+
+        pendingCaptureAttempts += 1
+
+        if let content = getClipboardContent() {
+            addToHistory(content)
+            pendingChangeCount = nil
+            pendingCaptureAttempts = 0
+            return
+        }
+
+        schedulePendingCaptureRetry()
+    }
+
+    func refreshClipboardNow() {
+        checkClipboard()
+    }
+
+    private struct PasteboardImagePayload {
+        let image: NSImage
+        let byteCount: Int
+        let sourceType: String
+    }
+
+    private let supportedImageTypes: [NSPasteboard.PasteboardType] = [
+        .png,
+        .tiff,
+        .pdf,
+        NSPasteboard.PasteboardType("public.jpeg"),
+        NSPasteboard.PasteboardType("public.heic"),
+        NSPasteboard.PasteboardType("public.heif"),
+        NSPasteboard.PasteboardType("com.compuserve.gif")
+    ]
+
+    private func decodeImagePayload(from item: NSPasteboardItem) -> PasteboardImagePayload? {
+        for type in supportedImageTypes {
+            if let data = item.data(forType: type), let image = NSImage(data: data) {
+                return PasteboardImagePayload(image: image, byteCount: data.count, sourceType: "item:\(type.rawValue)")
+            }
+        }
+        return nil
+    }
+
+    private func estimatedPixelCount(for image: NSImage) -> Int {
+        if let rep = image.representations.compactMap({ $0 as? NSBitmapImageRep }).first {
+            return rep.pixelsWide * rep.pixelsHigh
+        }
+
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        let widthPixels = Int(image.size.width * scale)
+        let heightPixels = Int(image.size.height * scale)
+        return max(0, widthPixels * heightPixels)
+    }
+
+    private func shouldSkipImageForSize(image: NSImage, payload: PasteboardImagePayload?) -> Bool {
+        let maxImageBytes = 10 * 1024 * 1024
+        let maxFallbackPixels = 40_000_000
+        let imageBytes = payload?.byteCount ?? (image.tiffRepresentation?.count ?? 0)
+        let sourceType = payload?.sourceType ?? "unknown"
+        let isDirectEncodedPayload = sourceType.hasPrefix("public.") || sourceType.hasPrefix("item:") || sourceType == "com.compuserve.gif"
+
+        if isDirectEncodedPayload {
+            if imageBytes > maxImageBytes {
+                Logging.debug("⚠️ Skipped large encoded image (\(imageBytes / 1024 / 1024)MB, source: \(sourceType)) - exceeds 10MB limit")
+                return true
+            }
+            return false
+        }
+
+        let pixelCount = estimatedPixelCount(for: image)
+        if pixelCount > maxFallbackPixels {
+            Logging.debug("⚠️ Skipped very large fallback image (\(pixelCount) pixels, source: \(sourceType))")
+            return true
+        }
+
+        return false
+    }
+
+    private func readImageFromPasteboard(_ pasteboard: NSPasteboard) -> PasteboardImagePayload? {
+        for type in supportedImageTypes {
+            if let data = pasteboard.data(forType: type), let image = NSImage(data: data) {
+                return PasteboardImagePayload(image: image, byteCount: data.count, sourceType: type.rawValue)
+            }
+        }
+
+        if let items = pasteboard.pasteboardItems {
+            for item in items {
+                if let payload = decodeImagePayload(from: item) {
+                    return payload
+                }
+            }
+        }
+
+        if let image = NSImage(pasteboard: pasteboard) {
+            let fallbackSize = image.tiffRepresentation?.count ?? 0
+            return PasteboardImagePayload(image: image, byteCount: fallbackSize, sourceType: "NSImage(pasteboard:)")
+        }
+
+        if let image = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage {
+            let fallbackSize = image.tiffRepresentation?.count ?? 0
+            return PasteboardImagePayload(image: image, byteCount: fallbackSize, sourceType: "NSImage-object")
+        }
+
+        return nil
     }
     
     private func getClipboardContent() -> ClipboardItem? {
@@ -296,15 +443,13 @@ class ClipboardMonitor: ObservableObject {
 
         let textContent = pasteboard.string(forType: .string)
         let hasText = (textContent?.isEmpty == false)
-        let imageContent = pasteboard.readObjects(forClasses: [NSImage.self], options: nil)?.first as? NSImage
+        let imagePayload = readImageFromPasteboard(pasteboard)
+        let imageContent = imagePayload?.image
         let hasImage = imageContent != nil
 
         // Prefer image item when both text and image are present, preserving text as secondary payload
         if hasImage, let image = imageContent {
-            // Skip very large images to prevent memory/storage bloat (max 10MB)
-            let maxImageBytes = 10 * 1024 * 1024
-            if let tiffData = image.tiffRepresentation, tiffData.count > maxImageBytes {
-                Logging.debug("⚠️ Skipped large image (\(tiffData.count / 1024 / 1024)MB) - exceeds 10MB limit")
+            if shouldSkipImageForSize(image: image, payload: imagePayload) {
                 // Fallback to text representation if available
                 if hasText, let string = textContent {
                     let maxTextBytes = 1 * 1024 * 1024
@@ -789,8 +934,8 @@ struct ClipboardItem: Identifiable, Equatable {
             if text1.count != text2.count { return false }
             return text1 == text2
         case .image:
-            // For images, use fast dimension comparison first
-            // Full data comparison is too slow for large images
+            // For images, use dimension comparison first, then exact data match.
+            // A sampled-prefix/suffix comparison caused false duplicates for similar screenshots.
             guard let image1 = content as? NSImage,
                   let image2 = other.content as? NSImage else { return false }
 
@@ -799,28 +944,10 @@ struct ClipboardItem: Identifiable, Equatable {
                 return false
             }
 
-            // For same dimensions, compare a small sample of pixels via hash
-            // This is much faster than full TIFF comparison
+            // For same dimensions, compare full normalized TIFF data to avoid false positives.
             guard let data1 = image1.tiffRepresentation,
                   let data2 = image2.tiffRepresentation else { return false }
-
-            // Compare sizes first (fast)
-            if data1.count != data2.count {
-                return false
-            }
-
-            // Compare hash of first 1KB + last 1KB instead of full data
-            let sampleSize = min(1024, data1.count)
-            let prefix1 = data1.prefix(sampleSize)
-            let prefix2 = data2.prefix(sampleSize)
-            if prefix1 != prefix2 {
-                return false
-            }
-
-            // If prefixes match and sizes match, likely the same image
-            let suffix1 = data1.suffix(sampleSize)
-            let suffix2 = data2.suffix(sampleSize)
-            return suffix1 == suffix2 && self.associatedText == other.associatedText
+            return data1 == data2 && self.associatedText == other.associatedText
         case .file:
             let urls1 = content as? [URL] ?? []
             let urls2 = other.content as? [URL] ?? []

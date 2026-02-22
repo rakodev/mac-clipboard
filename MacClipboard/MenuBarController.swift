@@ -180,12 +180,6 @@ class MenuBarController: NSObject, ObservableObject {
         
         menu.addItem(NSMenuItem.separator())
         
-        let diagnoseItem = NSMenuItem(title: "Diagnose Paste", action: #selector(diagnosePaste), keyEquivalent: "")
-        diagnoseItem.target = self
-        menu.addItem(diagnoseItem)
-        
-        menu.addItem(NSMenuItem.separator())
-        
         let aboutItem = NSMenuItem(title: "About MacClipboard", action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
@@ -346,6 +340,8 @@ class MenuBarController: NSObject, ObservableObject {
             stopClickOutsideMonitoring()
             popover?.close()
         } else {
+            clipboardMonitor.refreshClipboardNow()
+
             // Capture the frontmost application BEFORE we activate ourselves
             previousApplication = NSWorkspace.shared.frontmostApplication
 
@@ -480,11 +476,6 @@ class MenuBarController: NSObject, ObservableObject {
         }
     }
 
-    @objc private func diagnosePaste() {
-        permissionManager.checkPermission()
-        simulatePasteKeypress()
-    }
-    
     private func setupGlobalHotkey() {
         // Register Cmd+Shift+V hotkey
         let hotKeyCode: UInt32 = 9 // 'V' key
