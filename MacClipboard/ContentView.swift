@@ -334,10 +334,8 @@ struct ContentView: View {
     
     private var headerView: some View {
         HStack {
-            Text("MacClipboard")
-                .font(.headline)
-                .foregroundColor(.primary)
-            
+            ProjectTitleLink()
+
             Spacer()
 
             Button(action: {
@@ -1659,6 +1657,33 @@ struct ImageModalView: View {
         }
         .frame(minWidth: 700, minHeight: 500)
         .background(Color(NSColor.windowBackgroundColor))
+    }
+}
+
+private struct ProjectTitleLink: View {
+    @State private var hovering = false
+    var body: some View {
+        Button(action: {
+            if let url = URL(string: "https://github.com/rakodev/mac-clipboard") {
+                NSWorkspace.shared.open(url)
+            }
+        }) {
+            HStack(spacing: 4) {
+                Text("MacClipboard")
+                    .font(.headline)
+                    .foregroundColor(.primary)
+                Image(systemName: "arrow.up.right.square")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .padding(.vertical, 2)
+            .padding(.horizontal, 4)
+            .background(hovering ? Color.accentColor.opacity(0.1) : Color.clear)
+            .cornerRadius(4)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Open project page on GitHub")
     }
 }
 
