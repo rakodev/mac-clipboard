@@ -45,6 +45,41 @@ class MenuBarController: NSObject, ObservableObject {
             self.verifyButtonSetup()
         }
     }
+
+    private func makeStatusBarImage() -> NSImage? {
+        let symbolNames = ["doc.on.clipboard", "clipboard", "doc.on.doc"]
+
+        for symbolName in symbolNames {
+            if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "MacClipboard") {
+                image.isTemplate = true
+                image.size = NSSize(width: 17, height: 17)
+                return image
+            }
+        }
+
+        return nil
+    }
+
+    private func configureStatusButton(_ button: NSStatusBarButton) {
+        if let image = makeStatusBarImage() {
+            button.image = image
+            button.title = ""
+        } else {
+            button.image = nil
+            button.title = "📋"
+        }
+
+        button.imagePosition = .imageOnly
+        button.appearsDisabled = false
+        button.target = nil
+        button.action = nil
+        button.target = self
+        button.action = #selector(statusItemClicked(_:))
+        button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        button.isEnabled = true
+        button.isHidden = false
+        button.needsDisplay = true
+    }
     
     private func setupStatusItem() {
         // Ensure we're on the main thread
@@ -55,35 +90,11 @@ class MenuBarController: NSObject, ObservableObject {
             return
         }
         
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem?.autosaveName = "MacClipboardStatusItem"
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem?.isVisible = true
 
         if let button = statusItem?.button {
-            // Try system symbol first, fallback to a simple text icon
-            if let clipboardImage = NSImage(systemSymbolName: "doc.on.clipboard", accessibilityDescription: "Clipboard Manager") {
-                button.image = clipboardImage
-            } else {
-                // Fallback to a simple text-based icon
-                button.title = "📋"
-            }
-
-            // Clear any existing target/action first
-            button.target = nil
-            button.action = nil
-            
-            // Set up the target and action
-            button.target = self
-            button.action = #selector(statusItemClicked(_:))
-            
-            // Use standard mouse events for better compatibility
-            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
-            
-            // Make sure the button is visible and enabled
-            button.isEnabled = true
-            button.isHidden = false
-            
-            // Force the button to recognize its target
-            button.needsDisplay = true
+            configureStatusButton(button)
         } else {
             
         }
@@ -122,17 +133,7 @@ class MenuBarController: NSObject, ObservableObject {
         // Check if target or action is lost and re-establish if needed
         if button.target !== self || button.action != #selector(statusItemClicked(_:)) {
             // Re-setup the button
-            button.target = nil
-            button.action = nil
-
-            button.target = self
-            button.action = #selector(statusItemClicked(_:))
-            button.sendAction(on: [.leftMouseDown, .rightMouseDown])
-
-            // Ensure button is enabled and visible
-            button.isEnabled = true
-            button.isHidden = false
-            button.needsDisplay = true
+            configureStatusButton(button)
         }
     }
     
@@ -142,9 +143,7 @@ class MenuBarController: NSObject, ObservableObject {
         if let button = statusItem?.button {
             // If target or action is nil, reinitialize
             if button.target == nil || button.action == nil {
-                button.target = self
-                button.action = #selector(statusItemClicked(_:))
-                button.sendAction(on: [NSEvent.EventTypeMask.leftMouseDown, NSEvent.EventTypeMask.rightMouseDown])
+                configureStatusButton(button)
             }
         }
     }
