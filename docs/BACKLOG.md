@@ -28,6 +28,10 @@ Move completed items to `BACKLOG_ARCHIVE.md` with the completion date and a shor
   - Evidence: `SettingsView` opens the generic `https://github.com` URL, and its storage slider uses 100MB-5GB while `UserPreferencesManager` accepts 10MB-10GB.
   - Acceptance: Settings links point to the MacClipboard repository, and UI controls use the same bounds as the underlying preference validation.
 
+- [ ] Reset selection focus appropriately when switching clipboard filter tabs.
+  - Evidence: switching from Favorites back to All can keep focus on a favorite item from much earlier in history, causing the All list to scroll far down unexpectedly.
+  - Acceptance: changing filter tabs leaves the list positioned predictably near the top or on the first relevant item, without preserving a stale off-screen selection from the previous tab.
+
 - [ ] Split `ContentView` into smaller focused views and action handlers.
   - Evidence: `ContentView` owns filtering, keyboard handling, row/list rendering, preview, deletion confirmation, shortcut help, note editing, and image loading state.
   - Acceptance: filtering/search state, preview, list rows, shortcuts, and destructive actions are separated enough to test and maintain independently.
