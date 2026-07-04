@@ -183,8 +183,9 @@ defaults delete com.macclipboard.app 2>/dev/null || true
 
 ## Privacy & Security
 
-* **No network access**: All data stays on your Mac
+* **Clipboard data stays local**: Clipboard history is stored only on your Mac and is never synced or uploaded
 * **Local storage only**: History stored in `~/Library/Application Support/MacClipboard`
+* **Explicit update checks only**: The optional "Check for Updates" action contacts the GitHub Releases API; no clipboard content is sent
 * **Configurable retention**: Set how long items are kept (or disable persistence entirely)
 * **Secure by design**: Only accesses clipboard when content changes
 * **Minimal permissions**: Only needs accessibility for hotkey and auto-paste

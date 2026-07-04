@@ -69,7 +69,7 @@ struct SettingsView: View {
                                     get: { Double(preferences.maxStorageSize) },
                                     set: { preferences.maxStorageSize = Int($0) }
                                 ),
-                                in: 100...5000,
+                                in: Double(UserPreferencesManager.minStorageSize)...Double(UserPreferencesManager.maxStorageSize),
                                 step: 100
                             )
                             .disabled(!preferences.persistenceEnabled)
@@ -171,7 +171,7 @@ struct SettingsView: View {
                     .foregroundColor(.secondary)
 
                 Button("GitHub") {
-                    if let url = URL(string: "https://github.com") {
+                    if let url = URL(string: "https://github.com/rakodev/mac-clipboard") {
                         NSWorkspace.shared.open(url)
                     }
                 }

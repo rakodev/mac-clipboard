@@ -34,6 +34,7 @@ struct ContentView: View {
     @State private var loadedImages: [UUID: NSImage] = [:]  // Cache for lazy-loaded images
     @State private var showShortcuts: Bool = false
     @State private var isScrolledDown: Bool = false
+    @State private var shouldResetSelectionAfterFilterChange = false
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
@@ -212,9 +213,14 @@ struct ContentView: View {
             updatePopoverSize()
         }
         .onChange(of: computedFilteredItems) { newItems in
-            // Try to preserve the currently selected item
-            if let currentItem = selectedItem,
+            if shouldResetSelectionAfterFilterChange {
+                shouldResetSelectionAfterFilterChange = false
+                selectedIndex = 0
+                selectedItemIds.removeAll()
+                updateSelectedItem()
+            } else if let currentItem = selectedItem,
                let newIndex = newItems.firstIndex(where: { $0.id == currentItem.id }) {
+                // Try to preserve the currently selected item
                 selectedIndex = newIndex
                 // Update selectedItem with fresh data (e.g., toggled isSensitive/isFavorite)
                 selectedItem = newItems[newIndex]
@@ -229,6 +235,11 @@ struct ContentView: View {
         .onChange(of: selectedFilter) { _ in
             // Dismiss shortcuts view when switching tabs
             showShortcuts = false
+            shouldResetSelectionAfterFilterChange = true
+            selectedIndex = 0
+            selectedItem = nil
+            selectedItemIds.removeAll()
+            isScrolledDown = false
             // Recompute when filter tab changes
             recomputeFilteredItems()
         }
@@ -598,7 +609,7 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .id("listview-\(searchText)") // Force refresh when search changes
+                .id("listview-\(searchText)-\(selectedFilter.rawValue)") // Force refresh when search or filter changes
                 .onChange(of: selectedIndex) { newIndex in
                     withAnimation(.easeInOut(duration: 0.2)) {
                         if newIndex < filteredItems.count {
@@ -1650,8 +1661,7 @@ struct ImageModalView: View {
                         }
                     }
                     .onTapGesture(count: 1) {
-                        // Single tap for debugging
-                        print("Image tapped - current scale: \(scale)")
+                        Logging.debug("Image tapped - current scale: \(scale)")
                     }
             }
         }

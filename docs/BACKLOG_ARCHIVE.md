@@ -16,6 +16,54 @@ Use this format for each completed item:
 
 ## Completed Tasks
 
+### 2026-07-04 - Replace ad-hoc update checking with a privacy-conscious update service abstraction
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Moved GitHub release checking into `UpdateService`, added cancellation, rate-limit handling, release URL parsing, and XCTest coverage with a stubbed URL protocol.
+- Verification: `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Respect the hotKeyEnabled preference at runtime
+
+- Source: P1 from `BACKLOG.md`
+- Summary: `MenuBarController` now observes `UserPreferencesManager.hotKeyEnabled`, registers the global hotkey only when enabled, unregisters it immediately when disabled, and cleans up the Carbon event handler.
+- Verification: `xcodebuild build -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Fix Settings links and preference range mismatches
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Settings now opens the MacClipboard repository URL and uses the same 10MB-10GB storage bounds as `UserPreferencesManager`.
+- Verification: `xcodebuild build -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Reset selection focus when switching clipboard filter tabs
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Filter tab changes now reset stale selection and force the list identity to refresh so the next list opens from the top instead of preserving an off-screen item.
+- Verification: `xcodebuild build -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Standardize logging and remove direct print calls from production paths
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Removed the remaining direct debug `print` call from `ContentView`; runtime diagnostics now route through `Logging`.
+- Verification: `xcodebuild build -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Remove dead or duplicate helper code
+
+- Source: P2 from `BACKLOG.md`
+- Summary: Removed the unused duplicate four-character-code helper and deleted unreferenced legacy placeholder source files.
+- Verification: `xcodebuild build -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Add a lightweight manual release smoke-test checklist
+
+- Source: P2 from `BACKLOG.md`
+- Summary: Added `docs/RELEASE_SMOKE_TEST.md` and linked it from the development guide before distribution builds.
+- Verification: Documentation review and `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Document privacy boundaries for clipboard data and update checks
+
+- Source: P2 from `BACKLOG.md`
+- Summary: Updated README and developer docs to clarify local-only clipboard storage and the explicit GitHub update-check network call.
+- Verification: Documentation review and `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
 ### 2026-07-04 - Add automated coverage for sensitive-content detection
 
 - Source: P0 from `BACKLOG.md`

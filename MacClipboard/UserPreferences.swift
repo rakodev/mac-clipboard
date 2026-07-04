@@ -25,6 +25,9 @@ class UserPreferencesManager: ObservableObject {
     static let minClipboardItems = 10
     static let maxClipboardItems = 1000
     static let defaultClipboardItems = 200
+    static let minStorageSize = 10
+    static let maxStorageSize = 10000
+    static let defaultStorageSize = 1000
     
     // Maximum number of clipboard items to keep
     @Published var maxClipboardItems: Int {
@@ -99,7 +102,7 @@ class UserPreferencesManager: ObservableObject {
     // Maximum storage size in MB
     @Published var maxStorageSize: Int {
         didSet {
-            let clampedValue = max(10, min(10000, maxStorageSize)) // 10MB to 10GB
+            let clampedValue = max(Self.minStorageSize, min(Self.maxStorageSize, maxStorageSize))
             if clampedValue != maxStorageSize {
                 maxStorageSize = clampedValue
                 return
@@ -160,7 +163,7 @@ class UserPreferencesManager: ObservableObject {
         // Persistence settings - enabled by default as requested
         self.persistenceEnabled = defaults.object(forKey: Keys.persistenceEnabled) as? Bool ?? true
         self.saveImages = defaults.object(forKey: Keys.saveImages) as? Bool ?? true // Images saved by default
-        self.maxStorageSize = defaults.object(forKey: Keys.maxStorageSize) as? Int ?? 1000 // 1GB default
+        self.maxStorageSize = defaults.object(forKey: Keys.maxStorageSize) as? Int ?? Self.defaultStorageSize
         self.persistenceDays = defaults.object(forKey: Keys.persistenceDays) as? Int ?? 60 // 60 days default
 
         // Keyboard shortcuts - enabled by default
@@ -180,7 +183,7 @@ class UserPreferencesManager: ObservableObject {
         autoStartEnabled = true
         persistenceEnabled = true
         saveImages = true
-        maxStorageSize = 1000
+        maxStorageSize = Self.defaultStorageSize
         persistenceDays = 60
         shortcutsEnabled = true
         autoDetectSensitiveData = false

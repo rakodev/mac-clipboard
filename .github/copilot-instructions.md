@@ -6,12 +6,12 @@ Purpose: A native macOS clipboard manager that tracks clipboard history with men
 - Always-available clipboard history accessible via menu bar and global hotkey (Cmd+Shift+V)
 - Support multiple content types: text, images, files
 - Fast, responsive interface with search and preview capabilities
-- Lightweight, privacy-focused design (no persistence, no network)
+- Lightweight, privacy-focused design with local persistence and explicit update checks only
 - Native macOS integration with minimal resource usage
 
 ## Non-Goals
 - No cloud sync or backup functionality  
-- No persistent storage (privacy by design)
+- No cloud or remote clipboard storage (privacy by design)
 - No advanced text editing or manipulation
 - No cross-platform support
 - No complex configuration or plugins
@@ -56,8 +56,9 @@ Purpose: A native macOS clipboard manager that tracks clipboard history with men
 - Graceful degradation if permission denied
 
 ## Privacy & Security Considerations
-- No network access or external communication
-- No persistent storage - history cleared on app quit
+- Clipboard data stays local and is never uploaded
+- The only network path is the explicit GitHub release update check
+- Persistent storage is local, configurable, and can be disabled by the user
 - Minimal clipboard access pattern - only on detected changes
 - Accessibility permission only for hotkey functionality
 - In-memory history only, no disk writes

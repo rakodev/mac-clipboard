@@ -1,12 +1,16 @@
 import SwiftUI
 import AppKit
 import Carbon
+import Combine
 
 class MenuBarController: NSObject, ObservableObject {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var clipboardMonitor: ClipboardMonitor
     private var hotKeyRef: EventHotKeyRef?
+    private var hotKeyEventHandlerRef: EventHandlerRef?
+    private var hotKeyPreferenceCancellable: AnyCancellable?
+    private let updateService: UpdateService
     private var previousApplication: NSRunningApplication?
     private var didAttemptAXPrompt = false
     private var clickOutsideMonitor: Any?
@@ -23,12 +27,14 @@ class MenuBarController: NSObject, ObservableObject {
     
     private lazy var hotKeyID: EventHotKeyID = EventHotKeyID(signature: fourCharCode("ClpM"), id: 1)
     
-    init(clipboardMonitor: ClipboardMonitor) {
+    init(clipboardMonitor: ClipboardMonitor, updateService: UpdateService = .shared) {
         self.clipboardMonitor = clipboardMonitor
+        self.updateService = updateService
     super.init()
         setupStatusItem()
         setupPopover()
-        setupGlobalHotkey()
+        setupGlobalHotkeyPreferenceObserver()
+        updateGlobalHotkeyRegistration()
         
         // Listen for app activation to ensure button remains responsive
         NotificationCenter.default.addObserver(
@@ -216,30 +222,13 @@ class MenuBarController: NSObject, ObservableObject {
 
     @objc func checkForUpdates() {
         let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
-        let repoURL = "https://api.github.com/repos/rakodev/mac-clipboard/releases/latest"
 
-        guard let url = URL(string: repoURL) else { return }
-
-        var request = URLRequest(url: url)
-        request.setValue("application/vnd.github.v3+json", forHTTPHeaderField: "Accept")
-
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        updateService.checkForUpdates(currentVersion: currentVersion) { [weak self] result in
             DispatchQueue.main.async {
-                if let error = error {
-                    self.showUpdateAlert(title: "Update Check Failed", message: "Could not check for updates: \(error.localizedDescription)")
-                    return
-                }
+                guard let self else { return }
 
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let tagName = json["tag_name"] as? String else {
-                    self.showUpdateAlert(title: "Update Check Failed", message: "Could not parse update information.")
-                    return
-                }
-
-                let latestVersion = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
-
-                if self.isVersion(latestVersion, newerThan: currentVersion) {
+                switch result {
+                case .success(.updateAvailable(let currentVersion, let latestVersion, let downloadURL)):
                     let alert = NSAlert()
                     alert.messageText = "Update Available"
                     alert.informativeText = "A new version (v\(latestVersion)) is available. You are currently running v\(currentVersion)."
@@ -251,15 +240,20 @@ class MenuBarController: NSObject, ObservableObject {
                     let response = alert.runModal()
 
                     if response == .alertFirstButtonReturn {
-                        if let downloadURL = URL(string: "https://github.com/rakodev/mac-clipboard/releases/latest") {
-                            NSWorkspace.shared.open(downloadURL)
-                        }
+                        NSWorkspace.shared.open(downloadURL)
                     }
-                } else {
+
+                case .success(.upToDate(let currentVersion)):
                     self.showUpdateAlert(title: "You're Up to Date", message: "MacClipboard v\(currentVersion) is the latest version.")
+
+                case .failure(.cancelled):
+                    return
+
+                case .failure(let error):
+                    self.showUpdateAlert(title: "Update Check Failed", message: error.localizedDescription)
                 }
             }
-        }.resume()
+        }
     }
 
     private func showUpdateAlert(title: String, message: String) {
@@ -270,19 +264,6 @@ class MenuBarController: NSObject, ObservableObject {
         alert.addButton(withTitle: "OK")
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
-    }
-
-    private func isVersion(_ v1: String, newerThan v2: String) -> Bool {
-        let components1 = v1.split(separator: ".").compactMap { Int($0) }
-        let components2 = v2.split(separator: ".").compactMap { Int($0) }
-
-        for i in 0..<max(components1.count, components2.count) {
-            let c1 = i < components1.count ? components1[i] : 0
-            let c2 = i < components2.count ? components2[i] : 0
-            if c1 > c2 { return true }
-            if c1 < c2 { return false }
-        }
-        return false
     }
 
     @objc func showSettings() {
@@ -475,32 +456,74 @@ class MenuBarController: NSObject, ObservableObject {
         }
     }
 
-    private func setupGlobalHotkey() {
-        // Register Cmd+Shift+V hotkey
-        let hotKeyCode: UInt32 = 9 // 'V' key
-        let modifierKeys: UInt32 = UInt32(cmdKey | shiftKey)
-        
+    private func setupGlobalHotkeyPreferenceObserver() {
+        hotKeyPreferenceCancellable = UserPreferencesManager.shared.$hotKeyEnabled
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.updateGlobalHotkeyRegistration()
+            }
+    }
+
+    private func updateGlobalHotkeyRegistration() {
+        if UserPreferencesManager.shared.hotKeyEnabled {
+            registerGlobalHotkeyIfNeeded()
+        } else {
+            unregisterGlobalHotkey()
+        }
+    }
+
+    private func installGlobalHotkeyHandlerIfNeeded() {
+        guard hotKeyEventHandlerRef == nil else { return }
+
         var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: OSType(kEventHotKeyPressed))
-        
-        _ = InstallEventHandler(GetApplicationEventTarget(), { (_, event, userData) -> OSStatus in
+        var handlerRef: EventHandlerRef?
+
+        let installResult = InstallEventHandler(GetApplicationEventTarget(), { (_, event, userData) -> OSStatus in
             guard let userData = userData else { return OSStatus(eventNotHandledErr) }
             let menuBarController = Unmanaged<MenuBarController>.fromOpaque(userData).takeUnretainedValue()
-            
+
             var hotKeyID = EventHotKeyID()
             GetEventParameter(event, OSType(kEventParamDirectObject), OSType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
-            
+
             if hotKeyID.id == menuBarController.hotKeyID.id {
                 DispatchQueue.main.async {
                     menuBarController.togglePopover()
                 }
             }
-            
+
             return noErr
-        }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), nil)
-        
+        }, 1, &eventType, Unmanaged.passUnretained(self).toOpaque(), &handlerRef)
+
+        if installResult == noErr {
+            hotKeyEventHandlerRef = handlerRef
+        } else {
+            Logging.info("Failed to install global hotkey handler: \(installResult)")
+        }
+    }
+
+    private func registerGlobalHotkeyIfNeeded() {
+        guard hotKeyRef == nil else { return }
+
+        // Register Cmd+Shift+V hotkey
+        let hotKeyCode: UInt32 = 9 // 'V' key
+        let modifierKeys: UInt32 = UInt32(cmdKey | shiftKey)
+
+        installGlobalHotkeyHandlerIfNeeded()
+        guard hotKeyEventHandlerRef != nil else { return }
+
         let registerResult = RegisterEventHotKey(hotKeyCode, modifierKeys, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
-        
-        _ = registerResult
+
+        if registerResult != noErr {
+            hotKeyRef = nil
+            Logging.info("Failed to register global hotkey: \(registerResult)")
+        }
+    }
+
+    private func unregisterGlobalHotkey() {
+        guard let hotKeyRef else { return }
+        UnregisterEventHotKey(hotKeyRef)
+        self.hotKeyRef = nil
     }
     
     // MARK: - Click Outside Monitoring
@@ -538,9 +561,13 @@ class MenuBarController: NSObject, ObservableObject {
     
     func cleanup() {
         stopClickOutsideMonitoring()
-        if let hotKeyRef = hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        unregisterGlobalHotkey()
+        if let hotKeyEventHandlerRef {
+            RemoveEventHandler(hotKeyEventHandlerRef)
+            self.hotKeyEventHandlerRef = nil
         }
+        updateService.cancel()
+        hotKeyPreferenceCancellable = nil
         NotificationCenter.default.removeObserver(self)
         statusItem = nil
         popover = nil
@@ -549,15 +576,5 @@ class MenuBarController: NSObject, ObservableObject {
     deinit {
         cleanup()
     }
-}
-
-private func fourCharCodeFrom(_ string: String) -> FourCharCode {
-    let utf8 = string.utf8
-    var result: FourCharCode = 0
-    for (i, byte) in utf8.enumerated() {
-        guard i < 4 else { break }
-        result = result << 8 + FourCharCode(byte)
-    }
-    return result
 }
 

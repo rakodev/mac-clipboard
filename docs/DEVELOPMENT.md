@@ -31,6 +31,8 @@ make release   # Build, sign, notarize, and create GitHub release
 make clean     # Clean build artifacts
 ```
 
+Before creating a distribution build, run the [release smoke-test checklist](RELEASE_SMOKE_TEST.md).
+
 ## Development Signing Setup
 
 macOS requires accessibility permissions for the global hotkey and auto-paste features. During development, each rebuild normally creates a new code signature, which invalidates the permission and forces you to re-grant it.
@@ -188,6 +190,12 @@ Clipboard history persisted to `~/Library/Application Support/MacClipboard` usin
 * Regular items: Subject to retention settings (default 60 days)
 * Favorites: Kept indefinitely
 * Images: Optionally stored to disk for faster loading
+
+### Privacy and Network Boundaries
+
+Clipboard content is local-only. The app does not upload clipboard history, notes, images, or file paths. Persistent clipboard data lives in the app support directory and follows the user's retention settings.
+
+The only retained network path is the explicit update check. When the user chooses "Check for Updates", `UpdateService` requests the latest release metadata from the GitHub Releases API and opens the release page only if the user chooses to download an available update. No clipboard data is included in that request.
 
 ### UI Framework
 
