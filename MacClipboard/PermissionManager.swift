@@ -47,7 +47,7 @@ class PermissionManager: ObservableObject {
     
     /// Request accessibility permission with prompt
     func requestPermission() {
-    Logging.debug("[PermissionManager] Requesting accessibility permission")
+        Logging.debug("[PermissionManager] Requesting accessibility permission")
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
         let result = AXIsProcessTrustedWithOptions(options)
         
@@ -56,21 +56,21 @@ class PermissionManager: ObservableObject {
             self.checkPermission()
         }
         
-    Logging.debug("[PermissionManager] Permission request result: \(result)")
+        Logging.debug("[PermissionManager] Permission request result: \(result)")
     }
     
     /// Force a complete permission reset - shows system prompt
     func forcePermissionPrompt() {
-    Logging.debug("[PermissionManager] Forcing accessibility permission prompt")
+        Logging.debug("[PermissionManager] Forcing accessibility permission prompt")
         
         // First check current status
         let currentTrusted = AXIsProcessTrusted()
-    Logging.debug("[PermissionManager] Current AXIsProcessTrusted: \(currentTrusted)")
+        Logging.debug("[PermissionManager] Current AXIsProcessTrusted: \(currentTrusted)")
         
         // Always show the prompt to ensure this specific binary gets permission
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
         let promptResult = AXIsProcessTrustedWithOptions(options)
-    Logging.debug("[PermissionManager] Force prompt result: \(promptResult)")
+        Logging.debug("[PermissionManager] Force prompt result: \(promptResult)")
         
         // Check again after a delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

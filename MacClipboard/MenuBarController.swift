@@ -30,7 +30,7 @@ class MenuBarController: NSObject, ObservableObject {
     init(clipboardMonitor: ClipboardMonitor, updateService: UpdateService = .shared) {
         self.clipboardMonitor = clipboardMonitor
         self.updateService = updateService
-    super.init()
+        super.init()
         setupStatusItem()
         setupPopover()
         setupGlobalHotkeyPreferenceObserver()
@@ -75,6 +75,8 @@ class MenuBarController: NSObject, ObservableObject {
             button.title = "📋"
         }
 
+        button.toolTip = L10n.string("MacClipboard", comment: "Menu bar button accessibility label")
+        button.setAccessibilityLabel(L10n.string("MacClipboard", comment: "Menu bar button accessibility label"))
         button.imagePosition = .imageOnly
         button.appearsDisabled = false
         button.target = nil
@@ -101,8 +103,6 @@ class MenuBarController: NSObject, ObservableObject {
 
         if let button = statusItem?.button {
             configureStatusButton(button)
-        } else {
-            
         }
     }
     
@@ -173,35 +173,35 @@ class MenuBarController: NSObject, ObservableObject {
     private func showContextMenu() {
         let menu = NSMenu()
         
-        let showClipboardItem = NSMenuItem(title: "Show Clipboard", action: #selector(showPopover), keyEquivalent: "")
+        let showClipboardItem = NSMenuItem(title: L10n.string("Show Clipboard", comment: "Menu item title"), action: #selector(showPopover), keyEquivalent: "")
         showClipboardItem.target = self
         menu.addItem(showClipboardItem)
         
         menu.addItem(NSMenuItem.separator())
         
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(showSettings), keyEquivalent: ",")
+        let settingsItem = NSMenuItem(title: L10n.string("Settings...", comment: "Menu item title"), action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
         
         menu.addItem(NSMenuItem.separator())
         
-        let aboutItem = NSMenuItem(title: "About MacClipboard", action: #selector(showAbout), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: L10n.string("About MacClipboard", comment: "Menu item title"), action: #selector(showAbout), keyEquivalent: "")
         aboutItem.target = self
         menu.addItem(aboutItem)
 
-        let updateItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "")
+        let updateItem = NSMenuItem(title: L10n.string("Check for Updates...", comment: "Menu item title"), action: #selector(checkForUpdates), keyEquivalent: "")
         updateItem.target = self
         menu.addItem(updateItem)
 
         menu.addItem(NSMenuItem.separator())
 
-        let clearItem = NSMenuItem(title: "Clear History", action: #selector(clearHistory), keyEquivalent: "")
+        let clearItem = NSMenuItem(title: L10n.string("Clear History", comment: "Menu item title"), action: #selector(clearHistory), keyEquivalent: "")
         clearItem.target = self
         menu.addItem(clearItem)
         
         menu.addItem(NSMenuItem.separator())
         
-        let quitItem = NSMenuItem(title: "Quit Clipboard Manager", action: #selector(quit), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: L10n.string("Quit Clipboard Manager", comment: "Menu item title"), action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
         
@@ -215,7 +215,8 @@ class MenuBarController: NSObject, ObservableObject {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
         options[.applicationName] = "MacClipboard"
-        options[.applicationVersion] = "Version \(version) (Build \(build))"
+        let versionFormat = L10n.string("Version %@ (Build %@)", comment: "About panel version and build format")
+        options[.applicationVersion] = String(format: versionFormat, version, build)
         NSApp.orderFrontStandardAboutPanel(options: options)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -230,11 +231,12 @@ class MenuBarController: NSObject, ObservableObject {
                 switch result {
                 case .success(.updateAvailable(let currentVersion, let latestVersion, let downloadURL)):
                     let alert = NSAlert()
-                    alert.messageText = "Update Available"
-                    alert.informativeText = "A new version (v\(latestVersion)) is available. You are currently running v\(currentVersion)."
+                    alert.messageText = L10n.string("Update Available", comment: "Update available alert title")
+                    let updateFormat = L10n.string("A new version (v%@) is available. You are currently running v%@.", comment: "Update available alert message")
+                    alert.informativeText = String(format: updateFormat, latestVersion, currentVersion)
                     alert.alertStyle = .informational
-                    alert.addButton(withTitle: "Download")
-                    alert.addButton(withTitle: "Later")
+                    alert.addButton(withTitle: L10n.string("Download", comment: "Update alert download button title"))
+                    alert.addButton(withTitle: L10n.string("Later", comment: "Update alert dismiss button title"))
 
                     NSApp.activate(ignoringOtherApps: true)
                     let response = alert.runModal()
@@ -244,7 +246,11 @@ class MenuBarController: NSObject, ObservableObject {
                     }
 
                 case .success(.upToDate(let currentVersion)):
-                    self.showUpdateAlert(title: "You're Up to Date", message: "MacClipboard v\(currentVersion) is the latest version.")
+                    let messageFormat = L10n.string("MacClipboard v%@ is the latest version.", comment: "No update available alert message")
+                    self.showUpdateAlert(
+                        title: L10n.string("You're Up to Date", comment: "No update available alert title"),
+                        message: String(format: messageFormat, currentVersion)
+                    )
 
                 case .failure(.cancelled):
                     return
@@ -261,7 +267,7 @@ class MenuBarController: NSObject, ObservableObject {
         alert.messageText = title
         alert.informativeText = message
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: L10n.string("OK", comment: "Standard confirmation button title"))
         NSApp.activate(ignoringOtherApps: true)
         alert.runModal()
     }
@@ -294,7 +300,7 @@ class MenuBarController: NSObject, ObservableObject {
             defer: false
         )
         
-        window.title = "MacClipboard Settings"
+        window.title = L10n.string("MacClipboard Settings", comment: "Settings window title")
         window.contentView = NSHostingView(rootView: settingsView)
         window.center()
         window.isReleasedWhenClosed = false

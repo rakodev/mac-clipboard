@@ -1,6 +1,12 @@
 import SwiftUI
 import ApplicationServices
 
+enum L10n {
+    static func string(_ key: String, comment: String) -> String {
+        NSLocalizedString(key, comment: comment)
+    }
+}
+
 @main
 struct MacClipboardApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -55,11 +61,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         didShowPersistenceRecoveryAlert = true
 
         let alert = NSAlert()
-        alert.messageText = "Clipboard History Storage Issue"
-        alert.informativeText = "\(message)\n\nYou can continue using temporary storage, or reset saved history files and quit. Relaunching after reset creates a fresh history store."
+        alert.messageText = L10n.string("Clipboard History Storage Issue", comment: "Persistence recovery alert title")
+        let recoveryFormat = L10n.string("%@\n\nYou can continue using temporary storage, or reset saved history files and quit. Relaunching after reset creates a fresh history store.", comment: "Persistence recovery alert message")
+        alert.informativeText = String(format: recoveryFormat, message)
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "Reset Saved History and Quit")
-        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: L10n.string("Reset Saved History and Quit", comment: "Persistence recovery destructive button title"))
+        alert.addButton(withTitle: L10n.string("Continue", comment: "Persistence recovery continue button title"))
 
         NSApp.activate(ignoringOtherApps: true)
         let response = alert.runModal()
@@ -69,24 +76,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.terminate(nil)
             } else {
                 let failureAlert = NSAlert()
-                failureAlert.messageText = "Could Not Reset Clipboard History"
-                failureAlert.informativeText = "MacClipboard could not remove the saved history files automatically. You can continue with temporary storage for this session."
+                failureAlert.messageText = L10n.string("Could Not Reset Clipboard History", comment: "Persistence reset failure alert title")
+                failureAlert.informativeText = L10n.string("MacClipboard could not remove the saved history files automatically. You can continue with temporary storage for this session.", comment: "Persistence reset failure alert message")
                 failureAlert.alertStyle = .critical
-                failureAlert.addButton(withTitle: "OK")
+                failureAlert.addButton(withTitle: L10n.string("OK", comment: "Standard confirmation button title"))
                 failureAlert.runModal()
             }
         }
     }
     
     private func handleAccessibilityPermissions() {
-    let trusted = AXIsProcessTrusted()
+        let trusted = AXIsProcessTrusted()
         
         if trusted { return }
 
         // Always show prompt for permission when missing
         
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-    let promptResult = AXIsProcessTrustedWithOptions(options)
+        let promptResult = AXIsProcessTrustedWithOptions(options)
         
         if !promptResult {
             // Show onboarding window as backup
@@ -107,7 +114,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                               styleMask: [.titled, .closable, .fullSizeContentView],
                               backing: .buffered, defer: false)
         window.center()
-        window.title = "Enable Accessibility"
+        window.title = L10n.string("Enable Accessibility", comment: "Accessibility onboarding window title")
         window.isReleasedWhenClosed = false
         window.level = .floating
         window.contentView = NSHostingView(rootView: contentView)

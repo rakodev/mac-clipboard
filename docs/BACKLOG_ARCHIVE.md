@@ -16,6 +16,24 @@ Use this format for each completed item:
 
 ## Completed Tasks
 
+### 2026-07-04 - Finish splitting ContentView preview and destructive actions
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Extracted compact preview rendering into `ClipboardCompactPreviewView`, moved deletion confirmation alerts into a dedicated view modifier, and added unit coverage for deletion confirmation copy/state.
+- Verification: `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Improve accessibility and localization readiness for user-facing strings
+
+- Source: P1 from `BACKLOG.md`
+- Summary: Added a shared `L10n` wrapper for AppKit menus, alerts, window titles, update messages, and update errors; kept SwiftUI filter/empty-state text on localized keys; added accessibility labels for key icon-only clipboard controls and the menu bar button.
+- Verification: `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
+### 2026-07-04 - Normalize formatting and indentation in app startup and menu-bar code
+
+- Source: P2 from `BACKLOG.md`
+- Summary: Fixed inconsistent indentation in startup/accessibility permission code and removed an empty status-item branch in menu-bar setup.
+- Verification: `xcodebuild test -project MacClipboard.xcodeproj -scheme MacClipboard -configuration Debug -destination 'platform=macOS'`
+
 ### 2026-07-04 - Replace ad-hoc update checking with a privacy-conscious update service abstraction
 
 - Source: P1 from `BACKLOG.md`

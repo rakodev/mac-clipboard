@@ -16,16 +16,17 @@ enum UpdateCheckError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .cancelled:
-            return "Update check was cancelled."
+            return L10n.string("Update check was cancelled.", comment: "Update check cancellation error")
         case .invalidResponse:
-            return "The update server returned an unexpected response."
+            return L10n.string("The update server returned an unexpected response.", comment: "Update check invalid response error")
         case .invalidPayload:
-            return "Could not parse update information."
+            return L10n.string("Could not parse update information.", comment: "Update check invalid payload error")
         case .rateLimited(let resetDate):
             if let resetDate {
-                return "GitHub rate-limited update checks. Try again after \(resetDate.formatted(date: .omitted, time: .shortened))."
+                let format = L10n.string("GitHub rate-limited update checks. Try again after %@.", comment: "Update check rate limited error with reset time")
+                return String(format: format, resetDate.formatted(date: .omitted, time: .shortened))
             }
-            return "GitHub rate-limited update checks. Try again later."
+            return L10n.string("GitHub rate-limited update checks. Try again later.", comment: "Update check rate limited error without reset time")
         case .requestFailed(let message):
             return message
         }

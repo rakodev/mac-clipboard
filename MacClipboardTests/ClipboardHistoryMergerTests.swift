@@ -124,3 +124,60 @@ final class ClipboardHistoryMergerTests: XCTestCase {
         return image
     }
 }
+
+final class ClipboardFilterTests: XCTestCase {
+    func testSelectedFilterLimitsItemsByTab() {
+        let favorite = ClipboardItem(id: UUID(), content: "favorite", type: .text, timestamp: Date(), isFavorite: true)
+        let hidden = ClipboardItem(id: UUID(), content: "hidden", type: .text, timestamp: Date(), isSensitive: true)
+        let image = ClipboardItem(id: UUID(), content: NSImage(size: NSSize(width: 4, height: 4)), type: .image, timestamp: Date())
+
+        XCTAssertEqual(ClipboardFilter.filteredItems(from: [favorite, hidden, image], selectedFilter: .favorites, searchText: ""), [favorite])
+        XCTAssertEqual(ClipboardFilter.filteredItems(from: [favorite, hidden, image], selectedFilter: .hidden, searchText: ""), [hidden])
+        XCTAssertEqual(ClipboardFilter.filteredItems(from: [favorite, hidden, image], selectedFilter: .images, searchText: ""), [image])
+    }
+
+    func testSearchMatchesPreviewFullTextAndNotesWithPrioritySort() {
+        let plainMatch = ClipboardItem(id: UUID(), content: "alpha plain", type: .text, timestamp: Date())
+        let favoriteMatch = ClipboardItem(id: UUID(), content: "alpha favorite", type: .text, timestamp: Date(), isFavorite: true)
+        let noteMatch = ClipboardItem(id: UUID(), content: "unrelated", type: .text, timestamp: Date(), note: "alpha note")
+
+        let result = ClipboardFilter.filteredItems(
+            from: [plainMatch, noteMatch, favoriteMatch],
+            selectedFilter: .all,
+            searchText: "alpha"
+        )
+
+        XCTAssertEqual(result, [favoriteMatch, noteMatch, plainMatch])
+    }
+}
+
+final class ClipboardDeletionConfirmationContentTests: XCTestCase {
+    func testDeleteConfirmationContentForCurrentOrAllMode() {
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.deleteTitle(selectedCount: 0), "Delete Items")
+        XCTAssertEqual(
+            ClipboardDeletionConfirmationContent.deleteMessage(selectedCount: 0),
+            "Choose to delete the currently previewed item or clear all history."
+        )
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.deleteAllChoiceTitle(itemCount: 42), "Delete All 42 Items...")
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.deleteAllTitle(itemCount: 42), "Delete All 42 Items?")
+        XCTAssertEqual(
+            ClipboardDeletionConfirmationContent.deleteAllMessage(itemCount: 42),
+            "Are you sure? This will permanently delete ALL 42 items from your clipboard history. This action cannot be undone."
+        )
+    }
+
+    func testDeleteConfirmationContentForSelectedItems() {
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.deleteTitle(selectedCount: 1), "Delete Selected Items?")
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.selectedDeleteButtonTitle(selectedCount: 1), "Delete 1 Item")
+        XCTAssertEqual(
+            ClipboardDeletionConfirmationContent.deleteMessage(selectedCount: 1),
+            "This will permanently delete 1 selected item. This action cannot be undone."
+        )
+
+        XCTAssertEqual(ClipboardDeletionConfirmationContent.selectedDeleteButtonTitle(selectedCount: 3), "Delete 3 Items")
+        XCTAssertEqual(
+            ClipboardDeletionConfirmationContent.deleteMessage(selectedCount: 3),
+            "This will permanently delete 3 selected items. This action cannot be undone."
+        )
+    }
+}

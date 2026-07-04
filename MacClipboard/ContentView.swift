@@ -7,6 +7,54 @@ enum FilterTab: String, CaseIterable {
     case favorites = "Favorites"
     case images = "Images"
     case hidden = "Hidden"
+
+    var titleKey: LocalizedStringKey {
+        switch self {
+        case .all:
+            return "All"
+        case .favorites:
+            return "Favorites"
+        case .images:
+            return "Images"
+        case .hidden:
+            return "Hidden"
+        }
+    }
+}
+
+struct ClipboardFilter {
+    static func filteredItems(
+        from items: [ClipboardItem],
+        selectedFilter: FilterTab,
+        searchText: String
+    ) -> [ClipboardItem] {
+        var filtered: [ClipboardItem]
+        switch selectedFilter {
+        case .all:
+            filtered = items
+        case .favorites:
+            filtered = items.filter { $0.isFavorite }
+        case .images:
+            filtered = items.filter { $0.type == .image }
+        case .hidden:
+            filtered = items.filter { $0.isSensitive }
+        }
+
+        guard !searchText.isEmpty else { return filtered }
+
+        filtered = filtered.filter { item in
+            let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchText)
+            let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchText)
+            let noteMatch = item.note?.localizedCaseInsensitiveContains(searchText) ?? false
+            return previewMatch || fullTextMatch || noteMatch
+        }
+
+        return filtered.sorted { item1, item2 in
+            let score1 = (item1.isFavorite ? 2 : 0) + ((item1.note?.isEmpty == false) ? 1 : 0)
+            let score2 = (item2.isFavorite ? 2 : 0) + ((item2.note?.isEmpty == false) ? 1 : 0)
+            return score1 > score2
+        }
+    }
 }
 
 struct ContentView: View {
@@ -58,35 +106,11 @@ struct ContentView: View {
         let searchQuery = debouncedSearchText
 
         filterTask = Task.detached(priority: .userInitiated) {
-            // Filter by selected tab
-            var filtered: [ClipboardItem]
-            switch filter {
-            case .all:
-                filtered = items
-            case .favorites:
-                filtered = items.filter { $0.isFavorite }
-            case .images:
-                filtered = items.filter { $0.type == .image }
-            case .hidden:
-                filtered = items.filter { $0.isSensitive }
-            }
-
-            // Then filter by search text
-            if !searchQuery.isEmpty {
-                filtered = filtered.filter { item in
-                    let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchQuery)
-                    let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchQuery)
-                    let noteMatch = item.note?.localizedCaseInsensitiveContains(searchQuery) ?? false
-                    return previewMatch || fullTextMatch || noteMatch
-                }
-
-                // Sort search results: favorites first, then items with notes, then rest
-                filtered = filtered.sorted { item1, item2 in
-                    let score1 = (item1.isFavorite ? 2 : 0) + ((item1.note?.isEmpty == false) ? 1 : 0)
-                    let score2 = (item2.isFavorite ? 2 : 0) + ((item2.note?.isEmpty == false) ? 1 : 0)
-                    return score1 > score2
-                }
-            }
+            let filtered = ClipboardFilter.filteredItems(
+                from: items,
+                selectedFilter: filter,
+                searchText: searchQuery
+            )
 
             // Check if cancelled before updating UI
             let finalResult = filtered
@@ -139,9 +163,9 @@ struct ContentView: View {
             filterPickerView
 
             if showShortcuts {
-                shortcutsView
+                ShortcutReferenceView()
             } else if filteredItems.isEmpty {
-                emptyStateView
+                ClipboardEmptyStateView(selectedFilter: selectedFilter)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 if let selectedItem = selectedItem {
@@ -150,7 +174,52 @@ struct ContentView: View {
                         clipboardListView
                             .frame(width: 260)
                         Divider()
-                        compactPreviewView(for: selectedItem)
+                        ClipboardCompactPreviewView(
+                            item: selectedItem,
+                            isRevealed: revealedSensitiveIds.contains(selectedItem.id),
+                            loadedImage: loadedImages[selectedItem.id],
+                            isLoadingImage: loadingImageIds.contains(selectedItem.id),
+                            editingNote: $editingNote,
+                            isNoteFocused: $isNoteFocused,
+                            showImageModal: $showImageModal,
+                            onCopy: {
+                                clipboardMonitor.copyToClipboard(selectedItem)
+                                menuBarController.hidePopoverAndActivatePreviousApp()
+                            },
+                            onToggleFavorite: {
+                                clipboardMonitor.toggleFavorite(selectedItem)
+                                if var updatedItem = self.selectedItem {
+                                    updatedItem.isFavorite.toggle()
+                                    self.selectedItem = updatedItem
+                                }
+                            },
+                            onToggleSensitive: {
+                                clipboardMonitor.toggleSensitive(selectedItem)
+                                if var updatedItem = self.selectedItem {
+                                    updatedItem.isSensitive.toggle()
+                                    if updatedItem.isAutoSensitive || updatedItem.isPasswordLike {
+                                        updatedItem.isManuallyUnsensitive = !updatedItem.isSensitive
+                                    }
+                                    self.selectedItem = updatedItem
+                                }
+                            },
+                            onToggleReveal: {
+                                if revealedSensitiveIds.contains(selectedItem.id) {
+                                    revealedSensitiveIds.remove(selectedItem.id)
+                                } else {
+                                    revealedSensitiveIds.insert(selectedItem.id)
+                                }
+                            },
+                            onReveal: {
+                                revealedSensitiveIds.insert(selectedItem.id)
+                            },
+                            onLoadImage: {
+                                loadLazyImage(selectedItem)
+                            },
+                            onSaveNote: {
+                                saveNote(for: selectedItem)
+                            }
+                        )
                             .frame(width: 259)
                     }
                 } else {
@@ -266,48 +335,22 @@ struct ContentView: View {
         .background(KeyEventHandler { keyEvent in
             handleKeyEvent(keyEvent)
         })
-        .alert(
-            selectedItemIds.isEmpty ? "Delete Items" : "Delete Selected Items?",
-            isPresented: $showClearConfirmation
-        ) {
-            if selectedItemIds.isEmpty {
-                // No multi-selection: offer to delete current item or all
-                Button("Cancel", role: .cancel) { }
-                if let currentItem = selectedItem {
-                    Button("Delete Current Item", role: .destructive) {
-                        clipboardMonitor.deleteItems(withIds: [currentItem.id])
-                    }
-                }
-                Button("Delete All \(clipboardMonitor.clipboardHistory.count) Items...") {
-                    // Show second confirmation for delete all
-                    showDeleteAllConfirmation = true
-                }
-            } else {
-                // Multi-selection: delete selected items
-                Button("Cancel", role: .cancel) { }
-                Button("Delete \(selectedItemIds.count) Item\(selectedItemIds.count == 1 ? "" : "s")", role: .destructive) {
-                    clipboardMonitor.deleteItems(withIds: selectedItemIds)
-                    selectedItemIds.removeAll()
-                }
-            }
-        } message: {
-            if selectedItemIds.isEmpty {
-                Text("Choose to delete the currently previewed item or clear all history.")
-            } else {
-                Text("This will permanently delete \(selectedItemIds.count) selected item\(selectedItemIds.count == 1 ? "" : "s"). This action cannot be undone.")
-            }
-        }
-        .alert(
-            "Delete All \(clipboardMonitor.clipboardHistory.count) Items?",
-            isPresented: $showDeleteAllConfirmation
-        ) {
-            Button("Cancel", role: .cancel) { }
-            Button("Yes, Delete All", role: .destructive) {
+        .clipboardDeletionConfirmation(
+            selectedItem: selectedItem,
+            selectedItemIds: $selectedItemIds,
+            itemCount: clipboardMonitor.clipboardHistory.count,
+            showDeleteConfirmation: $showClearConfirmation,
+            showDeleteAllConfirmation: $showDeleteAllConfirmation,
+            onDeleteCurrent: { item in
+                clipboardMonitor.deleteItems(withIds: [item.id])
+            },
+            onDeleteSelected: { ids in
+                clipboardMonitor.deleteItems(withIds: ids)
+            },
+            onDeleteAll: {
                 clipboardMonitor.clearHistory()
             }
-        } message: {
-            Text("Are you sure? This will permanently delete ALL \(clipboardMonitor.clipboardHistory.count) items from your clipboard history. This action cannot be undone.")
-        }
+        )
     }
 
     private var permissionBanner: some View {
@@ -356,6 +399,7 @@ struct ContentView: View {
                     .foregroundColor(showShortcuts ? .accentColor : .secondary)
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Keyboard Shortcuts")
             .help("Keyboard Shortcuts (⌘/)")
 
             Button(action: {
@@ -365,6 +409,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Settings")
             .help("Settings")
             
             Button(action: {
@@ -374,6 +419,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Clear History")
             .help("Clear History")
             
             Button(action: {
@@ -383,6 +429,7 @@ struct ContentView: View {
                     .foregroundColor(.secondary)
             }
             .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel("Close")
             .help("Close")
         }
         .padding(.horizontal, 12)
@@ -413,149 +460,14 @@ struct ContentView: View {
     private var filterPickerView: some View {
         Picker("", selection: $selectedFilter) {
             ForEach(FilterTab.allCases, id: \.self) { tab in
-                Text(tab.rawValue).tag(tab)
+                Text(tab.titleKey).tag(tab)
             }
         }
         .pickerStyle(.segmented)
         .labelsHidden()
+        .accessibilityLabel("Clipboard Filter")
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
-    }
-
-    private var emptyStateView: some View {
-        VStack(spacing: 16) {
-            Image(systemName: emptyStateIcon)
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
-
-            Text(emptyStateTitle)
-                .font(.title2)
-                .foregroundColor(.secondary)
-
-            Text(emptyStateSubtitle)
-                .font(.body)
-                .foregroundColor(Color.secondary)
-
-            if let shortcut = emptyStateShortcut {
-                Text(shortcut)
-                    .font(.caption)
-                    .foregroundColor(.secondary.opacity(0.7))
-                    .padding(.top, 4)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyStateIcon: String {
-        switch selectedFilter {
-        case .all:
-            return "doc.on.clipboard"
-        case .favorites:
-            return "star"
-        case .images:
-            return "photo"
-        case .hidden:
-            return "eye.slash"
-        }
-    }
-
-    private var emptyStateTitle: String {
-        switch selectedFilter {
-        case .all:
-            return "No clipboard history"
-        case .favorites:
-            return "No favorites"
-        case .images:
-            return "No images"
-        case .hidden:
-            return "No hidden items"
-        }
-    }
-
-    private var emptyStateSubtitle: String {
-        switch selectedFilter {
-        case .all:
-            return "Copy something to get started"
-        case .favorites:
-            return "Star items to keep them permanently — favorites are never auto-deleted"
-        case .images:
-            return "Copy an image to see it here"
-        case .hidden:
-            return "Mark items as sensitive to hide them"
-        }
-    }
-
-    private var emptyStateShortcut: String? {
-        switch selectedFilter {
-        case .all:
-            return nil
-        case .favorites:
-            return "⌘D to toggle favorite"
-        case .images:
-            return "⌘Z to zoom images"
-        case .hidden:
-            return "⌘H to toggle sensitive"
-        }
-    }
-    
-    // MARK: - Shortcuts Reference View
-
-    private var shortcutsView: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                shortcutsSection("Global", shortcuts: [
-                    ("⌘⇧V", "Open clipboard"),
-                ])
-
-                shortcutsSection("Navigation", shortcuts: [
-                    ("↑ / ↓", "Navigate items"),
-                    ("⌘↑", "Scroll to top"),
-                    ("← / →", "Switch filter tabs"),
-                    ("0–9", "Quick paste by position"),
-                    ("Tab", "Focus search"),
-                ])
-
-                shortcutsSection("Actions", shortcuts: [
-                    ("Enter", "Paste selected item"),
-                    ("⌘D", "Toggle favorite"),
-                    ("⌘H", "Toggle sensitive"),
-                    ("⌘V", "Reveal sensitive item"),
-                    ("⌘N", "Focus note field"),
-                    ("⌘Z", "Full-size image preview"),
-                    ("⌘⌫", "Delete item(s)"),
-                    ("⌘F", "Toggle favorites filter"),
-                    ("⌘/", "Show shortcuts"),
-                    ("Esc", "Close / unfocus"),
-                ])
-            }
-            .padding(12)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(NSColor.controlBackgroundColor))
-    }
-
-    private func shortcutsSection(_ title: String, shortcuts: [(String, String)]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.secondary)
-
-            ForEach(shortcuts, id: \.0) { key, action in
-                HStack {
-                    Text(key)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.accentColor)
-                        .frame(width: 100, alignment: .trailing)
-
-                    Text(action)
-                        .font(.caption)
-                        .foregroundColor(.primary)
-
-                    Spacer()
-                }
-            }
-        }
     }
 
     private var clipboardListView: some View {
@@ -635,6 +547,7 @@ struct ContentView: View {
                             .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
                     }
                     .buttonStyle(PlainButtonStyle())
+                    .accessibilityLabel("Scroll to top")
                     .padding(6)
                     .help("Scroll to top (⌘↑)")
                 }
@@ -642,353 +555,6 @@ struct ContentView: View {
         }
     }
     
-    private func previewView(for item: ClipboardItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Preview")
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                
-                Spacer()
-                
-                Button("Copy") {
-                    clipboardMonitor.copyToClipboard(item)
-                    menuBarController.hidePopoverAndActivatePreviousApp()
-                }
-                .buttonStyle(.bordered)
-                
-                Button("×") {
-                    selectedItem = nil
-                }
-                .buttonStyle(PlainButtonStyle())
-                .foregroundColor(.secondary)
-            }
-            
-            ScrollView {
-                switch item.type {
-                case .text:
-                    Text(item.fullText)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
-                case .image:
-                    if let image = item.content as? NSImage {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Image(nsImage: image)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(maxHeight: 150)
-
-                            if let associatedText = item.associatedText,
-                               !associatedText.isEmpty {
-                                Text("Text representation")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                Text(associatedText)
-                                    .font(.system(.body, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                        }
-                    }
-                case .file:
-                    Text(item.fullText)
-                        .font(.system(.body, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 4)
-                }
-            }
-            .frame(maxHeight: 120)
-        }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
-        .padding(.horizontal)
-        .padding(.bottom)
-    }
-    
-    private func compactPreviewView(for item: ClipboardItem) -> some View {
-        let isMasked = item.isSensitive && !revealedSensitiveIds.contains(item.id)
-
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text("Preview")
-                    .font(.caption)
-                    .fontWeight(.semibold)
-                    .foregroundColor(.primary)
-
-                Spacer()
-
-                // Toggle favorite button
-                Button(action: {
-                    clipboardMonitor.toggleFavorite(item)
-                    // Update selectedItem immediately to keep preview in sync
-                    if var updatedItem = selectedItem {
-                        updatedItem.isFavorite.toggle()
-                        selectedItem = updatedItem
-                    }
-                }) {
-                    Image(systemName: item.isFavorite ? "star.fill" : "star")
-                        .font(.system(size: 12))
-                        .foregroundColor(item.isFavorite ? .yellow : .secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(item.isFavorite ? "Remove from favorites (⌘D)" : "Add to favorites (⌘D)")
-
-                // Toggle sensitive button
-                Button(action: {
-                    clipboardMonitor.toggleSensitive(item)
-                    // Update selectedItem immediately to keep preview in sync
-                    if var updatedItem = selectedItem {
-                        updatedItem.isSensitive.toggle()
-                        if updatedItem.isAutoSensitive || updatedItem.isPasswordLike {
-                            updatedItem.isManuallyUnsensitive = !updatedItem.isSensitive
-                        }
-                        selectedItem = updatedItem
-                    }
-                }) {
-                    Image(systemName: item.isSensitive ? "lock.fill" : "lock.open")
-                        .font(.system(size: 12))
-                        .foregroundColor(item.isSensitive ? .orange : .secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(item.isSensitive ? "Remove sensitive flag (⌘H)" : "Mark as sensitive (⌘H)")
-
-                // Reveal/Hide button for sensitive items
-                if item.isSensitive {
-                    Button(action: {
-                        if revealedSensitiveIds.contains(item.id) {
-                            revealedSensitiveIds.remove(item.id)
-                        } else {
-                            revealedSensitiveIds.insert(item.id)
-                        }
-                    }) {
-                        Image(systemName: isMasked ? "eye" : "eye.slash")
-                            .font(.system(size: 12))
-                    }
-                    .buttonStyle(.borderless)
-                    .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
-                }
-
-                Button("Copy ⏎") {
-                    clipboardMonitor.copyToClipboard(item)
-                    menuBarController.hidePopoverAndActivatePreviousApp()
-                }
-                .buttonStyle(.bordered)
-                .font(.caption)
-                .controlSize(.small)
-            }
-
-            // Metadata row
-            HStack(spacing: 8) {
-                if item.type == .text {
-                    let charCount = item.fullText.count
-                    let lineCount = item.fullText.components(separatedBy: .newlines).count
-                    Text("\(charCount) chars")
-                        .font(.system(size: 10))
-                        .foregroundColor(.secondary)
-                    if lineCount > 1 {
-                        Text("•")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary.opacity(0.6))
-                        Text("\(lineCount) lines")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                } else if item.type == .image {
-                    if let image = (item.content as? NSImage) ?? loadedImages[item.id] {
-                        let width = Int(image.size.width)
-                        let height = Int(image.size.height)
-                        Text("\(width) × \(height) px")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                } else if item.type == .file {
-                    if let urls = item.content as? [URL] {
-                        Text("\(urls.count) file\(urls.count == 1 ? "" : "s")")
-                            .font(.system(size: 10))
-                            .foregroundColor(.secondary)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.top, 2)
-
-            ScrollView {
-                if isMasked {
-                    // Masked content view
-                    VStack(spacing: 12) {
-                        Image(systemName: "eye.slash.fill")
-                            .font(.system(size: 32))
-                            .foregroundColor(.secondary)
-
-                        Text("Sensitive content hidden")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        Button("Click to reveal") {
-                            revealedSensitiveIds.insert(item.id)
-                        }
-                        .buttonStyle(.borderless)
-                        .font(.caption)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.vertical, 20)
-                } else {
-                    switch item.type {
-                    case .text:
-                        Text(item.fullText)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineLimit(nil)
-                    case .image:
-                        // Get image from item or from lazy-loaded cache
-                        let displayImage = (item.content as? NSImage) ?? loadedImages[item.id]
-
-                        if let image = displayImage {
-                            ZStack {
-                                Image(nsImage: image)
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fit)
-                                    .frame(maxHeight: 120)
-                                    .background(Color.gray.opacity(0.1))
-                                    .cornerRadius(4)
-
-                                // Zoom icon overlay - more visible
-                                VStack {
-                                    HStack {
-                                        Spacer()
-                                        Image(systemName: "magnifyingglass")
-                                            .font(.system(size: 14, weight: .semibold))
-                                            .foregroundColor(.white)
-                                            .frame(width: 24, height: 24)
-                                            .background(Circle().fill(Color.primary.opacity(0.7)))
-                                    }
-                                    Spacer()
-                                }
-                                .padding(6)
-                            }
-                            .contentShape(Rectangle()) // Make entire area clickable
-                            .onTapGesture {
-                                showImageModal = true
-                            }
-                            .onHover { hovering in
-                                // Add visual feedback on hover (hover state is handled by UI)
-                            }
-                            .help("Click to view full size with zoom")
-                            .sheet(isPresented: $showImageModal) {
-                                ImageModalView(image: image)
-                            }
-                        } else if loadingImageIds.contains(item.id) {
-                            // Loading indicator
-                            VStack(spacing: 8) {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                                Text("Loading image...")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: 120)
-                        } else {
-                            // Image needs to be loaded - trigger load
-                            VStack(spacing: 8) {
-                                Image(systemName: "photo")
-                                    .font(.system(size: 32))
-                                    .foregroundColor(.secondary)
-                                Text("Click to load image")
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: 120)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
-                                loadLazyImage(item)
-                            }
-                            .onAppear {
-                                // Auto-load when selected
-                                loadLazyImage(item)
-                            }
-                        }
-
-                        if let associatedText = item.associatedText,
-                           !associatedText.isEmpty {
-                            Divider()
-                                .padding(.vertical, 4)
-                            Text("Text representation")
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.secondary)
-                            Text(associatedText)
-                                .font(.system(.caption, design: .monospaced))
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .lineLimit(nil)
-                        }
-                    case .file:
-                        Text(item.fullText)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .lineLimit(nil)
-                    }
-                }
-            }
-
-            Spacer()
-
-            // Note field - muted appearance
-            HStack(spacing: 4) {
-                Image(systemName: "note.text")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
-
-                TextField("Add note...", text: $editingNote)
-                    .textFieldStyle(PlainTextFieldStyle())
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .focused($isNoteFocused)
-                    .onChange(of: editingNote) { newValue in
-                        // Limit to 100 characters
-                        if newValue.count > 100 {
-                            editingNote = String(newValue.prefix(100))
-                        }
-                    }
-                    .onSubmit {
-                        saveNote(for: item)
-                        isNoteFocused = false
-                    }
-                    .onChange(of: isNoteFocused) { focused in
-                        if !focused {
-                            saveNote(for: item)
-                        }
-                    }
-
-                // Character counter (shows when > 70 chars)
-                if editingNote.count > 70 {
-                    Text("\(editingNote.count)/100")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(editingNote.count >= 100 ? .orange : .secondary)
-                }
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .background(Color(NSColor.textBackgroundColor).opacity(0.5))
-            .cornerRadius(4)
-        }
-        .padding(6)
-        .background(Color(NSColor.controlBackgroundColor))
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: selectedItem?.id) { _ in
-            // Update editingNote when selected item changes
-            editingNote = selectedItem?.note ?? ""
-        }
-        .onAppear {
-            editingNote = item.note ?? ""
-        }
-    }
-
     private func saveNote(for item: ClipboardItem) {
         let trimmedNote = editingNote.trimmingCharacters(in: .whitespacesAndNewlines)
         let noteToSave = trimmedNote.isEmpty ? nil : trimmedNote
@@ -1299,6 +865,409 @@ struct ContentView: View {
     }
 }
 
+struct ClipboardDeletionConfirmationContent {
+    static func deleteTitle(selectedCount: Int) -> String {
+        selectedCount == 0 ? "Delete Items" : "Delete Selected Items?"
+    }
+
+    static func deleteMessage(selectedCount: Int) -> String {
+        if selectedCount == 0 {
+            return "Choose to delete the currently previewed item or clear all history."
+        }
+
+        return "This will permanently delete \(selectedCount) selected item\(selectedCount == 1 ? "" : "s"). This action cannot be undone."
+    }
+
+    static func selectedDeleteButtonTitle(selectedCount: Int) -> String {
+        "Delete \(selectedCount) Item\(selectedCount == 1 ? "" : "s")"
+    }
+
+    static func deleteAllChoiceTitle(itemCount: Int) -> String {
+        "Delete All \(itemCount) Items..."
+    }
+
+    static func deleteAllTitle(itemCount: Int) -> String {
+        "Delete All \(itemCount) Items?"
+    }
+
+    static func deleteAllMessage(itemCount: Int) -> String {
+        "Are you sure? This will permanently delete ALL \(itemCount) items from your clipboard history. This action cannot be undone."
+    }
+}
+
+private struct ClipboardDeletionConfirmationModifier: ViewModifier {
+    let selectedItem: ClipboardItem?
+    @Binding var selectedItemIds: Set<UUID>
+    let itemCount: Int
+    @Binding var showDeleteConfirmation: Bool
+    @Binding var showDeleteAllConfirmation: Bool
+    let onDeleteCurrent: (ClipboardItem) -> Void
+    let onDeleteSelected: (Set<UUID>) -> Void
+    let onDeleteAll: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .alert(
+                ClipboardDeletionConfirmationContent.deleteTitle(selectedCount: selectedItemIds.count),
+                isPresented: $showDeleteConfirmation
+            ) {
+                if selectedItemIds.isEmpty {
+                    Button("Cancel", role: .cancel) { }
+                    if let selectedItem {
+                        Button("Delete Current Item", role: .destructive) {
+                            onDeleteCurrent(selectedItem)
+                        }
+                    }
+                    Button(ClipboardDeletionConfirmationContent.deleteAllChoiceTitle(itemCount: itemCount)) {
+                        showDeleteAllConfirmation = true
+                    }
+                } else {
+                    Button("Cancel", role: .cancel) { }
+                    Button(ClipboardDeletionConfirmationContent.selectedDeleteButtonTitle(selectedCount: selectedItemIds.count), role: .destructive) {
+                        onDeleteSelected(selectedItemIds)
+                        selectedItemIds.removeAll()
+                    }
+                }
+            } message: {
+                Text(ClipboardDeletionConfirmationContent.deleteMessage(selectedCount: selectedItemIds.count))
+            }
+            .alert(
+                ClipboardDeletionConfirmationContent.deleteAllTitle(itemCount: itemCount),
+                isPresented: $showDeleteAllConfirmation
+            ) {
+                Button("Cancel", role: .cancel) { }
+                Button("Yes, Delete All", role: .destructive) {
+                    onDeleteAll()
+                }
+            } message: {
+                Text(ClipboardDeletionConfirmationContent.deleteAllMessage(itemCount: itemCount))
+            }
+    }
+}
+
+private extension View {
+    func clipboardDeletionConfirmation(
+        selectedItem: ClipboardItem?,
+        selectedItemIds: Binding<Set<UUID>>,
+        itemCount: Int,
+        showDeleteConfirmation: Binding<Bool>,
+        showDeleteAllConfirmation: Binding<Bool>,
+        onDeleteCurrent: @escaping (ClipboardItem) -> Void,
+        onDeleteSelected: @escaping (Set<UUID>) -> Void,
+        onDeleteAll: @escaping () -> Void
+    ) -> some View {
+        modifier(
+            ClipboardDeletionConfirmationModifier(
+                selectedItem: selectedItem,
+                selectedItemIds: selectedItemIds,
+                itemCount: itemCount,
+                showDeleteConfirmation: showDeleteConfirmation,
+                showDeleteAllConfirmation: showDeleteAllConfirmation,
+                onDeleteCurrent: onDeleteCurrent,
+                onDeleteSelected: onDeleteSelected,
+                onDeleteAll: onDeleteAll
+            )
+        )
+    }
+}
+
+struct ClipboardCompactPreviewView: View {
+    let item: ClipboardItem
+    let isRevealed: Bool
+    let loadedImage: NSImage?
+    let isLoadingImage: Bool
+    @Binding var editingNote: String
+    @FocusState.Binding var isNoteFocused: Bool
+    @Binding var showImageModal: Bool
+    let onCopy: () -> Void
+    let onToggleFavorite: () -> Void
+    let onToggleSensitive: () -> Void
+    let onToggleReveal: () -> Void
+    let onReveal: () -> Void
+    let onLoadImage: () -> Void
+    let onSaveNote: () -> Void
+
+    private var isMasked: Bool {
+        item.isSensitive && !isRevealed
+    }
+
+    private var displayImage: NSImage? {
+        (item.content as? NSImage) ?? loadedImage
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            toolbar
+            metadataRow
+            previewContent
+
+            Spacer()
+
+            noteField
+        }
+        .padding(6)
+        .background(Color(NSColor.controlBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear {
+            editingNote = item.note ?? ""
+        }
+        .onChange(of: item.id) { _ in
+            editingNote = item.note ?? ""
+        }
+    }
+
+    private var toolbar: some View {
+        HStack {
+            Text("Preview")
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+
+            Spacer()
+
+            Button(action: onToggleFavorite) {
+                Image(systemName: item.isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 12))
+                    .foregroundColor(item.isFavorite ? .yellow : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(item.isFavorite ? "Remove from favorites" : "Add to favorites")
+            .help(item.isFavorite ? "Remove from favorites (⌘D)" : "Add to favorites (⌘D)")
+
+            Button(action: onToggleSensitive) {
+                Image(systemName: item.isSensitive ? "lock.fill" : "lock.open")
+                    .font(.system(size: 12))
+                    .foregroundColor(item.isSensitive ? .orange : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(item.isSensitive ? "Remove sensitive flag" : "Mark as sensitive")
+            .help(item.isSensitive ? "Remove sensitive flag (⌘H)" : "Mark as sensitive (⌘H)")
+
+            if item.isSensitive {
+                Button(action: onToggleReveal) {
+                    Image(systemName: isMasked ? "eye" : "eye.slash")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(isMasked ? "Reveal content" : "Hide content")
+                .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
+            }
+
+            Button("Copy ⏎", action: onCopy)
+                .buttonStyle(.bordered)
+                .font(.caption)
+                .controlSize(.small)
+        }
+    }
+
+    private var metadataRow: some View {
+        HStack(spacing: 8) {
+            switch item.type {
+            case .text:
+                textMetadata
+            case .image:
+                imageMetadata
+            case .file:
+                fileMetadata
+            }
+            Spacer()
+        }
+        .padding(.top, 2)
+    }
+
+    @ViewBuilder private var textMetadata: some View {
+        let charCount = item.fullText.count
+        let lineCount = item.fullText.components(separatedBy: .newlines).count
+        Text("\(charCount) chars")
+            .font(.system(size: 10))
+            .foregroundColor(.secondary)
+        if lineCount > 1 {
+            Text("•")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary.opacity(0.6))
+            Text("\(lineCount) lines")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder private var imageMetadata: some View {
+        if let displayImage {
+            let width = Int(displayImage.size.width)
+            let height = Int(displayImage.size.height)
+            Text("\(width) × \(height) px")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    @ViewBuilder private var fileMetadata: some View {
+        if let urls = item.content as? [URL] {
+            Text("\(urls.count) file\(urls.count == 1 ? "" : "s")")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var previewContent: some View {
+        ScrollView {
+            if isMasked {
+                maskedContent
+            } else {
+                unmaskedContent
+            }
+        }
+    }
+
+    private var maskedContent: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "eye.slash.fill")
+                .font(.system(size: 32))
+                .foregroundColor(.secondary)
+
+            Text("Sensitive content hidden")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Button("Click to reveal", action: onReveal)
+                .buttonStyle(.borderless)
+                .font(.caption)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.vertical, 20)
+    }
+
+    @ViewBuilder private var unmaskedContent: some View {
+        switch item.type {
+        case .text:
+            Text(item.fullText)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(nil)
+        case .image:
+            imagePreview
+            imageAssociatedText
+        case .file:
+            Text(item.fullText)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(nil)
+        }
+    }
+
+    @ViewBuilder private var imagePreview: some View {
+        if let displayImage {
+            ZStack {
+                Image(nsImage: displayImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxHeight: 120)
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(4)
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(Color.primary.opacity(0.7)))
+                    }
+                    Spacer()
+                }
+                .padding(6)
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                showImageModal = true
+            }
+            .help("Click to view full size with zoom")
+            .sheet(isPresented: $showImageModal) {
+                ImageModalView(image: displayImage)
+            }
+        } else if isLoadingImage {
+            VStack(spacing: 8) {
+                ProgressView()
+                    .scaleEffect(0.8)
+                Text("Loading image...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: 120)
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "photo")
+                    .font(.system(size: 32))
+                    .foregroundColor(.secondary)
+                Text("Click to load image")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: 120)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onLoadImage)
+            .onAppear(perform: onLoadImage)
+        }
+    }
+
+    @ViewBuilder private var imageAssociatedText: some View {
+        if let associatedText = item.associatedText,
+           !associatedText.isEmpty {
+            Divider()
+                .padding(.vertical, 4)
+            Text("Text representation")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(.secondary)
+            Text(associatedText)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(nil)
+        }
+    }
+
+    private var noteField: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "note.text")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            TextField("Add note...", text: $editingNote)
+                .textFieldStyle(PlainTextFieldStyle())
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .focused($isNoteFocused)
+                .onChange(of: editingNote) { newValue in
+                    if newValue.count > 100 {
+                        editingNote = String(newValue.prefix(100))
+                    }
+                }
+                .onSubmit {
+                    onSaveNote()
+                    isNoteFocused = false
+                }
+                .onChange(of: isNoteFocused) { focused in
+                    if !focused {
+                        onSaveNote()
+                    }
+                }
+
+            if editingNote.count > 70 {
+                Text("\(editingNote.count)/100")
+                    .font(.system(size: 9, design: .monospaced))
+                    .foregroundColor(editingNote.count >= 100 ? .orange : .secondary)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .background(Color(NSColor.textBackgroundColor).opacity(0.5))
+        .cornerRadius(4)
+    }
+}
+
 struct ClipboardItemRow: View {
     let item: ClipboardItem
     let index: Int
@@ -1413,6 +1382,7 @@ struct ClipboardItemRow: View {
             .opacity(item.isFavorite || isSelected ? 1 : 0)
             .animation(.easeInOut(duration: 0.2), value: isSelected)
             .animation(.easeInOut(duration: 0.2), value: item.isFavorite)
+            .accessibilityLabel(item.isFavorite ? "Remove from favorites" : "Add to favorites")
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 3)
@@ -1701,6 +1671,151 @@ extension Character {
     var isPrintableASCII: Bool {
         guard let asciiValue = self.asciiValue else { return false }
         return asciiValue >= 32 && asciiValue <= 126
+    }
+}
+
+private struct ClipboardEmptyStateView: View {
+    let selectedFilter: FilterTab
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Image(systemName: iconName)
+                .font(.system(size: 48))
+                .foregroundColor(.secondary)
+
+            Text(titleKey)
+                .font(.title2)
+                .foregroundColor(.secondary)
+
+            Text(subtitleKey)
+                .font(.body)
+                .foregroundColor(Color.secondary)
+
+            if let shortcutKey {
+                Text(shortcutKey)
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var iconName: String {
+        switch selectedFilter {
+        case .all:
+            return "doc.on.clipboard"
+        case .favorites:
+            return "star"
+        case .images:
+            return "photo"
+        case .hidden:
+            return "eye.slash"
+        }
+    }
+
+    private var titleKey: LocalizedStringKey {
+        switch selectedFilter {
+        case .all:
+            return "No clipboard history"
+        case .favorites:
+            return "No favorites"
+        case .images:
+            return "No images"
+        case .hidden:
+            return "No hidden items"
+        }
+    }
+
+    private var subtitleKey: LocalizedStringKey {
+        switch selectedFilter {
+        case .all:
+            return "Copy something to get started"
+        case .favorites:
+            return "Star items to keep them permanently — favorites are never auto-deleted"
+        case .images:
+            return "Copy an image to see it here"
+        case .hidden:
+            return "Mark items as sensitive to hide them"
+        }
+    }
+
+    private var shortcutKey: LocalizedStringKey? {
+        switch selectedFilter {
+        case .all:
+            return nil
+        case .favorites:
+            return "⌘D to toggle favorite"
+        case .images:
+            return "⌘Z to zoom images"
+        case .hidden:
+            return "⌘H to toggle sensitive"
+        }
+    }
+}
+
+private struct ShortcutReferenceView: View {
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                ShortcutReferenceSection(title: "Global", shortcuts: [
+                    ("⌘⇧V", "Open clipboard"),
+                ])
+
+                ShortcutReferenceSection(title: "Navigation", shortcuts: [
+                    ("↑ / ↓", "Navigate items"),
+                    ("⌘↑", "Scroll to top"),
+                    ("← / →", "Switch filter tabs"),
+                    ("0–9", "Quick paste by position"),
+                    ("Tab", "Focus search"),
+                ])
+
+                ShortcutReferenceSection(title: "Actions", shortcuts: [
+                    ("Enter", "Paste selected item"),
+                    ("⌘D", "Toggle favorite"),
+                    ("⌘H", "Toggle sensitive"),
+                    ("⌘V", "Reveal sensitive item"),
+                    ("⌘N", "Focus note field"),
+                    ("⌘Z", "Full-size image preview"),
+                    ("⌘⌫", "Delete item(s)"),
+                    ("⌘F", "Toggle favorites filter"),
+                    ("⌘/", "Show shortcuts"),
+                    ("Esc", "Close / unfocus"),
+                ])
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(NSColor.controlBackgroundColor))
+    }
+}
+
+private struct ShortcutReferenceSection: View {
+    let title: LocalizedStringKey
+    let shortcuts: [(key: String, action: LocalizedStringKey)]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption)
+                .fontWeight(.semibold)
+                .foregroundColor(.secondary)
+
+            ForEach(shortcuts, id: \.key) { key, action in
+                HStack {
+                    Text(key)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.accentColor)
+                        .frame(width: 100, alignment: .trailing)
+
+                    Text(action)
+                        .font(.caption)
+                        .foregroundColor(.primary)
+
+                    Spacer()
+                }
+            }
+        }
     }
 }
 
