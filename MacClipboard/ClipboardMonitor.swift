@@ -156,6 +156,67 @@ struct SensitiveContentDetector {
     }
 }
 
+struct ClipboardSensitivityFlags: Equatable {
+    let isSensitive: Bool
+    let isAutoSensitive: Bool
+    let isPasswordLike: Bool
+}
+
+struct ClipboardSensitivityPolicy {
+    static func flags(for text: String?, hasSensitivePasteboardType: Bool, autoDetectSensitiveData: Bool, autoHidePasswordLikeStrings: Bool) -> ClipboardSensitivityFlags {
+        let isAutoSensitive = hasSensitivePasteboardType || (text.map { SensitiveContentDetector.matchesSensitivePattern($0) } ?? false)
+        let isPasswordLike = text.map { SensitiveContentDetector.looksLikePassword($0) } ?? false
+        let isSensitive = (isAutoSensitive && autoDetectSensitiveData) ||
+                          (isPasswordLike && autoHidePasswordLikeStrings)
+
+        return ClipboardSensitivityFlags(
+            isSensitive: isSensitive,
+            isAutoSensitive: isAutoSensitive,
+            isPasswordLike: isPasswordLike
+        )
+    }
+}
+
+struct ClipboardHistoryInsertionResult {
+    let history: [ClipboardItem]
+    let removedItemIDs: Set<UUID>
+    let shouldPersistInsertedItem: Bool
+}
+
+struct ClipboardHistoryMerger {
+    static func inserting(_ item: ClipboardItem, into history: [ClipboardItem]) -> ClipboardHistoryInsertionResult {
+        var itemToInsert = item
+        let isLargeContent = item.type == .image ||
+            (item.type == .text && ((item.content as? String)?.count ?? 0) >= 10_000)
+        let itemsToCheck = isLargeContent ? Array(history.prefix(10)) : history
+
+        var updatedHistory = history
+        var removedItemIDs: Set<UUID> = []
+
+        if let matchIndex = itemsToCheck.firstIndex(where: { $0.contentEquals(item) }),
+           let actualIndex = history.firstIndex(where: { $0.id == itemsToCheck[matchIndex].id }) {
+            if actualIndex == 0 {
+                return ClipboardHistoryInsertionResult(history: history, removedItemIDs: [], shouldPersistInsertedItem: false)
+            }
+
+            let existingItem = history[actualIndex]
+            itemToInsert.isFavorite = existingItem.isFavorite
+            itemToInsert.isSensitive = existingItem.isSensitive
+            itemToInsert.isAutoSensitive = existingItem.isAutoSensitive || itemToInsert.isAutoSensitive
+            itemToInsert.isPasswordLike = existingItem.isPasswordLike || itemToInsert.isPasswordLike
+            itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
+            itemToInsert.note = existingItem.note
+            itemToInsert.associatedText = itemToInsert.associatedText ?? existingItem.associatedText
+
+            removedItemIDs.insert(existingItem.id)
+            updatedHistory.remove(at: actualIndex)
+        }
+
+        updatedHistory.insert(itemToInsert, at: 0)
+        return ClipboardHistoryInsertionResult(history: updatedHistory, removedItemIDs: removedItemIDs, shouldPersistInsertedItem: true)
+    }
+}
+
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
     private var changeCount: Int = 0
@@ -244,11 +305,13 @@ class ClipboardMonitor: ObservableObject {
     
     private func loadPersistedHistory() {
         guard userPreferences.persistenceEnabled else { return }
-        
-        let persistedItems = persistenceManager.loadClipboardHistory(limit: userPreferences.maxClipboardItems)
-        
-        DispatchQueue.main.async {
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let persistedItems = self.persistenceManager.loadClipboardHistory(limit: self.userPreferences.maxClipboardItems)
+
+            DispatchQueue.main.async {
             self.clipboardHistory = persistedItems
+            }
         }
     }
     
@@ -454,19 +517,21 @@ class ClipboardMonitor: ObservableObject {
                 if hasText, let string = textContent {
                     let maxTextBytes = 1 * 1024 * 1024
                     if string.utf8.count <= maxTextBytes {
-                        let isAutoSensitive = hasSensitivePasteboardType || SensitiveContentDetector.matchesSensitivePattern(string)
-                        let isPasswordLike = SensitiveContentDetector.looksLikePassword(string)
-                        let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
-                                          (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+                        let sensitivity = ClipboardSensitivityPolicy.flags(
+                            for: string,
+                            hasSensitivePasteboardType: hasSensitivePasteboardType,
+                            autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+                            autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+                        )
 
                         return ClipboardItem(
                             id: UUID(),
                             content: string,
                             type: .text,
                             timestamp: Date(),
-                            isSensitive: isSensitive,
-                            isAutoSensitive: isAutoSensitive,
-                            isPasswordLike: isPasswordLike
+                            isSensitive: sensitivity.isSensitive,
+                            isAutoSensitive: sensitivity.isAutoSensitive,
+                            isPasswordLike: sensitivity.isPasswordLike
                         )
                     }
                 }
@@ -474,19 +539,21 @@ class ClipboardMonitor: ObservableObject {
             }
 
             let attachedText = hasText ? textContent : nil
-            let isAutoSensitive = hasSensitivePasteboardType || (attachedText.map { SensitiveContentDetector.matchesSensitivePattern($0) } ?? false)
-            let isPasswordLike = attachedText.map { SensitiveContentDetector.looksLikePassword($0) } ?? false
-            let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
-                              (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+            let sensitivity = ClipboardSensitivityPolicy.flags(
+                for: attachedText,
+                hasSensitivePasteboardType: hasSensitivePasteboardType,
+                autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+                autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+            )
 
             return ClipboardItem(
                 id: UUID(),
                 content: image,
                 type: .image,
                 timestamp: Date(),
-                isSensitive: isSensitive,
-                isAutoSensitive: isAutoSensitive,
-                isPasswordLike: isPasswordLike,
+                isSensitive: sensitivity.isSensitive,
+                isAutoSensitive: sensitivity.isAutoSensitive,
+                isPasswordLike: sensitivity.isPasswordLike,
                 associatedText: attachedText
             )
         }
@@ -500,24 +567,21 @@ class ClipboardMonitor: ObservableObject {
                 return nil
             }
 
-            // Check for sensitive content (API keys, tokens, etc.)
-            let isAutoSensitive = hasSensitivePasteboardType || SensitiveContentDetector.matchesSensitivePattern(string)
-
-            // Check for password-like strings
-            let isPasswordLike = SensitiveContentDetector.looksLikePassword(string)
-
-            // Determine if should be hidden based on user preferences
-            let isSensitive = (isAutoSensitive && userPreferences.autoDetectSensitiveData) ||
-                              (isPasswordLike && userPreferences.autoHidePasswordLikeStrings)
+            let sensitivity = ClipboardSensitivityPolicy.flags(
+                for: string,
+                hasSensitivePasteboardType: hasSensitivePasteboardType,
+                autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+                autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+            )
 
             return ClipboardItem(
                 id: UUID(),
                 content: string,
                 type: .text,
                 timestamp: Date(),
-                isSensitive: isSensitive,
-                isAutoSensitive: isAutoSensitive,
-                isPasswordLike: isPasswordLike
+                isSensitive: sensitivity.isSensitive,
+                isAutoSensitive: sensitivity.isAutoSensitive,
+                isPasswordLike: sensitivity.isPasswordLike
             )
         }
 
@@ -545,47 +609,17 @@ class ClipboardMonitor: ObservableObject {
     
     private func addToHistory(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            // Check for existing duplicate and preserve its metadata (favorite, sensitive, note)
-            // For performance: limit duplicate checking for large content
-            // - Images: only check last 10 items (TIFF comparison is expensive)
-            // - Large text (≥10KB): only check last 10 items
-            // - Small text/files: check all items (fast enough)
-            var itemToInsert = item
-            let isLargeContent = item.type == .image ||
-                (item.type == .text && ((item.content as? String)?.count ?? 0) >= 10_000)
-            let itemsToCheck = isLargeContent
-                ? Array(self.clipboardHistory.prefix(10))
-                : self.clipboardHistory
+            let result = ClipboardHistoryMerger.inserting(item, into: self.clipboardHistory)
+            guard result.shouldPersistInsertedItem else { return }
 
-            if let matchIndex = itemsToCheck.firstIndex(where: { $0.contentEquals(item) }),
-               let actualIndex = self.clipboardHistory.firstIndex(where: { $0.id == itemsToCheck[matchIndex].id }) {
-                // If duplicate is already at the top, do nothing (common case: user copies same thing multiple times to be sure)
-                if actualIndex == 0 {
-                    return
-                }
-
-                let existingItem = self.clipboardHistory[actualIndex]
-                // Preserve favorite status, sensitive flag, auto-sensitive flag, password-like flag, manual unsensitive, and note from existing item
-                itemToInsert.isFavorite = existingItem.isFavorite
-                itemToInsert.isSensitive = existingItem.isSensitive
-                itemToInsert.isAutoSensitive = existingItem.isAutoSensitive || itemToInsert.isAutoSensitive
-                itemToInsert.isPasswordLike = existingItem.isPasswordLike || itemToInsert.isPasswordLike
-                itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
-                itemToInsert.note = existingItem.note
-                itemToInsert.associatedText = itemToInsert.associatedText ?? existingItem.associatedText
-
-                // Remove the old item from persistence
-                self.persistenceManager.deleteItems(withIds: [existingItem.id])
-
-                // Remove from history
-                self.clipboardHistory.remove(at: actualIndex)
+            if !result.removedItemIDs.isEmpty {
+                self.persistenceManager.deleteItems(withIds: result.removedItemIDs)
             }
 
-            // Add to beginning of array
-            self.clipboardHistory.insert(itemToInsert, at: 0)
+            self.clipboardHistory = result.history
 
             // Save to persistence
-            self.saveItemToPersistence(itemToInsert)
+            self.saveItemToPersistence(self.clipboardHistory[0])
 
             // Limit to max items
             self.trimHistoryToLimitPreservingFavorites()
@@ -947,7 +981,7 @@ struct ClipboardItem: Identifiable, Equatable {
             // For same dimensions, compare full normalized TIFF data to avoid false positives.
             guard let data1 = image1.tiffRepresentation,
                   let data2 = image2.tiffRepresentation else { return false }
-            return data1 == data2 && self.associatedText == other.associatedText
+            return data1 == data2
         case .file:
             let urls1 = content as? [URL] ?? []
             let urls2 = other.content as? [URL] ?? []

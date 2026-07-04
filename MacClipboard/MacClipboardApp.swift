@@ -15,11 +15,19 @@ struct MacClipboardApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var onboardingWindow: NSWindow?
+    private var didShowPersistenceRecoveryAlert = false
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         logAccessibilityState(context: "launch")
         handleAccessibilityPermissions()
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(showPersistenceRecoveryAlertIfNeeded),
+            name: .persistenceStoreDidRecoverTemporarily,
+            object: nil
+        )
 
         // Sync login item state with user preference (runs async to avoid blocking startup)
         UserPreferencesManager.shared.syncLoginItemState()
@@ -28,6 +36,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // can cause status item event handling to be lost if created too early.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
             self.menuBarController = MenuBarController(clipboardMonitor: ClipboardMonitor())
+            self.showPersistenceRecoveryAlertIfNeeded()
         }
         if let window = NSApplication.shared.windows.first {
             window.close()
@@ -35,7 +44,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func applicationWillTerminate(_ notification: Notification) {
+        NotificationCenter.default.removeObserver(self)
         menuBarController?.cleanup()
+    }
+
+    @objc private func showPersistenceRecoveryAlertIfNeeded() {
+        guard !didShowPersistenceRecoveryAlert,
+              let message = PersistenceManager.shared.persistenceDiagnosticsMessage else { return }
+
+        didShowPersistenceRecoveryAlert = true
+
+        let alert = NSAlert()
+        alert.messageText = "Clipboard History Storage Issue"
+        alert.informativeText = "\(message)\n\nYou can continue using temporary storage, or reset saved history files and quit. Relaunching after reset creates a fresh history store."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset Saved History and Quit")
+        alert.addButton(withTitle: "Continue")
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+
+        if response == .alertFirstButtonReturn {
+            if PersistenceManager.shared.resetPersistentStoreFiles() {
+                NSApp.terminate(nil)
+            } else {
+                let failureAlert = NSAlert()
+                failureAlert.messageText = "Could Not Reset Clipboard History"
+                failureAlert.informativeText = "MacClipboard could not remove the saved history files automatically. You can continue with temporary storage for this session."
+                failureAlert.alertStyle = .critical
+                failureAlert.addButton(withTitle: "OK")
+                failureAlert.runModal()
+            }
+        }
     }
     
     private func handleAccessibilityPermissions() {

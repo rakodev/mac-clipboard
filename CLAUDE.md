@@ -4,9 +4,25 @@
 
 MacClipboard is a native macOS menu bar clipboard manager built with Swift and SwiftUI. It automatically tracks clipboard history and provides quick access via a global hotkey (Cmd+Shift+V).
 
+**Product Goal**: Build and maintain the best clipboard manager app for macOS. Prioritize improvements that make MacClipboard more reliable, faster, more private, easier to use, and easier to maintain. When you see a concrete issue or opportunity, either fix it or track it in the docs backlog so it is not lost.
+
 **Tech Stack**: Swift 5.0, SwiftUI, AppKit, Core Data
 **Target**: macOS 13.0+ (Ventura)
 **Bundle ID**: com.macclipboard.app
+
+## Task Tracking
+
+Use the docs folder to track product and engineering work:
+
+- `docs/BACKLOG.md` - Committed todo tasks with priority, evidence, and acceptance criteria.
+- `docs/FOLLOWUPS.md` - Ideas or possible future improvements that are not ready for the backlog yet.
+- `docs/BACKLOG_ARCHIVE.md` - Completed backlog tasks, including date, summary, and verification.
+
+Workflow:
+1. Add actionable issues found during code review to `docs/BACKLOG.md`.
+2. Add lower-confidence ideas or later enhancements to `docs/FOLLOWUPS.md`.
+3. When a backlog item is completed, move it to `docs/BACKLOG_ARCHIVE.md` and include the verification used.
+4. Keep backlog items concrete: include the affected file or behavior, why it matters, and what “done” means.
 
 ## Quick Commands
 

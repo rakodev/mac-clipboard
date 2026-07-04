@@ -2,8 +2,21 @@ import Foundation
 import CoreData
 import AppKit
 
+extension Notification.Name {
+    static let persistenceStoreDidRecoverTemporarily = Notification.Name("persistenceStoreDidRecoverTemporarily")
+}
+
 class PersistenceManager: ObservableObject {
     static let shared = PersistenceManager()
+
+    @Published private(set) var isUsingTemporaryStore = false
+    @Published private(set) var lastStoreLoadError: String?
+
+    var persistenceDiagnosticsMessage: String? {
+        guard isUsingTemporaryStore else { return nil }
+        let details = lastStoreLoadError.map { "\n\nDetails: \($0)" } ?? ""
+        return "Clipboard history storage could not be opened. MacClipboard is using temporary storage for this session.\(details)"
+    }
     
     private init() {}
     
@@ -11,6 +24,18 @@ class PersistenceManager: ObservableObject {
     
     lazy var persistentContainer: NSPersistentContainer = {
         let container = NSPersistentContainer(name: "ClipboardData")
+        configure(container: container)
+        return container
+    }()
+
+    private lazy var backgroundContext: NSManagedObjectContext = {
+        let context = persistentContainer.newBackgroundContext()
+        context.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
+        context.automaticallyMergesChangesFromParent = true
+        return context
+    }()
+
+    private func configure(container: NSPersistentContainer) {
         
         // Configure for external binary storage
         if let description = container.persistentStoreDescriptions.first {
@@ -20,23 +45,66 @@ class PersistenceManager: ObservableObject {
         
         container.loadPersistentStores { _, error in
             if let error = error as NSError? {
-                // In production, handle this more gracefully
-                print("💾 Core Data error: \(error), \(error.userInfo)")
-                fatalError("Core Data error: \(error), \(error.userInfo)")
+                Logging.info("💾 Core Data store load failed: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self.lastStoreLoadError = error.localizedDescription
+                }
+                self.loadTemporaryStore(into: container)
             }
         }
         
         container.viewContext.automaticallyMergesChangesFromParent = true
-        return container
-    }()
-    
-    private var context: NSManagedObjectContext {
-        return persistentContainer.viewContext
+    }
+
+    private func loadTemporaryStore(into container: NSPersistentContainer) {
+        let description = NSPersistentStoreDescription()
+        description.type = NSInMemoryStoreType
+        container.persistentStoreDescriptions = [description]
+
+        container.loadPersistentStores { _, error in
+            if let error = error {
+                Logging.info("💾 Temporary Core Data store load failed: \(error.localizedDescription)")
+                return
+            }
+            Logging.info("💾 Using temporary clipboard history storage for this session")
+            DispatchQueue.main.async {
+                self.isUsingTemporaryStore = true
+                NotificationCenter.default.post(name: .persistenceStoreDidRecoverTemporarily, object: self)
+            }
+        }
+    }
+
+    func resetPersistentStoreFiles() -> Bool {
+        let storeURL = NSPersistentContainer.defaultDirectoryURL().appendingPathComponent("ClipboardData.sqlite")
+        let fileManager = FileManager.default
+        var didFail = false
+
+        do {
+            if fileManager.fileExists(atPath: storeURL.path) {
+                try persistentContainer.persistentStoreCoordinator.destroyPersistentStore(at: storeURL, ofType: NSSQLiteStoreType, options: nil)
+            }
+        } catch {
+            Logging.info("💾 Failed to destroy persistent store: \(error.localizedDescription)")
+            didFail = true
+        }
+
+        for suffix in ["", "-shm", "-wal"] {
+            let url = URL(fileURLWithPath: storeURL.path + suffix)
+            guard fileManager.fileExists(atPath: url.path) else { continue }
+            do {
+                try fileManager.removeItem(at: url)
+            } catch {
+                Logging.info("💾 Failed to remove persistent store file \(url.lastPathComponent): \(error.localizedDescription)")
+                didFail = true
+            }
+        }
+
+        return !didFail
     }
 
     private func performOnContext<T>(_ work: () throws -> T) throws -> T {
         var result: Result<T, Error>!
-        context.performAndWait {
+        backgroundContext.performAndWait {
             do {
                 result = .success(try work())
             } catch {
@@ -51,13 +119,13 @@ class PersistenceManager: ObservableObject {
     func saveContext() {
         do {
             try performOnContext {
-                if context.hasChanges {
-                    try context.save()
+                if backgroundContext.hasChanges {
+                    try backgroundContext.save()
                     Logging.debug("💾 Context saved successfully")
                 }
             }
         } catch {
-            print("💾 Save error: \(error)")
+            Logging.info("💾 Save error: \(error.localizedDescription)")
         }
     }
     
@@ -66,7 +134,7 @@ class PersistenceManager: ObservableObject {
     func saveClipboardItem(_ item: ClipboardItem, saveImages: Bool = false) {
         do {
             try performOnContext {
-                let persistedItem = PersistedClipboardItem(context: context)
+                let persistedItem = PersistedClipboardItem(context: backgroundContext)
 
                 persistedItem.id = item.id
                 persistedItem.createdAt = item.timestamp
@@ -99,13 +167,13 @@ class PersistenceManager: ObservableObject {
                     }
                 }
 
-                if context.hasChanges {
-                    try context.save()
+                if backgroundContext.hasChanges {
+                    try backgroundContext.save()
                     Logging.debug("💾 Context saved successfully")
                 }
             }
         } catch {
-            print("💾 Save error: \(error)")
+            Logging.info("💾 Save error: \(error.localizedDescription)")
         }
     }
     
@@ -119,7 +187,7 @@ class PersistenceManager: ObservableObject {
                 favoritesRequest.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
                 favoritesRequest.predicate = NSPredicate(format: "isFavorite == YES")
 
-                let favoriteItems = try context.fetch(favoritesRequest)
+                let favoriteItems = try backgroundContext.fetch(favoritesRequest)
 
                 let nonFavoriteLimit = max(0, limit - favoriteItems.count)
                 var nonFavoriteItems: [PersistedClipboardItem] = []
@@ -128,7 +196,7 @@ class PersistenceManager: ObservableObject {
                     nonFavoritesRequest.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
                     nonFavoritesRequest.predicate = NSPredicate(format: "isFavorite == NO")
                     nonFavoritesRequest.fetchLimit = nonFavoriteLimit
-                    nonFavoriteItems = try context.fetch(nonFavoritesRequest)
+                    nonFavoriteItems = try backgroundContext.fetch(nonFavoritesRequest)
                 }
 
                 return (favoriteItems + nonFavoriteItems).sorted {
@@ -151,7 +219,7 @@ class PersistenceManager: ObservableObject {
             Logging.debug("💾 Loaded \(clipboardItems.count) items (\(imageCount) images, \(lazyCount) lazy)")
             return clipboardItems
         } catch {
-            print("💾 Load error: \(error)")
+            Logging.info("💾 Load error: \(error.localizedDescription)")
             return []
         }
     }
@@ -159,7 +227,7 @@ class PersistenceManager: ObservableObject {
     private func convertToClipboardItem(_ persistedItem: PersistedClipboardItem, loadImageData: Bool = true) -> ClipboardItem? {
         guard let id = persistedItem.id,
               let createdAt = persistedItem.createdAt else {
-            print("💾 Invalid persisted item: missing id or createdAt")
+            Logging.info("💾 Invalid persisted item: missing id or createdAt")
             return nil
         }
 
@@ -223,7 +291,7 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
                 request.fetchLimit = 1
-                return try context.fetch(request).first
+                return try backgroundContext.fetch(request).first
             }
 
             if let item,
@@ -232,7 +300,7 @@ class PersistenceManager: ObservableObject {
                 return image
             }
         } catch {
-            print("💾 Error loading image data: \(error)")
+            Logging.info("💾 Error loading image data: \(error.localizedDescription)")
         }
         return nil
     }
@@ -245,12 +313,12 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 if let item = items.first {
                     item.isFavorite = !item.isFavorite
                     item.updatedAt = Date()
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("Toggled favorite for item \(itemId): \(item.isFavorite)")
                     return item.isFavorite
@@ -258,7 +326,7 @@ class PersistenceManager: ObservableObject {
                 return false
             }
         } catch {
-            print("Toggle favorite error: \(error)")
+            Logging.info("Toggle favorite error: \(error.localizedDescription)")
         }
         return false
     }
@@ -269,18 +337,18 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 if let item = items.first {
                     item.note = note
                     item.updatedAt = Date()
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("Updated note for item \(itemId)")
                 }
             }
         } catch {
-            print("Update note error: \(error)")
+            Logging.info("Update note error: \(error.localizedDescription)")
         }
     }
 
@@ -290,13 +358,13 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 if let item = items.first {
                     item.isSensitive = !item.isSensitive
                     item.isManuallyUnsensitive = isManuallyUnsensitive
                     item.updatedAt = Date()
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("Toggled sensitive for item \(itemId): \(item.isSensitive), manuallyUnsensitive: \(isManuallyUnsensitive)")
                     return item.isSensitive
@@ -304,7 +372,7 @@ class PersistenceManager: ObservableObject {
                 return false
             }
         } catch {
-            print("Toggle sensitive error: \(error)")
+            Logging.info("Toggle sensitive error: \(error.localizedDescription)")
         }
         return false
     }
@@ -315,18 +383,18 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 if let item = items.first {
                     item.isSensitive = value
                     item.updatedAt = Date()
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("Set sensitive for item \(itemId): \(value)")
                 }
             }
         } catch {
-            print("Set sensitive error: \(error)")
+            Logging.info("Set sensitive error: \(error.localizedDescription)")
         }
     }
 
@@ -337,20 +405,20 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "isAutoSensitive == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 for item in items {
                     item.isSensitive = true
                     item.updatedAt = Date()
                 }
                 if !items.isEmpty {
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("💾 Applied sensitive flag to \(items.count) auto-detected items")
                 }
             }
         } catch {
-            print("Apply auto-sensitive flag error: \(error)")
+            Logging.info("Apply auto-sensitive flag error: \(error.localizedDescription)")
         }
     }
 
@@ -361,20 +429,20 @@ class PersistenceManager: ObservableObject {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "isPasswordLike == YES AND isSensitive == NO AND isManuallyUnsensitive == NO")
 
-                let items = try context.fetch(request)
+                let items = try backgroundContext.fetch(request)
                 for item in items {
                     item.isSensitive = true
                     item.updatedAt = Date()
                 }
                 if !items.isEmpty {
-                    if context.hasChanges {
-                        try context.save()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
                     }
                     Logging.debug("💾 Applied sensitive flag to \(items.count) password-like items")
                 }
             }
         } catch {
-            print("Apply password-like flag error: \(error)")
+            Logging.info("Apply password-like flag error: \(error.localizedDescription)")
         }
     }
 
@@ -384,7 +452,7 @@ class PersistenceManager: ObservableObject {
         do {
             let items: [PersistedClipboardItem] = try performOnContext {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-                return try context.fetch(request)
+                return try backgroundContext.fetch(request)
             }
             let totalSize = items.reduce(0) { total, item in
                 var itemSize: Int64 = 0
@@ -409,7 +477,7 @@ class PersistenceManager: ObservableObject {
             
             return Int64(totalSize)
         } catch {
-            print("💾 Error calculating storage size: \(error)")
+            Logging.info("💾 Error calculating storage size: \(error.localizedDescription)")
             return 0
         }
     }
@@ -424,15 +492,15 @@ class PersistenceManager: ObservableObject {
                 request.predicate = NSPredicate(format: "createdAt < %@ AND isFavorite == NO", cutoffDate as NSDate)
 
                 let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                let result = try backgroundContext.execute(deleteRequest) as? NSBatchDeleteResult
                 let deletedCount = result?.result as? Int ?? 0
                 Logging.debug("💾 Cleaned up \(deletedCount) old items")
 
                 // Refresh the context
-                context.refreshAllObjects()
+                backgroundContext.refreshAllObjects()
             }
         } catch {
-            print("💾 Cleanup error: \(error)")
+            Logging.info("💾 Cleanup error: \(error.localizedDescription)")
         }
     }
     
@@ -441,12 +509,12 @@ class PersistenceManager: ObservableObject {
             try performOnContext {
                 let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
                 let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-                try context.execute(deleteRequest)
-                context.refreshAllObjects()
+                try backgroundContext.execute(deleteRequest)
+                backgroundContext.refreshAllObjects()
                 Logging.debug("💾 Cleared all persistent data")
             }
         } catch {
-            print("💾 Clear all error: \(error)")
+            Logging.info("💾 Clear all error: \(error.localizedDescription)")
         }
     }
 
@@ -457,13 +525,13 @@ class PersistenceManager: ObservableObject {
                 request.predicate = NSPredicate(format: "id IN %@", ids as CVarArg)
                 let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
 
-                let result = try context.execute(deleteRequest) as? NSBatchDeleteResult
+                let result = try backgroundContext.execute(deleteRequest) as? NSBatchDeleteResult
                 let deletedCount = result?.result as? Int ?? 0
-                context.refreshAllObjects()
+                backgroundContext.refreshAllObjects()
                 Logging.debug("💾 Deleted \(deletedCount) items from persistent storage")
             }
         } catch {
-            print("💾 Delete items error: \(error)")
+            Logging.info("💾 Delete items error: \(error.localizedDescription)")
         }
     }
 }
