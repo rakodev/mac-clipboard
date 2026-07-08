@@ -237,9 +237,10 @@ class ClipboardMonitor: ObservableObject {
         self.persistenceManager = persistenceManager
         
         // Load persisted history first
-        self.loadPersistedHistory()
+        self.loadPersistedHistory { [weak self] in
+            self?.startMonitoring()
+        }
         
-        startMonitoring()
         startMaintenanceTimer()
         
         // Listen for preferences changes to trim history if needed
@@ -303,14 +304,18 @@ class ClipboardMonitor: ObservableObject {
         maintenanceTimer = nil
     }
     
-    private func loadPersistedHistory() {
-        guard userPreferences.persistenceEnabled else { return }
+    private func loadPersistedHistory(completion: @escaping () -> Void) {
+        guard userPreferences.persistenceEnabled else {
+            completion()
+            return
+        }
 
         DispatchQueue.global(qos: .userInitiated).async {
             let persistedItems = self.persistenceManager.loadClipboardHistory(limit: self.userPreferences.maxClipboardItems)
 
             DispatchQueue.main.async {
-            self.clipboardHistory = persistedItems
+                self.clipboardHistory = persistedItems
+                completion()
             }
         }
     }
