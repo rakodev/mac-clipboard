@@ -8,6 +8,29 @@ set -e
 
 CERT_NAME="MacClipboard Dev"
 DEV_APP_PATH="$HOME/Applications/MacClipboard-Dev.app"
+DEV_BUNDLE_ID="com.macclipboard.app.dev"
+DEV_APP_NAME="MacClipboard Dev"
+
+# Optional: reset this dev build's Accessibility grant. Run with:
+#   ./run.sh --reset-permissions   (aliases: --reset-ax, -r)
+# Use it when the permission state gets stale (e.g. after regenerating the dev
+# cert, or the first time you switch to the separate dev bundle id). It is NOT run
+# by default on purpose: resetting on every launch would force you to re-grant
+# access each time, defeating the persistent dev identity we set up below.
+RESET_PERMISSIONS=false
+for arg in "$@"; do
+    case "$arg" in
+        --reset-permissions|--reset-ax|-r)
+            RESET_PERMISSIONS=true
+            ;;
+    esac
+done
+
+if [ "$RESET_PERMISSIONS" = true ]; then
+    echo "🧹 Resetting Accessibility permission for $DEV_BUNDLE_ID ..."
+    tccutil reset Accessibility "$DEV_BUNDLE_ID" 2>/dev/null || true
+    echo "   You will be asked to grant access once more on next launch."
+fi
 
 # Kill any existing MacClipboard processes
 pkill -f "MacClipboard" 2>/dev/null || true
@@ -62,7 +85,25 @@ mkdir -p "$HOME/Applications"
 rm -rf "$DEV_APP_PATH"
 cp -R "$BUILD_PATH" "$DEV_APP_PATH"
 
-# Re-sign with dev certificate for consistent identity
+# Give the dev build its OWN identity so it never collides with a release/Homebrew
+# install of MacClipboard in macOS's accessibility (TCC) database.
+#
+# TCC keys accessibility grants on (bundle id + code-signing identity). The Homebrew
+# build and this dev build share the bundle id "com.macclipboard.app" but are signed
+# with different certificates, so macOS treats them as the same app yet the signature
+# never matches: the Accessibility toggle looks enabled (granted to the Homebrew copy)
+# while the running dev copy stays untrusted and keeps re-prompting. Renaming the dev
+# bundle id + display name gives it a separate "MacClipboard Dev" entry you grant once;
+# because we re-sign with the persistent dev cert below, that grant survives rebuilds.
+PLIST="$DEV_APP_PATH/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $DEV_BUNDLE_ID" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string $DEV_BUNDLE_ID" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleName $DEV_APP_NAME" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleName string $DEV_APP_NAME" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $DEV_APP_NAME" "$PLIST" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string $DEV_APP_NAME" "$PLIST"
+
+# Re-sign with dev certificate for consistent identity (must run AFTER editing Info.plist)
 echo "🔐 Signing with development certificate..."
 # Use certificate hash to avoid ambiguity if multiple certs exist with same name
 CERT_HASH=$(security find-identity -v -p codesigning | grep "$CERT_NAME" | head -1 | awk '{print $2}')

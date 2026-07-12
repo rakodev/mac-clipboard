@@ -12,7 +12,6 @@ class MenuBarController: NSObject, ObservableObject {
     private var hotKeyPreferenceCancellable: AnyCancellable?
     private let updateService: UpdateService
     private var previousApplication: NSRunningApplication?
-    private var didAttemptAXPrompt = false
     private var clickOutsideMonitor: Any?
     private var settingsWindow: NSWindow?
     
@@ -429,28 +428,16 @@ class MenuBarController: NSObject, ObservableObject {
 
     private func simulatePasteKeypress() {
         permissionManager.checkPermission() // Refresh permission status
-        
-        if !permissionManager.isAccessibilityGranted {
-            
-            
-            // Try prompting again (some cases require options variant to re-evaluate)
-            if !didAttemptAXPrompt {
-                didAttemptAXPrompt = true
-                permissionManager.requestPermission()
-                
-                
-                // Wait a moment and check again
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                    if self.permissionManager.isAccessibilityGranted {
-                        self.simulatePasteKeypress() // Retry the paste
-                    } else {
-                    }
-                }
-                return
-            } else {
-                return
-            }
+
+        guard permissionManager.isAccessibilityGranted else {
+            // The item is already on the clipboard (copyToClipboard ran before this),
+            // so the user can paste manually with Cmd+V. Do NOT fire the system
+            // accessibility prompt here: it re-appears on every call while untrusted
+            // and spams the user. The in-popover banner guides them to grant access.
+            Logging.debug("[MenuBar] Skipping auto-paste: accessibility not granted (content copied for manual paste)")
+            return
         }
+
         guard let source = CGEventSource(stateID: .hidSystemState) else { return }
         guard let keyDownEvent = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true) else { return }
         keyDownEvent.flags = .maskCommand

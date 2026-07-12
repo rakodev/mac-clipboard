@@ -86,17 +86,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     private func handleAccessibilityPermissions() {
-        let trusted = AXIsProcessTrusted()
-        
-        if trusted { return }
+        if AXIsProcessTrusted() { return }
 
-        // Always show prompt for permission when missing
-        
+        // IMPORTANT: AXIsProcessTrustedWithOptions(prompt: true) re-shows the system
+        // "would like to control this computer" dialog on EVERY call while the process
+        // is untrusted, with no rate limiting. Calling it on each launch (or whenever
+        // detection fails, e.g. a stale TCC grant from a different-signature build)
+        // makes the popup reappear endlessly. So we fire the system prompt at most once,
+        // ever, purely to register the app in the Accessibility list. After that we rely
+        // on the in-popover banner and the onboarding window for guidance, and detect the
+        // grant by polling AXIsProcessTrusted(). The banner's "Force Reset" button remains
+        // a manual escape hatch to re-trigger the system prompt on demand.
+        let defaults = UserDefaults.standard
+        let hasPromptedKey = "hasRequestedAccessibilityPromptV1"
+        guard !defaults.bool(forKey: hasPromptedKey) else {
+            Logging.debug("[AX] System prompt already shown once; not re-prompting automatically")
+            return
+        }
+        defaults.set(true, forKey: hasPromptedKey)
+
         let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue() as String: true]
-        let promptResult = AXIsProcessTrustedWithOptions(options)
-        
-        if !promptResult {
-            // Show onboarding window as backup
+        if !AXIsProcessTrustedWithOptions(options) {
+            // Show onboarding window as backup (it polls for the grant and opens Settings).
             showOnboardingWindow()
         }
     }

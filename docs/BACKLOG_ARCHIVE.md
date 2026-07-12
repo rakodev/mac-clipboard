@@ -16,6 +16,12 @@ Use this format for each completed item:
 
 ## Completed Tasks
 
+### 2026-07-13 - Stop the accessibility permission prompt from repeating endlessly
+
+- Source: Bug report (native "would like to control this computer" dialog reappeared every time the user returned from System Settings, even though MacClipboard was already enabled there; user runs both a Homebrew build and a local ./run.sh build).
+- Summary: `AXIsProcessTrustedWithOptions(prompt: true)` re-shows the system dialog on every call while the process is untrusted, so calling it on each launch (and in the paste path) spammed the user, made worse by detection failing when the granted entry belonged to a different-signature build. Gated the launch-time system prompt to fire at most once ever (UserDefaults `hasRequestedAccessibilityPromptV1`), removed the native prompt from `simulatePasteKeypress` (content is already on the clipboard for manual Cmd+V; the popover banner guides the user), and removed the now-unused `didAttemptAXPrompt`. Root environmental cause was the Homebrew and `./run.sh` builds sharing bundle id `com.macclipboard.app` with different code signatures, colliding in TCC; `run.sh` now rewrites the dev copy to bundle id `com.macclipboard.app.dev` / name "MacClipboard Dev" before signing so it gets its own persistent accessibility grant, and added an opt-in `./run.sh --reset-permissions` flag (`tccutil reset Accessibility com.macclipboard.app.dev`) for clearing a stale grant on demand (not run by default, to preserve persistence).
+- Verification: `make dev` (Debug build succeeded); `bash -n run.sh` (syntax OK).
+
 ### 2026-07-13 - Fix stale/mismatched row labels and note field in clipboard list
 
 - Source: Bug report (masked item showed another item's note label, e.g. "GDL Almere PWD" instead of "Google Keystore Pwd"; self-corrected after switching items several times).
