@@ -230,6 +230,38 @@ See [Development Guide](docs/DEVELOPMENT.md) for how to build, contribute, and s
 * If focus doesn't restore properly, ensure the clipboard app has accessibility permissions
 * This works for both keyboard shortcuts and clicking outside the popover
 
+### Homebrew Installation Issues
+
+**"Refusing to load cask ... from untrusted tap"?**
+
+Newer versions of Homebrew ask you to trust third-party taps before installing from them. Trust the tap once, then retry:
+
+```bash
+brew trust rakodev/tap
+brew install --cask macclipboard
+```
+
+**"It seems there is already an App at '/Applications/MacClipboard.app'"?**
+
+This happens when a copy of MacClipboard already exists in Applications (for example, a previous manual download) that Homebrew did not install. Quit MacClipboard first, then let Homebrew take over that copy:
+
+```bash
+brew install --cask --force macclipboard
+```
+
+If you would rather start clean, remove the old copy first and then install normally:
+
+```bash
+rm -rf /Applications/MacClipboard.app
+brew install --cask macclipboard
+```
+
+After a force install the app is replaced on disk, so macOS may ask you to enable Accessibility again under System Settings > Privacy & Security > Accessibility.
+
+**"Cask 'macclipboard' is not installed" when running `brew upgrade`?**
+
+`brew upgrade` only works once the app is installed and tracked by Homebrew. If you installed manually before, run `brew install --cask macclipboard` (see above) so Homebrew adopts it; afterwards `brew upgrade --cask macclipboard` will work as expected.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

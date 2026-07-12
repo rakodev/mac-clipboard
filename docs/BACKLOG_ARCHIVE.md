@@ -16,7 +16,11 @@ Use this format for each completed item:
 
 ## Completed Tasks
 
-### 2026-07-04 - Finish splitting ContentView preview and destructive actions
+### 2026-07-13 - Fix stale/mismatched row labels and note field in clipboard list
+
+- Source: Bug report (masked item showed another item's note label, e.g. "GDL Almere PWD" instead of "Google Keystore Pwd"; self-corrected after switching items several times).
+- Summary: Root cause was `ForEach(0..<filteredItems.count, id: \.self)` in `ContentView.clipboardListView`, which identifies rows by index over a dynamic array. Inside `LazyVStack` this let SwiftUI reuse recycled rows with stale `item.note` (masked rows render the note as a hint), so a credential label from one item leaked onto another. Switched to `ForEach(Array(filteredItems.enumerated()), id: \.element.id)` for stable UUID identity, simplified the row `.id()` and `scrollTo` targets to the item UUID, made `ClipboardFilter.filteredItems` sort stable (explicit original-index tiebreaker so equal-score items no longer reshuffle on each recompute), and gave the compact preview `.id(selectedItem.id)` so `editingNote` re-initializes reliably per item.
+- Verification: `make dev` (Debug build succeeded). Manual: labels now stay pinned to the correct item across rapid selection switches.
 
 - Source: P1 from `BACKLOG.md`
 - Summary: Extracted compact preview rendering into `ClipboardCompactPreviewView`, moved deletion confirmation alerts into a dedicated view modifier, and added unit coverage for deletion confirmation copy/state.

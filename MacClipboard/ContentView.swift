@@ -49,11 +49,15 @@ struct ClipboardFilter {
             return previewMatch || fullTextMatch || noteMatch
         }
 
-        return filtered.sorted { item1, item2 in
-            let score1 = (item1.isFavorite ? 2 : 0) + ((item1.note?.isEmpty == false) ? 1 : 0)
-            let score2 = (item2.isFavorite ? 2 : 0) + ((item2.note?.isEmpty == false) ? 1 : 0)
-            return score1 > score2
-        }
+        // Sort by score descending, keeping the original (recency) order for equal
+        // scores. Swift's sorted(by:) is not guaranteed stable, so we use the original
+        // index as an explicit tiebreaker to avoid items reshuffling on every recompute.
+        return filtered.enumerated().sorted { lhs, rhs in
+            let score1 = (lhs.element.isFavorite ? 2 : 0) + ((lhs.element.note?.isEmpty == false) ? 1 : 0)
+            let score2 = (rhs.element.isFavorite ? 2 : 0) + ((rhs.element.note?.isEmpty == false) ? 1 : 0)
+            if score1 != score2 { return score1 > score2 }
+            return lhs.offset < rhs.offset
+        }.map { $0.element }
     }
 }
 
@@ -221,6 +225,7 @@ struct ContentView: View {
                             }
                         )
                             .frame(width: 259)
+                            .id(selectedItem.id)
                     }
                 } else {
                     // Full width list when no preview
@@ -475,8 +480,7 @@ struct ContentView: View {
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(0..<filteredItems.count, id: \.self) { index in
-                            let item = filteredItems[index]
+                        ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemRow(
                                 item: item,
                                 index: index,
@@ -510,7 +514,7 @@ struct ContentView: View {
                                 },
                                 timeAgoText: timeAgoCache[item.id] ?? "unknown"
                             )
-                            .id("filtered-\(item.id)-\(index)-\(revealedSensitiveIds.contains(item.id))")
+                            .id(item.id)
                             .onAppear {
                                 if index == 0 { isScrolledDown = false }
                             }
@@ -525,7 +529,7 @@ struct ContentView: View {
                 .onChange(of: selectedIndex) { newIndex in
                     withAnimation(.easeInOut(duration: 0.2)) {
                         if newIndex < filteredItems.count {
-                            proxy.scrollTo("filtered-\(filteredItems[newIndex].id)-\(newIndex)-\(revealedSensitiveIds.contains(filteredItems[newIndex].id))", anchor: .center)
+                            proxy.scrollTo(filteredItems[newIndex].id, anchor: .center)
                         }
                     }
                 }
@@ -536,7 +540,7 @@ struct ContentView: View {
                         updateSelectedItem()
                         if !filteredItems.isEmpty {
                             withAnimation(.easeInOut(duration: 0.2)) {
-                                proxy.scrollTo("filtered-\(filteredItems[0].id)-0-\(revealedSensitiveIds.contains(filteredItems[0].id))", anchor: .top)
+                                proxy.scrollTo(filteredItems[0].id, anchor: .top)
                             }
                         }
                     }) {
