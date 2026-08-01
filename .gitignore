@@ -120,6 +120,7 @@ Temporary Items
 # Custom build artifacts
 build/
 *.zip
+*.dmg
 *.xcarchive
 
 # Development scripts (keep source but ignore output)
