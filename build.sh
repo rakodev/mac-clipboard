@@ -94,12 +94,13 @@ if [ "$CREATE_RELEASE" = true ]; then
     fi
 
     # -------------------------------------------------------------------------
-    # Handle uncommitted changes (only for app source files)
+    # Handle uncommitted changes (all tracked paths, not just app sources, so
+    # docs/ and build tooling edits cannot silently miss the release tag)
     # -------------------------------------------------------------------------
-    APP_CHANGES=$(git status --porcelain MacClipboard/ MacClipboard.xcodeproj/ 2>/dev/null)
-    if [ -n "$APP_CHANGES" ]; then
-        echo -e "${YELLOW}📝 You have uncommitted app changes:${NC}"
-        git status --short MacClipboard/ MacClipboard.xcodeproj/
+    REPO_CHANGES=$(git status --porcelain 2>/dev/null)
+    if [ -n "$REPO_CHANGES" ]; then
+        echo -e "${YELLOW}📝 You have uncommitted changes:${NC}"
+        git status --short
         echo ""
 
         # Prompt for commit message
@@ -111,8 +112,8 @@ if [ "$CREATE_RELEASE" = true ]; then
             exit 1
         fi
 
-        # Stage and commit app changes
-        git add MacClipboard/ MacClipboard.xcodeproj/
+        # Stage and commit everything not covered by .gitignore
+        git add -A
         git commit -m "$COMMIT_MESSAGE"
         echo -e "${GREEN}✅ Changes committed${NC}"
     fi
