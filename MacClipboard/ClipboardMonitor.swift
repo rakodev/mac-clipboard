@@ -783,7 +783,14 @@ class ClipboardMonitor: ObservableObject {
                 self.clipboardHistory.insert(movedItem, at: 0)
             }
         }
-        
+
+        // Persist last-used time so this "most recently used at top" ordering
+        // survives an app restart, not just the current session.
+        let usedItemId = item.id
+        DispatchQueue.global(qos: .utility).async {
+            self.persistenceManager.markItemUsed(itemId: usedItemId)
+        }
+
         // Resume monitoring after a short delay
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             self.isPausing = false

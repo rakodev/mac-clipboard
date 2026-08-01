@@ -16,6 +16,12 @@ Use this format for each completed item:
 
 ## Completed Tasks
 
+### 2026-07-21 - Persist "most recently used at top" ordering across app restarts
+
+- Source: Bug report (favorites ordered by latest used at top reverted to creation-date order after a Mac reboot; user expected reboot not to change ordering).
+- Summary: The use-order was only ever kept in memory. `ClipboardMonitor.copyToClipboard` moves a pasted item to the front of the in-memory array, but nothing wrote that to disk, and `PersistenceManager.loadClipboardHistory` rebuilt the list sorted purely by `createdAt`, so every restart discarded the last-used order (not a regression, just first surfaced on reboot). Added an optional `lastUsedAt` Date attribute to `PersistedClipboardItem` (lightweight inferred migration, nil for legacy rows), seeded it with the creation time on save, added `PersistenceManager.markItemUsed(itemId:)` (sets `lastUsedAt = Date()` without touching `createdAt`/`updatedAt`, so "time ago" still reflects capture time), called it from `copyToClipboard` after the in-memory move, and changed the load sort to order by `lastUsedAt ?? createdAt` descending. Applies going forward; existing history has no historical use times so it falls back to `createdAt` until each item is next used.
+- Verification: `make dev` (Debug build succeeded).
+
 ### 2026-07-13 - Stop the accessibility permission prompt from repeating endlessly
 
 - Source: Bug report (native "would like to control this computer" dialog reappeared every time the user returned from System Settings, even though MacClipboard was already enabled there; user runs both a Homebrew build and a local ./run.sh build).

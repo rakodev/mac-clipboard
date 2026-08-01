@@ -139,6 +139,9 @@ class PersistenceManager: ObservableObject {
                 persistedItem.id = item.id
                 persistedItem.createdAt = item.timestamp
                 persistedItem.updatedAt = Date()
+                // Seed last-used with creation time so newly captured items sort
+                // correctly before they are ever pasted.
+                persistedItem.lastUsedAt = item.timestamp
                 persistedItem.contentType = Int16(item.type.rawValue)
                 persistedItem.displayText = item.displayText
                 persistedItem.isFavorite = item.isFavorite
@@ -199,8 +202,13 @@ class PersistenceManager: ObservableObject {
                     nonFavoriteItems = try backgroundContext.fetch(nonFavoritesRequest)
                 }
 
+                // Order by last-used time so the "most recently used at top"
+                // ordering survives an app restart. Fall back to createdAt for
+                // legacy items saved before lastUsedAt existed.
                 return (favoriteItems + nonFavoriteItems).sorted {
-                    ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast)
+                    let lhs = $0.lastUsedAt ?? $0.createdAt ?? .distantPast
+                    let rhs = $1.lastUsedAt ?? $1.createdAt ?? .distantPast
+                    return lhs > rhs
                 }
             }
 
@@ -305,6 +313,31 @@ class PersistenceManager: ObservableObject {
         return nil
     }
     
+    // MARK: - Usage Tracking
+
+    /// Record that an item was just pasted/used so it sorts to the top, and so
+    /// that ordering persists across app restarts. Does not touch updatedAt or
+    /// createdAt, keeping "time ago" tied to when the item was first captured.
+    func markItemUsed(itemId: UUID) {
+        do {
+            try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
+
+                let items = try backgroundContext.fetch(request)
+                if let item = items.first {
+                    item.lastUsedAt = Date()
+                    if backgroundContext.hasChanges {
+                        try backgroundContext.save()
+                    }
+                    Logging.debug("Marked item used \(itemId)")
+                }
+            }
+        } catch {
+            Logging.info("Mark item used error: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Favorites
 
     func toggleFavorite(itemId: UUID) -> Bool {
