@@ -23,6 +23,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboardingWindow: NSWindow?
     private var didShowPersistenceRecoveryAlert = false
     private var terminationSignalSource: DispatchSourceSignal?
+    private var updateWatchTimer: Timer?
+    private var didRelaunchAfterUpdate = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -32,6 +34,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         logAccessibilityState(context: "launch")
         handleAccessibilityPermissions()
         checkInstallationHygiene()
+        startWatchingForInPlaceUpdate()
 
         NotificationCenter.default.addObserver(
             self,
@@ -56,6 +59,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self)
+        updateWatchTimer?.invalidate()
+        updateWatchTimer = nil
         menuBarController?.cleanup()
     }
 
@@ -167,6 +172,42 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Accessibility switch is on, auto-paste does nothing, and Spotlight shows several
     /// identical apps. macOS gives no hint about which copy a grant belongs to, so the app has
     /// to say it.
+    /// Notice when an installer replaces our bundle underneath us, and relaunch.
+    ///
+    /// `brew upgrade --cask` moves the old bundle aside and the new one into its place while the
+    /// app keeps running. macOS then refuses this process's Accessibility grant (its recorded code
+    /// identity no longer matches the binary at our path), so auto-paste and the global hotkey
+    /// stop working while System Settings still shows MacClipboard as enabled: from the user's
+    /// side the upgrade broke the app and nothing in System Settings fixes it. Homebrew is meant
+    /// to quit the app first, but it decides whether we are running via AppleScript and
+    /// `launchctl list`, neither of which is reliable for a menu bar app started as a login item,
+    /// so it silently skips it. Watching for it here fixes the upgrade for every install method,
+    /// including a plain drag from a DMG.
+    ///
+    /// Polling costs one `stat` and only reads the signature once the file has actually changed.
+    private func startWatchingForInPlaceUpdate() {
+        guard !BuildInfo.isDevBuild, !isHostingTests else { return }
+
+        // Read the running binary's identity now, while it is still ours. `launchFingerprint` is
+        // lazy, and a first read taken after an upgrade would describe the *new* bundle, leaving
+        // nothing to compare against and no replacement ever detected.
+        let launch = AppInstallation.launchFingerprint
+        Logging.debug("[Install] Launched from inode \(launch.inode), build \(launch.version ?? "unknown")")
+
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+            guard let self, !self.didRelaunchAfterUpdate else { return }
+            guard AppInstallation.wasReplacedInPlace() else { return }
+
+            // Once only: if the replacement cannot start, one failed attempt is enough.
+            self.didRelaunchAfterUpdate = true
+            self.updateWatchTimer?.invalidate()
+            self.updateWatchTimer = nil
+            AppInstallation.relaunchAfterInPlaceUpdate()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        updateWatchTimer = timer
+    }
+
     private func checkInstallationHygiene() {
         Logging.info("[Install] \(AppInstallation.diagnosticLine)")
         guard !BuildInfo.isDevBuild, !isHostingTests else { return }

@@ -67,6 +67,138 @@ enum AppInstallation {
         return nil
     }
 
+    // MARK: - Replaced Underneath Us
+
+    /// What identifies the exact binary this process is running, so a replacement is detectable.
+    ///
+    /// `cdHash` is the value macOS itself keys code identity on, and it changes on every build.
+    /// The inode is the cheap check that says "look again": a bundle is replaced by moving a new
+    /// one into its place, so the file at our path becomes a different file.
+    struct BinaryFingerprint: Equatable {
+        let inode: UInt64
+        let cdHash: Data?
+        let version: String?
+
+        var isUsable: Bool { inode != 0 }
+    }
+
+    /// The identity of the executable this process launched from, captured before anything can
+    /// replace it.
+    static let launchFingerprint: BinaryFingerprint = fingerprint(ofExecutableAt: bundleURL)
+
+    private static var executableURL: URL {
+        Bundle.main.executableURL?.resolvingSymlinksInPath().standardizedFileURL
+            ?? bundleURL.appendingPathComponent("Contents/MacOS/MacClipboard")
+    }
+
+    static func fingerprint(ofExecutableAt bundle: URL) -> BinaryFingerprint {
+        BinaryFingerprint(
+            inode: inodeOfExecutable(in: bundle),
+            cdHash: codeDirectoryHash(for: bundle),
+            version: version(at: bundle)
+        )
+    }
+
+    /// The cheap half of a fingerprint, and the only part the poll pays for while nothing changes.
+    private static func inodeOfExecutable(in bundle: URL) -> UInt64 {
+        let executable = bundle == bundleURL
+            ? executableURL
+            : bundle.appendingPathComponent("Contents/MacOS/MacClipboard")
+
+        var status = stat()
+        return stat(executable.path, &status) == 0 ? status.st_ino : 0
+    }
+
+    private static func codeDirectoryHash(for url: URL) -> Data? {
+        var staticCode: SecStaticCode?
+        guard SecStaticCodeCreateWithPath(url as CFURL, [], &staticCode) == errSecSuccess,
+              let code = staticCode else { return nil }
+
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
+              let dictionary = information as? [String: Any] else { return nil }
+
+        return dictionary[kSecCodeInfoUnique as String] as? Data
+    }
+
+    private static func version(at bundle: URL) -> String? {
+        guard let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Contents/Info.plist"))
+        else { return nil }
+        return info["CFBundleVersion"] as? String
+    }
+
+    /// True when the bundle we are running from has been replaced on disk by a different build.
+    ///
+    /// This is what a Homebrew upgrade does: it moves the old bundle aside and moves the new one
+    /// into the same path, without quitting the running app first. macOS then stops honouring
+    /// this process's Accessibility grant, because the code identity it recorded no longer
+    /// matches the binary now at our path, and the app looks broken while System Settings still
+    /// shows it as enabled. Nothing the user can do in System Settings fixes it. Relaunching
+    /// does, and `relaunchAfterInPlaceUpdate` is how.
+    ///
+    /// Only a changed inode *and* a changed code hash counts, so re-copying an identical build
+    /// (or anything that merely touches the bundle) is not mistaken for an update.
+    static func wasReplacedInPlace() -> Bool {
+        // A dev build is replaced by every `run.sh`, which quits and relaunches it itself, and it
+        // has its own bundle id and TCC record either way.
+        guard !BuildInfo.isDevBuild else { return false }
+
+        let launch = launchFingerprint
+        guard launch.isUsable else { return false }
+
+        // Poll on the inode alone. Reading a code signature means going through the Security
+        // framework and hashing part of the binary, which is far too much to repeat every few
+        // seconds for an app whose whole point is staying out of the way, and it can only tell us
+        // something once a different file is actually at our path.
+        let inode = inodeOfExecutable(in: bundleURL)
+        guard inode != 0, inode != launch.inode else { return false }
+
+        return wasReplaced(launch: launch, current: fingerprint(ofExecutableAt: bundleURL))
+    }
+
+    /// The decision behind `wasReplacedInPlace`, separated so it can be tested without needing a
+    /// second copy of the app to be installed and replaced.
+    static func wasReplaced(launch: BinaryFingerprint, current: BinaryFingerprint) -> Bool {
+        // No usable reading of either side means no evidence of anything.
+        guard launch.isUsable, current.isUsable else { return false }
+
+        // Same file: nothing has been moved into our place.
+        guard current.inode != launch.inode else { return false }
+
+        // A different file with the same code identity is the same build copied again, which
+        // macOS keeps trusting. Only a different identity costs us the grant.
+        //
+        // Mid-upgrade the new bundle can be only partly in place, so an unreadable signature is
+        // "not yet" rather than "replaced". The next poll picks it up.
+        guard let currentHash = current.cdHash, let launchHash = launch.cdHash else { return false }
+        return currentHash != launchHash
+    }
+
+    /// Start the new copy and quit this one, so the user ends up on a process macOS trusts.
+    ///
+    /// Terminating only once the replacement is actually up means a bundle that cannot launch
+    /// leaves the user with a working, if outdated, app rather than nothing at all.
+    static func relaunchAfterInPlaceUpdate() {
+        let destination = bundleURL
+        let configuration = NSWorkspace.OpenConfiguration()
+        // Without this, macOS just activates *this* process, which is the one that has to go.
+        configuration.createsNewApplicationInstance = true
+        configuration.activates = false
+
+        Logging.info("[Install] Bundle was replaced on disk; relaunching from \(destination.path)")
+
+        NSWorkspace.shared.openApplication(at: destination, configuration: configuration) { _, error in
+            DispatchQueue.main.async {
+                if let error {
+                    Logging.info("[Install] Relaunch after update failed: \(error.localizedDescription)")
+                    return
+                }
+                Logging.info("[Install] Replacement instance is up; quitting the updated-away copy")
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
     // MARK: - Other Copies
 
     /// One installed copy of this app as LaunchServices sees it.

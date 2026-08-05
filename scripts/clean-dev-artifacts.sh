@@ -110,15 +110,18 @@ for app in "${RELEASE_COPIES[@]}"; do
 done
 
 DERIVED_DATA="$HOME/Library/Developer/Xcode/DerivedData"
+REPO_BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)/build"
 while IFS= read -r app; do
     [ -z "$app" ] && continue
     case "$app" in
         "$DEV_APP_PATH")
             echo -e "  ${GREEN}keep${NC}  $app  ($(describe "$app"), dev build)"
             ;;
-        "$DERIVED_DATA"/*)
-            # Every `make dev` leaves one of these behind. It carries the dev bundle id, so it
-            # can only ever contend with the dev copy, and deleting it just slows the next build.
+        "$DERIVED_DATA"/* | "$REPO_BUILD_DIR"/*)
+            # Every `make dev` leaves one of these behind, and a build given an explicit
+            # -derivedDataPath leaves one under the repo's own build/. Both carry the dev bundle
+            # id, so they can only ever contend with the dev copy, and deleting them just slows
+            # the next build. Report them so the count is honest, but do not call them strays.
             echo -e "  ${CYAN}build${NC} $app  ($(describe "$app"), normal build output)"
             ;;
         *)

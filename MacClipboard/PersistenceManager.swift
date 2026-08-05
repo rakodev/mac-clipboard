@@ -142,6 +142,17 @@ class PersistenceManager: ObservableObject {
         return !didFail
     }
 
+    /// Runs `work` on the background context's own queue.
+    ///
+    /// `work` must return value types only. A `PersistedClipboardItem` handed back out of the
+    /// block belongs to this queue, so reading any of its properties on the caller's thread
+    /// faults the row in from the wrong thread. That corrupts the context's object graph, and
+    /// what crashes is the context queue itself, later, inside
+    /// `-[NSManagedObjectContext _processRecentChanges:]`, which points nowhere near the code
+    /// that caused it. `compactImageStorage` made it reliable enough to hit in the field: it
+    /// calls `refreshAllObjects()` between batches, so the snapshot behind a row handed to the UI
+    /// is dropped while the UI is still reading it. Convert to `ClipboardItem` (a struct), or
+    /// return the bytes, inside the block.
     private func performOnContext<T>(_ work: () throws -> T) throws -> T {
         var result: Result<T, Error>!
         backgroundContext.performAndWait {
@@ -225,7 +236,7 @@ class PersistenceManager: ObservableObject {
 
     func loadClipboardHistory(limit: Int = 1000) -> [ClipboardItem] {
         do {
-            let persistedItems: [PersistedClipboardItem] = try performOnContext {
+            let (clipboardItems, imageCount): ([ClipboardItem], Int) = try performOnContext {
                 let favoritesRequest: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 favoritesRequest.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
                 favoritesRequest.predicate = NSPredicate(format: "isFavorite == YES")
@@ -245,24 +256,28 @@ class PersistenceManager: ObservableObject {
                 // Order by last-used time so the "most recently used at top"
                 // ordering survives an app restart. Fall back to createdAt for
                 // legacy items saved before lastUsedAt existed.
-                return (favoriteItems + nonFavoriteItems).sorted {
+                let persistedItems = (favoriteItems + nonFavoriteItems).sorted {
                     let lhs = $0.lastUsedAt ?? $0.createdAt ?? .distantPast
                     let rhs = $1.lastUsedAt ?? $1.createdAt ?? .distantPast
                     return lhs > rhs
                 }
+
+                // Convert inside the block: see `performOnContext`. The rows are read here and
+                // only value types leave.
+                var imageCount = 0
+                let items = persistedItems.compactMap { item -> ClipboardItem? in
+                    let isImage = item.contentType == Int16(ClipboardContentType.image.rawValue)
+                    if isImage {
+                        imageCount += 1
+                        // Only load first N images into memory, rest are lazy-loaded
+                        let shouldLoadImage = imageCount <= maxPreloadedImages
+                        return convertToClipboardItem(item, loadImageData: shouldLoadImage)
+                    }
+                    return convertToClipboardItem(item, loadImageData: true)
+                }
+                return (items, imageCount)
             }
 
-            var imageCount = 0
-            let clipboardItems = persistedItems.compactMap { item -> ClipboardItem? in
-                let isImage = item.contentType == Int16(ClipboardContentType.image.rawValue)
-                if isImage {
-                    imageCount += 1
-                    // Only load first N images into memory, rest are lazy-loaded
-                    let shouldLoadImage = imageCount <= maxPreloadedImages
-                    return convertToClipboardItem(item, loadImageData: shouldLoadImage)
-                }
-                return convertToClipboardItem(item, loadImageData: true)
-            }
             let lazyCount = max(0, imageCount - maxPreloadedImages)
             Logging.debug("💾 Loaded \(clipboardItems.count) items (\(imageCount) images, \(lazyCount) lazy)")
             return clipboardItems
@@ -335,16 +350,16 @@ class PersistenceManager: ObservableObject {
     /// Load image data for a specific item (for lazy loading)
     func loadImageData(for itemId: UUID) -> NSImage? {
         do {
-            let item: PersistedClipboardItem? = try performOnContext {
+            // Read the bytes inside the block: see `performOnContext`. Handing the row itself
+            // back and reading `imageData` here would fault it in on the caller's thread.
+            let imageData: Data? = try performOnContext {
                 let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
                 request.predicate = NSPredicate(format: "id == %@", itemId as CVarArg)
                 request.fetchLimit = 1
-                return try backgroundContext.fetch(request).first
+                return try backgroundContext.fetch(request).first?.imageData
             }
 
-            if let item,
-               let imageData = item.imageData,
-               let image = NSImage(data: imageData) {
+            if let imageData, let image = NSImage(data: imageData) {
                 return image
             }
         } catch {

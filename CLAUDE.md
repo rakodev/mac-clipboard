@@ -98,6 +98,11 @@ under Settings > Installation.
 
 Rules that follow from it:
 
+- Never run a bare `xcodebuild -configuration Release build`. With no signing identity it ad hoc
+  signs the *release* bundle id into the shared DerivedData, which LaunchServices registers, so the
+  app then reports a duplicate install to you for a copy that is only a build leftover. Use
+  `./build.sh`, which archives into `build/DerivedDataRelease`, removes it afterwards, and finishes
+  by running `clean-dev-artifacts.sh` in report mode.
 - Never leave a built `.app` lying around in an indexed folder. `build.sh` deletes and unregisters
   `build/export/MacClipboard.app` after packaging it (`--keep-export` opts out), and `run.sh`
   deletes the DerivedData build product once it has copied and re-signed it into
@@ -107,6 +112,51 @@ Rules that follow from it:
 - When diagnosing a permission report, read `[Install]` in the unified log first:
   `log show --predicate 'subsystem == "com.macclipboard.app"' --last 1h | grep Install`.
   It gives the path, the signing identity, and every duplicate that was found.
+
+## An Upgrade Replaces the Bundle Under the Running App
+
+`brew upgrade --cask` moves the old bundle aside and moves the new one into the same path without
+quitting the app. macOS then refuses that still-running process for Accessibility, because the
+code identity it recorded no longer matches the binary now at its path, so auto-paste and the
+global hotkey stop working while System Settings still shows MacClipboard as enabled. Pinning the
+designated requirement does not help here: that keeps the grant valid for the *new* copy, not for
+a process whose bundle was swapped. Only a relaunch fixes it.
+
+Do not rely on Homebrew to quit the app first. It decides whether the app is running with a JXA
+`Application(id).running()` call (which needs Automation consent for whichever terminal ran
+`brew`) and with `launchctl list` labels, and neither reports a menu bar app started as a login
+item, so it skips quitting silently. `open -a` does not help either: with the old process alive,
+macOS activates that one instead of launching the new bundle.
+
+So the app handles it itself, and the cask backs it up:
+
+- `AppInstallation.wasReplacedInPlace()` compares the running executable's inode *and* code
+  directory hash against `launchFingerprint`. Both must differ, so an identical build copied into
+  place again does not count, and an unreadable signature mid-upgrade reads as "not yet".
+- A 5 second poll in `AppDelegate.startWatchingForInPlaceUpdate` calls
+  `relaunchAfterInPlaceUpdate()`, which starts the new copy and quits this one *only* once the
+  replacement is up. Dev builds are excluded: `run.sh` replaces them on every build and restarts
+  them itself.
+- `PermissionManager.Diagnosis.updatedInPlace` is checked before every other case. Never let this
+  case fall through to `.staleRecord`: Repair runs `tccutil reset` and would delete a grant that
+  works perfectly for the new copy.
+- The cask's `uninstall quit:` runs before `signal:`, and its `postflight` ends the old process by
+  its executable path and waits for it to exit before `open`. `postflight` comes from the *new*
+  cask, so a cask fix reaches users who are still on the old app.
+
+## Managed Objects Never Leave Their Context
+
+`PersistenceManager.performOnContext` runs on the background context's queue, and what it returns
+must be value types only. Handing a `PersistedClipboardItem` back and reading a property on the
+caller's thread faults the row in from the wrong thread, corrupts the context's object graph, and
+crashes the *context* queue later inside `-[NSManagedObjectContext _processRecentChanges:]`, with
+a backtrace pointing nowhere near the cause. That shipped in 0.1.16: `loadClipboardHistory` and
+`loadImageData` both did it, and `compactImageStorage`'s `refreshAllObjects()` between batches
+made it fatal on the first launch after upgrading, which is the one launch that migration runs.
+
+Convert to `ClipboardItem` (a struct), or read the bytes, inside the block. The shared scheme
+passes `-com.apple.CoreData.ConcurrencyDebug 1`, so a violation now traps in Debug at the point of
+access; keep that argument.
 
 ## Architecture
 

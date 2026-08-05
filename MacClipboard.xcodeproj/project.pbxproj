@@ -24,6 +24,7 @@
 		E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2515D8D1089F4890B45C263D /* PersistenceManager.swift */; };
 		B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */; };
 		B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000014 /* FavoritesExportTests.swift */; };
+		B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */; };
 		B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */; };
 		B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000013 /* UpdateServiceTests.swift */; };
 /* End PBXBuildFile section */
@@ -59,6 +60,7 @@
 		B0TEST000000000000000010 /* MacClipboardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacClipboardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHistoryMergerTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000014 /* FavoritesExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesExportTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InPlaceUpdateDetectionTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveContentDetectorTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000013 /* UpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -127,6 +129,7 @@
 			children = (
 				B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */,
 				B0TEST000000000000000014 /* FavoritesExportTests.swift */,
+				B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
 				B0TEST000000000000000013 /* UpdateServiceTests.swift */,
 			);
@@ -255,6 +258,7 @@
 			files = (
 				B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */,
 				B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */,
+				B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,
 				B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */,
 			);

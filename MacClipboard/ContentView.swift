@@ -382,6 +382,15 @@ struct ContentView: View {
                         .font(.caption2)
                         .foregroundColor(.secondary)
 
+                case .updatedInPlace:
+                    // The grant is fine and belongs to the new binary. This process is the stale
+                    // one, so the only thing to fix is that it is still running.
+                    Text("MacClipboard was updated and needs to restart")
+                        .font(.caption).bold()
+                    Text("The app was replaced on disk while this copy kept running, so macOS no longer accepts it for Accessibility. Restarting restores auto‑paste and the hotkey. Nothing needs changing in System Settings. You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
                 case .staleRecord:
                     // Telling the user to switch the app on is useless here: it already looks
                     // switched on. The record has to be deleted and recreated instead.
@@ -422,6 +431,13 @@ struct ContentView: View {
                         }
                         .buttonStyle(.borderless)
                         .help("Reveal the other installed copies of MacClipboard in Finder")
+
+                    case .updatedInPlace:
+                        Button("Restart MacClipboard") {
+                            permissionManager.relaunchAfterUpdate()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Quit this copy and start the updated one, which macOS accepts again")
 
                     case .staleRecord:
                         Button(permissionManager.isRepairing ? "Repairing…" : "Repair") {

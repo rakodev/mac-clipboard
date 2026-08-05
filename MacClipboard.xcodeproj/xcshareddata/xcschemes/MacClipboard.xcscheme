@@ -75,6 +75,20 @@
             ReferencedContainer = "container:MacClipboard.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
+      <!-- Trap Core Data threading mistakes where they happen. Touching a managed object off
+           its context's queue otherwise corrupts the object graph silently and crashes later
+           inside CoreData, nowhere near the offending code: that is how the launch crash in
+           0.1.16 shipped. Debug only, so it costs users nothing. -->
+      <CommandLineArguments>
+         <CommandLineArgument
+            argument = "-com.apple.CoreData.ConcurrencyDebug"
+            isEnabled = "YES">
+         </CommandLineArgument>
+         <CommandLineArgument
+            argument = "1"
+            isEnabled = "YES">
+         </CommandLineArgument>
+      </CommandLineArguments>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"

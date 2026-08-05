@@ -292,12 +292,18 @@ echo -e "${YELLOW}🧹 Cleaning previous builds...${NC}"
 rm -rf build/*
 
 # Build archive with Developer ID signing and Hardened Runtime
+#
+# -derivedDataPath keeps the intermediate build product inside build/, which this script wipes on
+# every run. Without it the archive lands in the shared DerivedData as another bundle carrying the
+# release bundle id, LaunchServices registers it, and the app then correctly reports a duplicate
+# install to the user, for a copy that is only a leftover of building the release.
 echo -e "${YELLOW}🔨 Building archive...${NC}"
 xcodebuild archive \
     -project "${PROJECT_NAME}.xcodeproj" \
     -scheme "${SCHEME_NAME}" \
     -configuration "${CONFIGURATION}" \
     -archivePath "${ARCHIVE_PATH}" \
+    -derivedDataPath "./build/DerivedDataRelease" \
     -destination "generic/platform=macOS" \
     CODE_SIGN_IDENTITY="${DEVELOPER_ID}" \
     DEVELOPMENT_TEAM="${TEAM_ID}" \
@@ -475,6 +481,25 @@ if [ "$KEEP_EXPORT" = false ] && [ -f "${ZIP_PATH}" ] && [ -d "${APP_PATH}" ]; t
         -u "${APP_PATH}" 2>/dev/null || true
     rm -rf "${APP_PATH}"
     EXPORT_CLEANED=true
+fi
+
+# The archive's intermediate build product is another bundle with the release bundle id, and
+# LaunchServices registers it wherever it sits, so it counts as a duplicate install exactly like
+# the exported copy above. The archive keeps everything worth keeping (including the dSYMs), so
+# this tree is pure cache.
+if [ -d "./build/DerivedDataRelease" ]; then
+    while IFS= read -r stale_app; do
+        [ -n "$stale_app" ] || continue
+        /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+            -u "$stale_app" 2>/dev/null || true
+    done < <(find "./build/DerivedDataRelease" -name "MacClipboard.app" -type d 2>/dev/null)
+    rm -rf "./build/DerivedDataRelease"
+fi
+
+# Finally, say something if this machine still has copies that would break a user's Accessibility
+# grant. Report only: deciding which copy to keep is the user's call, and --fix does that.
+if [ -x "./scripts/clean-dev-artifacts.sh" ]; then
+    ./scripts/clean-dev-artifacts.sh || true
 fi
 
 echo ""

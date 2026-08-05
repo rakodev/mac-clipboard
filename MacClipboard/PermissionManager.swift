@@ -32,6 +32,11 @@ class PermissionManager: ObservableObject {
         /// Another installed copy of the app owns the grant. Removing the extra copies is the
         /// fix; resetting the record would only hand the problem to the other copy.
         case conflictingCopies([AppInstallation.Copy])
+
+        /// Our bundle was replaced on disk while we kept running, which is what an upgrade does.
+        /// The grant is intact and belongs to the new binary; this process is the stale one, so
+        /// the fix is to relaunch. Resetting the record here would throw away a working grant.
+        case updatedInPlace
     }
 
     @Published private(set) var diagnosis: Diagnosis = .notGranted
@@ -99,13 +104,20 @@ class PermissionManager: ObservableObject {
                     Logging.info("[PermissionManager] Accessibility record exists but macOS refuses this binary; likely a stale TCC record")
                 case .conflictingCopies(let copies):
                     Logging.info("[PermissionManager] Accessibility denied while other copies are installed: \(copies.map(\.displayPath).joined(separator: ", "))")
+                case .updatedInPlace:
+                    Logging.info("[PermissionManager] Accessibility refused because this bundle was replaced by an update; a relaunch restores it")
                 }
             }
         }
     }
 
-    /// Work out which of the three failure modes we are in.
+    /// Work out which of the failure modes we are in.
     private func diagnose() -> Diagnosis {
+        // First, because it is the one case where the grant is fine and this process is the
+        // problem. Every other answer here would send the user to fix something that is not
+        // broken, and Repair would delete a record that works.
+        if AppInstallation.wasReplacedInPlace() { return .updatedInPlace }
+
         let copies = conflictingCopies()
         if !copies.isEmpty { return .conflictingCopies(copies) }
 
@@ -130,6 +142,11 @@ class PermissionManager: ObservableObject {
     }
 
     /// Bring the extra copies to the user's attention in Finder.
+    /// Restart into the copy that is now on disk. See `Diagnosis.updatedInPlace`.
+    func relaunchAfterUpdate() {
+        AppInstallation.relaunchAfterInPlaceUpdate()
+    }
+
     func revealConflictingCopies() {
         guard case .conflictingCopies(let copies) = diagnosis else { return }
         AppInstallation.reveal(copies)
