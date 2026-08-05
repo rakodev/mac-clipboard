@@ -30,3 +30,18 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
 
 - [ ] Research a safer default for sensitive-content auto-detection.
   - Why later: enabling more protection by default is attractive, but false positives and user trust need testing.
+
+- [ ] Decide whether anything should be done about the slow first launch after a Homebrew upgrade.
+  - Measured on the 0.1.16 to 0.1.17 upgrade: the app process started at 23:37:40 and reached
+    `applicationDidFinishLaunching` at 23:39:12, so the menu bar icon was missing for 92 seconds.
+    A plain relaunch of the same bundle a minute later checked in in 0.086 seconds, so this is
+    the one-time Gatekeeper assessment of a freshly installed bundle, not our code: Homebrew
+    quarantines cask apps (`com.apple.quarantine` is present on the installed app), and syspolicyd
+    opens a TLS connection at exec time to check the notarisation ticket. XProtect itself finished
+    in 30ms, so the time is in that check.
+  - Why later: it is macOS behaviour on a security check, and the old cask hid it by accident
+    rather than fixing it (its `open -a` just re-activated the still-running old copy, so the
+    check happened at some later launch instead). Stripping `com.apple.quarantine` in `postflight`
+    would remove the pause and the check with it, which is not a trade to make quietly. Worth
+    measuring on another machine and a slower network first, since a user seeing no icon for a
+    minute and a half may well quit and retry.
