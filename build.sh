@@ -4,8 +4,10 @@
 # This script builds, signs, notarizes, and optionally releases the app
 #
 # Usage:
-#   ./build.sh          # Build only (will prompt if you want to release)
-#   ./build.sh release  # Build and create a GitHub release
+#   ./build.sh                       # Build only (will prompt if you want to release)
+#   ./build.sh release               # Build and create a GitHub release (interactive)
+#   ./build.sh release --version=0.1.14 --notes="..."
+#                                    # Same, without the fzf/read prompts
 
 set -e
 
@@ -16,6 +18,7 @@ CONFIGURATION="Release"
 ARCHIVE_PATH="./build/MacClipboard.xcarchive"
 EXPORT_PATH="./build/export"
 APP_PATH="./build/export/MacClipboard.app"
+ENTITLEMENTS_PATH="./MacClipboard/MacClipboard.entitlements"
 ZIP_PATH="./build/MacClipboard.zip"
 DMG_PATH="./build/MacClipboard-Installer.dmg"
 
@@ -42,11 +45,37 @@ NC='\033[0m' # No Color
 
 CREATE_RELEASE=false
 NEW_VERSION=""
+RELEASE_NOTES=""
+HAS_ARGS=false
 
-# Check if release mode is requested via parameter
-if [ "$1" = "release" ]; then
-    CREATE_RELEASE=true
-else
+# Parse arguments. `--version=` and `--notes=` pre-answer the two interactive prompts so a
+# release can be driven non-interactively; everything else about the flow is unchanged.
+for arg in "$@"; do
+    HAS_ARGS=true
+    case "$arg" in
+        release)
+            CREATE_RELEASE=true
+            ;;
+        --version=*)
+            NEW_VERSION="${arg#*=}"
+            ;;
+        --notes=*)
+            RELEASE_NOTES="${arg#*=}"
+            ;;
+        *)
+            echo -e "${RED}❌ Unknown argument: ${arg}${NC}"
+            echo "Usage: ./build.sh [release] [--version=X.Y.Z] [--notes=\"...\"]"
+            exit 1
+            ;;
+    esac
+done
+
+if [ -n "$NEW_VERSION" ] && ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo -e "${RED}❌ --version must look like X.Y.Z (got: ${NEW_VERSION})${NC}"
+    exit 1
+fi
+
+if [ "$HAS_ARGS" = false ]; then
     # Prompt user if they want to create a release
     echo -e "${CYAN}Do you want to create a release?${NC}"
     RELEASE_CHOICE=$(echo -e "No, just build\nYes, create release" | fzf --height=5 --reverse --prompt="Release? ")
@@ -147,28 +176,38 @@ if [ "$CREATE_RELEASE" = true ]; then
 
     echo ""
     echo -e "${CYAN}Current version: ${YELLOW}v${LATEST_VERSION}${NC}"
-    echo -e "${CYAN}Select new version:${NC}"
 
-    # Version selection with fzf
-    VERSION_CHOICE=$(echo -e "patch → v${NEXT_PATCH}\nminor → v${NEXT_MINOR}\nmajor → v${NEXT_MAJOR}\ncustom" | fzf --height=7 --reverse --prompt="Version: ")
+    if [ -n "$NEW_VERSION" ]; then
+        echo -e "${CYAN}Version supplied on the command line${NC}"
+    else
+        echo -e "${CYAN}Select new version:${NC}"
 
-    case "$VERSION_CHOICE" in
-        "patch"*) NEW_VERSION="$NEXT_PATCH" ;;
-        "minor"*) NEW_VERSION="$NEXT_MINOR" ;;
-        "major"*) NEW_VERSION="$NEXT_MAJOR" ;;
-        "custom")
-            echo -e "${CYAN}Enter custom version (without 'v' prefix):${NC}"
-            read -r NEW_VERSION
-            if [ -z "$NEW_VERSION" ]; then
-                echo -e "${RED}❌ Version cannot be empty${NC}"
+        # Version selection with fzf
+        VERSION_CHOICE=$(echo -e "patch → v${NEXT_PATCH}\nminor → v${NEXT_MINOR}\nmajor → v${NEXT_MAJOR}\ncustom" | fzf --height=7 --reverse --prompt="Version: ")
+
+        case "$VERSION_CHOICE" in
+            "patch"*) NEW_VERSION="$NEXT_PATCH" ;;
+            "minor"*) NEW_VERSION="$NEXT_MINOR" ;;
+            "major"*) NEW_VERSION="$NEXT_MAJOR" ;;
+            "custom")
+                echo -e "${CYAN}Enter custom version (without 'v' prefix):${NC}"
+                read -r NEW_VERSION
+                if [ -z "$NEW_VERSION" ]; then
+                    echo -e "${RED}❌ Version cannot be empty${NC}"
+                    exit 1
+                fi
+                ;;
+            *)
+                echo -e "${RED}❌ No version selected${NC}"
                 exit 1
-            fi
-            ;;
-        *)
-            echo -e "${RED}❌ No version selected${NC}"
-            exit 1
-            ;;
-    esac
+                ;;
+        esac
+    fi
+
+    if git rev-parse "v${NEW_VERSION}" >/dev/null 2>&1; then
+        echo -e "${RED}❌ Tag v${NEW_VERSION} already exists${NC}"
+        exit 1
+    fi
 
     echo -e "${GREEN}✅ New version: v${NEW_VERSION}${NC}"
     echo ""
@@ -176,8 +215,10 @@ if [ "$CREATE_RELEASE" = true ]; then
     # -------------------------------------------------------------------------
     # Release notes (prompt now so no interaction needed at the end)
     # -------------------------------------------------------------------------
-    echo -e "${CYAN}Enter release notes (press Enter for default, or type custom notes):${NC}"
-    read -r RELEASE_NOTES
+    if [ -z "$RELEASE_NOTES" ]; then
+        echo -e "${CYAN}Enter release notes (press Enter for default, or type custom notes):${NC}"
+        read -r RELEASE_NOTES
+    fi
 
     if [ -z "$RELEASE_NOTES" ]; then
         RELEASE_NOTES="MacClipboard v${NEW_VERSION} - Clipboard history manager for macOS"
@@ -298,8 +339,13 @@ find "${APP_PATH}" -type f \( -name "*.dylib" -o -name "*.framework" \) -exec \
 # Sign the main app with stable designated requirement
 # Using identifier + team ID (not cdhash) so macOS recognizes app across updates
 # This preserves Accessibility permissions after upgrades
+#
+# --entitlements is mandatory here: codesign --force replaces the signature wholesale, so
+# omitting it silently ships an app with no entitlements at all (that is what 0.1.13 and
+# every release before it did). The check below fails the build if that regresses.
 codesign --force --sign "${DEVELOPER_ID}" \
     --options runtime \
+    --entitlements "${ENTITLEMENTS_PATH}" \
     -r='designated => identifier "com.macclipboard.app" and anchor apple generic and certificate leaf[subject.OU] = "K542B2Z65M"' \
     "${APP_PATH}"
 
@@ -310,6 +356,25 @@ codesign --verify --deep --verbose=2 "${APP_PATH}"
 # Show the designated requirement that was set
 echo -e "${YELLOW}🔍 Checking designated requirements...${NC}"
 codesign -d -r- "${APP_PATH}" 2>&1
+
+# Confirm what actually shipped: the declared entitlements are present, and the debug-only
+# get-task-allow is not (notarization rejects it).
+echo -e "${YELLOW}🔍 Checking shipped entitlements...${NC}"
+SHIPPED_ENTITLEMENTS=$(codesign -d --entitlements - --xml "${APP_PATH}" 2>/dev/null || true)
+
+if ! grep -q "com.apple.security.automation.apple-events" <<< "${SHIPPED_ENTITLEMENTS}"; then
+    echo -e "${RED}❌ Entitlements missing from the signed app${NC}"
+    echo -e "${RED}   Expected com.apple.security.automation.apple-events from ${ENTITLEMENTS_PATH}${NC}"
+    exit 1
+fi
+
+if grep -q "com.apple.security.get-task-allow" <<< "${SHIPPED_ENTITLEMENTS}"; then
+    echo -e "${RED}❌ get-task-allow is present in the signed app; notarization will reject it${NC}"
+    echo -e "${RED}   Remove it from ${ENTITLEMENTS_PATH}${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✅ Entitlements verified${NC}"
 
 echo -e "${GREEN}✅ Code signature verified${NC}"
 

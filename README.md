@@ -200,6 +200,20 @@ See [Development Guide](docs/DEVELOPMENT.md) for how to build, contribute, and s
 
 * Check System Settings > Privacy & Security > Accessibility
 * Ensure MacClipboard is allowed
+* If another app already uses `Cmd+Shift+V`, MacClipboard cannot register it. The popover shows
+  a banner when this happens; click the menu bar icon to open MacClipboard in the meantime.
+
+**MacClipboard is switched on in Accessibility but still says permission is missing?**
+
+macOS records the permission against the app's code signature as it was when you granted it. If
+that record no longer matches the installed app, the switch keeps showing as on while macOS
+refuses the app. Open the popover and click **Repair** in the orange banner: it removes the stale
+record and asks for permission again. The manual equivalent is:
+
+```bash
+tccutil reset Accessibility com.macclipboard.app
+open -a /Applications/MacClipboard.app
+```
 
 **App not capturing clipboard?**
 

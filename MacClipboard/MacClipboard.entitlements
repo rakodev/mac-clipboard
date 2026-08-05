@@ -2,9 +2,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Needed to drive other applications for auto-paste. -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
-	<key>com.apple.security.get-task-allow</key>
-	<true/>
+	<!-- com.apple.security.get-task-allow is deliberately absent: it is a debug-only
+	     entitlement that notarization rejects. Xcode injects it into Debug builds
+	     automatically, so local debugging is unaffected. Until 0.1.13 it was listed here
+	     and only survived notarization because build.sh re-signed without any
+	     entitlements at all, which silently stripped every entitlement from the
+	     shipped app. -->
 </dict>
 </plist>

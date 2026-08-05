@@ -22,9 +22,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBarController: MenuBarController?
     private var onboardingWindow: NSWindow?
     private var didShowPersistenceRecoveryAlert = false
-    
+    private var terminationSignalSource: DispatchSourceSignal?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        installTerminationSignalHandler()
+        terminateOtherInstances()
+        Logging.info("[App] Launched \(BuildInfo.channelName) build \(BuildInfo.versionString) (\(BuildInfo.bundleIdentifier))")
         logAccessibilityState(context: "launch")
         handleAccessibilityPermissions()
 
@@ -52,6 +56,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self)
         menuBarController?.cleanup()
+    }
+
+    /// Turn SIGTERM into an orderly AppKit shutdown.
+    ///
+    /// The Homebrew cask stops the app with `uninstall signal: ["TERM", ...]` before it
+    /// replaces the bundle. The default disposition for SIGTERM kills the process outright,
+    /// so `applicationWillTerminate` never runs and anything not yet flushed to Core Data is
+    /// lost on every upgrade. Ignoring the default and handling it ourselves fixes that.
+    private func installTerminationSignalHandler() {
+        signal(SIGTERM, SIG_IGN)
+
+        let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        source.setEventHandler {
+            Logging.info("[App] Received SIGTERM, shutting down cleanly")
+            NSApp.terminate(nil)
+        }
+        source.resume()
+        terminationSignalSource = source
+    }
+
+    /// Ask any older copy of *this same* app to quit.
+    ///
+    /// A second instance normally cannot start, but it can when two bundles share one
+    /// identifier (an upgrade that replaced the bundle under a running process, for
+    /// instance). Two instances mean two menu bar icons, two clipboard pollers and a fight
+    /// over the global hotkey. The newest binary wins; asking the old one to quit rather
+    /// than exiting ourselves means an upgrade can never leave the user with nothing running.
+    ///
+    /// A dev build has its own bundle id, so it is never affected by this.
+    private func terminateOtherInstances() {
+        let ownProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+        // Only older instances are asked to quit. If two copies somehow start at the same
+        // moment, a symmetric rule would have each kill the other and leave nothing running.
+        let ownLaunchDate = NSRunningApplication.current.launchDate ?? Date()
+
+        let duplicates = NSWorkspace.shared.runningApplications.filter { app in
+            guard app.bundleIdentifier == BuildInfo.bundleIdentifier,
+                  app.processIdentifier != ownProcessIdentifier else { return false }
+            guard let launchDate = app.launchDate else { return true }
+            return launchDate < ownLaunchDate
+        }
+
+        guard !duplicates.isEmpty else { return }
+
+        Logging.info("[App] Found \(duplicates.count) older instance(s) of \(BuildInfo.bundleIdentifier); asking them to quit")
+        for duplicate in duplicates {
+            duplicate.terminate()
+        }
     }
 
     @objc private func showPersistenceRecoveryAlertIfNeeded() {
@@ -98,7 +150,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // grant by polling AXIsProcessTrusted(). The banner's "Force Reset" button remains
         // a manual escape hatch to re-trigger the system prompt on demand.
         let defaults = UserDefaults.standard
-        let hasPromptedKey = "hasRequestedAccessibilityPromptV1"
+        let hasPromptedKey = PermissionManager.hasRequestedPromptKey
         guard !defaults.bool(forKey: hasPromptedKey) else {
             Logging.debug("[AX] System prompt already shown once; not re-prompting automatically")
             return
@@ -147,7 +199,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let trusted = AXIsProcessTrusted()
         let bundlePath = Bundle.main.bundlePath
         let bundleID = Bundle.main.bundleIdentifier ?? "(nil)"
-        Logging.debug("[AX][\(context)] trusted=\(trusted) bundleID=\(bundleID) path=\(bundlePath)")
+        // Recorded at info level: when a user reports that auto-paste does nothing, this is
+        // the single most useful line to read back out of the unified log.
+        Logging.info("[AX][\(context)] trusted=\(trusted) bundleID=\(bundleID) path=\(bundlePath)")
     }
 }
 

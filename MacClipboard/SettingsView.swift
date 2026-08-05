@@ -135,7 +135,7 @@ struct SettingsView: View {
                         Text("Shortcuts")
                             .font(.headline)
 
-                        Toggle("Global hotkey (⌘ ⇧ V)", isOn: $preferences.hotKeyEnabled)
+                        Toggle("Global hotkey (\(GlobalHotkey.displayString))", isOn: $preferences.hotKeyEnabled)
 
                         Toggle("In-app shortcuts", isOn: $preferences.shortcutsEnabled)
 
@@ -166,6 +166,10 @@ struct SettingsView: View {
                 Text("MacClipboard v\(appVersion)")
                     .font(.caption)
                     .foregroundColor(.secondary)
+
+                // Names the running build. Two copies can run side by side (an installed
+                // release plus a dev build), and they are otherwise indistinguishable.
+                BuildChannelBadge()
 
                 Text("·")
                     .foregroundColor(.secondary)
@@ -207,9 +211,7 @@ struct SettingsView: View {
     }
 
     private var appVersion: String {
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
-        let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
-        return "\(version) (\(build))"
+        BuildInfo.versionString
     }
 
     private func formatStorageSize(_ mb: Int) -> String {
@@ -218,6 +220,24 @@ struct SettingsView: View {
         } else {
             return "\(mb)MB"
         }
+    }
+}
+
+/// Small "Dev" / "Release" tag so the running build is never in doubt.
+struct BuildChannelBadge: View {
+    var body: some View {
+        Text(BuildInfo.channelName)
+            .font(.caption2)
+            .fontWeight(.semibold)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(BuildInfo.isDevBuild ? Color.orange.opacity(0.18) : Color.secondary.opacity(0.15))
+            )
+            .foregroundColor(BuildInfo.isDevBuild ? .orange : .secondary)
+            .help(BuildInfo.diagnosticSummary)
+            .accessibilityLabel(Text("Build channel: \(BuildInfo.channelName)"))
     }
 }
 

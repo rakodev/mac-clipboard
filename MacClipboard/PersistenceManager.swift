@@ -19,9 +19,37 @@ class PersistenceManager: ObservableObject {
     }
     
     private init() {}
-    
+
+    // MARK: - Store Location
+
+    /// Directory that holds the Core Data store.
+    ///
+    /// `NSPersistentContainer.defaultDirectoryURL()` resolves to the same
+    /// `~/Library/Application Support/MacClipboard` folder for a dev build and an installed
+    /// release build, because it keys off the executable name rather than the bundle id.
+    /// Both processes then hold write handles on one SQLite file, and two independent Core
+    /// Data stacks on one store get no cross-process change coordination: each keeps stale
+    /// state, cleanup in one can resurrect items in the other, and `destroyPersistentStore`
+    /// runs while another process still has the file open. Dev builds therefore get their
+    /// own folder.
+    ///
+    /// The release path is deliberately left byte-for-byte as it was, so no installed copy
+    /// loses its existing history. A dev build starts from an empty history the first time
+    /// it runs after this change.
+    static var storeDirectoryURL: URL {
+        let defaultURL = NSPersistentContainer.defaultDirectoryURL()
+        guard BuildInfo.isDevBuild else { return defaultURL }
+        return defaultURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("\(defaultURL.lastPathComponent) (Dev)", isDirectory: true)
+    }
+
+    static var storeURL: URL {
+        storeDirectoryURL.appendingPathComponent("ClipboardData.sqlite")
+    }
+
     // MARK: - Core Data Stack
-    
+
     lazy var persistentContainer: NSPersistentContainer = {
         let container = NSPersistentContainer(name: "ClipboardData")
         configure(container: container)
@@ -36,7 +64,19 @@ class PersistenceManager: ObservableObject {
     }()
 
     private func configure(container: NSPersistentContainer) {
-        
+        // Point dev builds at their own store file. See storeDirectoryURL.
+        if BuildInfo.isDevBuild {
+            let directoryURL = Self.storeDirectoryURL
+            do {
+                try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+                container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: Self.storeURL)]
+            } catch {
+                // Fall back to the default location rather than failing to start. Worth
+                // knowing about, since it means sharing a store with a release build again.
+                Logging.info("💾 Could not create the dev store directory, using the default location: \(error.localizedDescription)")
+            }
+        }
+
         // Configure for external binary storage
         if let description = container.persistentStoreDescriptions.first {
             description.setOption(true as NSNumber, forKey: NSPersistentHistoryTrackingKey)
@@ -75,7 +115,7 @@ class PersistenceManager: ObservableObject {
     }
 
     func resetPersistentStoreFiles() -> Bool {
-        let storeURL = NSPersistentContainer.defaultDirectoryURL().appendingPathComponent("ClipboardData.sqlite")
+        let storeURL = Self.storeURL
         let fileManager = FileManager.default
         var didFail = false
 

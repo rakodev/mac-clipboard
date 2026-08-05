@@ -44,6 +44,7 @@ make clean            # Clean build artifacts
 ```
 MacClipboard/
 ├── MacClipboardApp.swift      # App entry point & AppDelegate
+├── BuildInfo.swift            # Build channel (Dev/Release) + GlobalHotkey definition
 ├── ClipboardMonitor.swift     # Clipboard polling (0.8s interval), history management
 ├── MenuBarController.swift    # Status bar item, popover, global hotkey registration
 ├── ContentView.swift          # Main UI: filter tabs, search, item list, preview
@@ -54,6 +55,23 @@ MacClipboard/
 ├── Logging.swift              # Debug/release logging utility
 └── ClipboardData.xcdatamodeld # Core Data model (PersistedClipboardItem entity)
 ```
+
+## Dev and Release Builds Side by Side
+
+`run.sh` builds a dev copy that is meant to run alongside an installed release copy, so the two
+must never collide. `BuildInfo.isDevBuild` is the single check; everything derived from it:
+
+| Concern | Release | Dev |
+|---------|---------|-----|
+| Bundle id | `com.macclipboard.app` | `com.macclipboard.app.dev` (set by `run.sh`) |
+| Global hotkey | `Cmd+Shift+V` | `Cmd+Shift+Opt+V` |
+| Menu bar icon | outlined clipboard | filled clipboard |
+| Core Data store | `~/Library/Application Support/MacClipboard` | `.../MacClipboard (Dev)` |
+| Settings footer | `Release` badge | `Dev` badge |
+
+Never change the release-side values: the bundle id and the pinned designated requirement in
+`build.sh` are what keep every user's Accessibility grant valid across upgrades, and the store
+path is where their history lives.
 
 ## Architecture
 
@@ -157,6 +175,11 @@ When modifying UI:
 The app requires:
 - `com.apple.security.automation.apple-events` - For paste automation
 - Accessibility permissions - For global hotkey (requested at runtime)
+
+`build.sh` re-signs the exported app to pin the designated requirement, and that re-sign MUST
+pass `--entitlements`: `codesign --force` replaces the signature wholesale, so omitting it ships
+an app with no entitlements at all. Releases up to 0.1.13 did exactly that. The build now fails
+if the entitlements are missing, or if debug-only `get-task-allow` is present.
 
 ## Important Files for Common Tasks
 

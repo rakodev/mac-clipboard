@@ -32,8 +32,10 @@ if [ "$RESET_PERMISSIONS" = true ]; then
     echo "   You will be asked to grant access once more on next launch."
 fi
 
-# Kill any existing MacClipboard processes
-pkill -f "MacClipboard" 2>/dev/null || true
+# Stop the previous dev build only. A broad `pkill -f MacClipboard` also kills an installed
+# release copy running from /Applications, which is not ours to stop: the two builds have
+# separate bundle ids and separate hotkeys precisely so they can run side by side.
+pkill -f "$DEV_APP_PATH/Contents/MacOS/MacClipboard" 2>/dev/null || true
 
 # Check if dev certificate exists
 if ! security find-certificate -c "$CERT_NAME" "$HOME/Library/Keychains/login.keychain-db" &>/dev/null; then
@@ -119,5 +121,6 @@ echo "🚀 Starting MacClipboard from: $DEV_APP_PATH"
 # Open the app from consistent location
 open "$DEV_APP_PATH"
 
-echo "✅ MacClipboard started! Check your menu bar for the clipboard icon."
-echo "Use Cmd+Shift+V to open the clipboard history from anywhere."
+echo "✅ MacClipboard started! Look for the FILLED clipboard icon in the menu bar (dev build)."
+echo "Use Cmd+Shift+Opt+V to open the clipboard history from anywhere."
+echo "   (the release build keeps Cmd+Shift+V, so both can run at once - see GlobalHotkey in BuildInfo.swift)"

@@ -166,6 +166,12 @@ See `SensitiveContentDetector` in `ClipboardMonitor.swift` for implementation de
 
 Implemented using Carbon framework's `RegisterEventHotKey` for system-wide `Cmd+Shift+V` support.
 
+The combination is defined once in `GlobalHotkey` (`BuildInfo.swift`). Dev builds use
+`Cmd+Shift+Opt+V` instead: `RegisterEventHotKey` is first-come-first-served system wide, so a
+dev build and an installed release build otherwise fight over `Cmd+Shift+V` and whichever
+launched second loses it without any visible sign. When registration fails, the popover now
+shows a banner rather than failing silently.
+
 ```swift
 // Carbon event handler for global hotkey
 var hotKeyRef: EventHotKeyRef?
@@ -297,17 +303,49 @@ PRs welcome for:
 
 ### Logs
 
-View logs in Console.app or:
+`Logging.info` goes to the unified log at `notice` level, so an installed release build can be
+inspected after the fact. `Logging.debug` stays on stdout in Debug builds only, because verbose
+messages can reference clipboard content and must not persist anywhere.
 
 ```bash
-log stream --predicate 'subsystem == "com.macclipboard.MacClipboard"' --level debug
+# Installed release build
+log show --predicate 'subsystem == "com.macclipboard.app"' --last 1h
+
+# Dev build
+log show --predicate 'subsystem == "com.macclipboard.app.dev"' --last 1h
+
+# Live
+log stream --predicate 'subsystem BEGINSWITH "com.macclipboard"'
 ```
+
+If `log` prints "too many arguments", a shell alias is shadowing it. Use `/usr/bin/log`.
 
 ### Common Issues
 
 **Hotkey not registering:**
 * Check accessibility permissions
-* Verify no other app is using `Cmd+Shift+V`
+* Verify no other app is using the combination (`Cmd+Shift+V` for release builds,
+  `Cmd+Shift+Opt+V` for dev builds). The popover shows a banner when registration is refused.
+
+**Accessibility shows as enabled but the app says permission is missing:**
+
+macOS records an Accessibility grant against the bundle id *and* the code signing requirement
+captured when the grant was made. If a differently signed build ever used the same bundle id,
+for example a locally built copy signed with the dev certificate, the record survives and keeps
+showing as switched on while tccd refuses the running binary. Toggling the switch does not
+rewrite the recorded requirement, so the only fix is to delete the record:
+
+```bash
+tccutil reset Accessibility com.macclipboard.app      # or .dev for a dev build
+defaults delete com.macclipboard.app hasRequestedAccessibilityPromptV1
+open -a /Applications/MacClipboard.app                # then approve the prompt
+```
+
+The app detects this state itself (it knows it was trusted before) and offers a Repair button in
+the popover banner that runs the same reset. `run.sh --reset-permissions` does it for dev builds.
+
+This is why `run.sh` renames the dev bundle to `com.macclipboard.app.dev`: without that, every
+`./run.sh` overwrites the shared record and breaks the installed release copy.
 
 **Clipboard not updating:**
 * Check `NSPasteboard.general.changeCount` is incrementing

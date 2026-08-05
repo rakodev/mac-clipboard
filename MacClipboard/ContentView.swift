@@ -63,7 +63,7 @@ struct ClipboardFilter {
 
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
-    let menuBarController: MenuBarController
+    @ObservedObject var menuBarController: MenuBarController
     @State private var selectedItem: ClipboardItem?
     @State private var searchText = ""
     @State private var debouncedSearchText = ""
@@ -140,9 +140,12 @@ struct ContentView: View {
         
         // Permission banner height (when shown)
         let permissionHeight: CGFloat = !permissionManager.isAccessibilityGranted ? 80 : 0
-        
+
+        // Hotkey conflict banner height (when shown)
+        let hotkeyWarningHeight: CGFloat = menuBarController.isGlobalHotkeyUnavailable ? 58 : 0
+
         // Calculate total height (no additional preview height since it's now horizontal)
-        let totalHeight = baseHeight + permissionHeight + listHeight
+        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + listHeight
         
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
@@ -162,6 +165,9 @@ struct ContentView: View {
             headerView
             if !permissionManager.isAccessibilityGranted {
                 permissionBanner
+            }
+            if menuBarController.isGlobalHotkeyUnavailable {
+                hotkeyConflictBanner
             }
             searchBarView
             filterPickerView
@@ -363,11 +369,28 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Accessibility permission required for auto‑paste")
-                    .font(.caption).bold()
-                Text("Enable MacClipboard in System Settings > Privacy & Security > Accessibility. You can still copy items.")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                if permissionManager.permissionLooksStale {
+                    // Telling the user to switch the app on is useless here: it already looks
+                    // switched on. The record has to be deleted and recreated instead.
+                    Text("Accessibility permission stopped working")
+                        .font(.caption).bold()
+                    Text("MacClipboard may still show as enabled in System Settings while macOS refuses it, usually after an update. Repair removes the stale entry and asks again. You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("Accessibility permission required for auto‑paste")
+                        .font(.caption).bold()
+                    Text("Enable MacClipboard in System Settings > Privacy & Security > Accessibility. You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                if let repairFailureMessage = permissionManager.repairFailureMessage {
+                    Text("Repair failed: \(repairFailureMessage). Remove MacClipboard from the Accessibility list with the “−” button, then add it again.")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+
                 HStack(spacing: 8) {
                     Button("Open Settings") {
                         permissionManager.openAccessibilitySettings()
@@ -377,11 +400,21 @@ struct ContentView: View {
                         permissionManager.refreshPermission()
                     }
                     .buttonStyle(.borderless)
-                    Button("Force Reset") {
-                        permissionManager.forcePermissionPrompt()
+
+                    if permissionManager.permissionLooksStale {
+                        Button(permissionManager.isRepairing ? "Repairing…" : "Repair") {
+                            permissionManager.repairPermission()
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(permissionManager.isRepairing)
+                        .help("Remove the stale Accessibility entry for MacClipboard and request permission again")
+                    } else {
+                        Button("Force Reset") {
+                            permissionManager.forcePermissionPrompt()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Force macOS to show accessibility permission prompt")
                     }
-                    .buttonStyle(.borderless)
-                    .help("Force macOS to show accessibility permission prompt")
                 }
             }
             Spacer()
@@ -390,10 +423,34 @@ struct ContentView: View {
         .background(Color.orange.opacity(0.12))
         .overlay(Divider(), alignment: .bottom)
     }
-    
+
+    private var hotkeyConflictBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "keyboard.badge.ellipsis")
+                .foregroundColor(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Global hotkey \(GlobalHotkey.displayString) is unavailable")
+                    .font(.caption).bold()
+                Text("Another app registered it first. Click the menu bar icon to open MacClipboard, or turn the hotkey off and on again in Settings once the other app releases it.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+        }
+        .padding(8)
+        .background(Color.orange.opacity(0.12))
+        .overlay(Divider(), alignment: .bottom)
+    }
+
     private var headerView: some View {
         HStack {
             ProjectTitleLink()
+
+            // Only dev builds are badged here: a "Release" badge on every popover would be
+            // noise. The Settings footer names the channel either way.
+            if BuildInfo.isDevBuild {
+                BuildChannelBadge()
+            }
 
             Spacer()
 
@@ -1763,7 +1820,7 @@ private struct ShortcutReferenceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 ShortcutReferenceSection(title: "Global", shortcuts: [
-                    ("⌘⇧V", "Open clipboard"),
+                    (GlobalHotkey.compactDisplayString, "Open clipboard"),
                 ])
 
                 ShortcutReferenceSection(title: "Navigation", shortcuts: [

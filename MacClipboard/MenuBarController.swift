@@ -16,7 +16,12 @@ class MenuBarController: NSObject, ObservableObject {
     private var settingsWindow: NSWindow?
     
     let permissionManager = PermissionManager()
-    
+
+    /// True when the global hotkey is switched on in preferences but macOS refused the
+    /// registration, which happens when another app already owns the combination.
+    /// Surfaced in the popover: silently losing the hotkey is very hard to diagnose.
+    @Published private(set) var isGlobalHotkeyUnavailable: Bool = false
+
     // Helper function to convert string to fourCharCode
     private func fourCharCode(_ string: String) -> OSType {
         guard string.count == 4 else { return 0 }
@@ -52,10 +57,14 @@ class MenuBarController: NSObject, ObservableObject {
     }
 
     private func makeStatusBarImage() -> NSImage? {
-        let symbolNames = ["doc.on.clipboard", "clipboard", "doc.on.doc"]
+        // Dev builds use the filled variant so that a dev build and an installed release
+        // build sitting next to each other in the menu bar can be told apart at a glance.
+        let symbolNames = BuildInfo.isDevBuild
+            ? ["doc.on.clipboard.fill", "clipboard.fill", "doc.on.doc.fill", "doc.on.clipboard"]
+            : ["doc.on.clipboard", "clipboard", "doc.on.doc"]
 
         for symbolName in symbolNames {
-            if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "MacClipboard") {
+            if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: statusItemLabel) {
                 image.isTemplate = true
                 image.size = NSSize(width: 17, height: 17)
                 return image
@@ -65,17 +74,24 @@ class MenuBarController: NSObject, ObservableObject {
         return nil
     }
 
+    /// "MacClipboard", or "MacClipboard (Dev)" for a dev build.
+    private var statusItemLabel: String {
+        let name = L10n.string("MacClipboard", comment: "Menu bar button accessibility label")
+        guard BuildInfo.isDevBuild else { return name }
+        return "\(name) (\(BuildInfo.channelName))"
+    }
+
     private func configureStatusButton(_ button: NSStatusBarButton) {
         if let image = makeStatusBarImage() {
             button.image = image
             button.title = ""
         } else {
             button.image = nil
-            button.title = "📋"
+            button.title = BuildInfo.isDevBuild ? "📋*" : "📋"
         }
 
-        button.toolTip = L10n.string("MacClipboard", comment: "Menu bar button accessibility label")
-        button.setAccessibilityLabel(L10n.string("MacClipboard", comment: "Menu bar button accessibility label"))
+        button.toolTip = "\(statusItemLabel) \(BuildInfo.versionString)"
+        button.setAccessibilityLabel(statusItemLabel)
         button.imagePosition = .imageOnly
         button.appearsDisabled = false
         button.target = nil
@@ -498,25 +514,45 @@ class MenuBarController: NSObject, ObservableObject {
     private func registerGlobalHotkeyIfNeeded() {
         guard hotKeyRef == nil else { return }
 
-        // Register Cmd+Shift+V hotkey
-        let hotKeyCode: UInt32 = 9 // 'V' key
-        let modifierKeys: UInt32 = UInt32(cmdKey | shiftKey)
-
         installGlobalHotkeyHandlerIfNeeded()
-        guard hotKeyEventHandlerRef != nil else { return }
+        guard hotKeyEventHandlerRef != nil else {
+            setGlobalHotkeyUnavailable(true)
+            return
+        }
 
-        let registerResult = RegisterEventHotKey(hotKeyCode, modifierKeys, hotKeyID, GetApplicationEventTarget(), 0, &hotKeyRef)
+        // Release builds use ⌘⇧V; dev builds use ⌘⇧⌥V so the two can coexist. See GlobalHotkey.
+        let registerResult = RegisterEventHotKey(
+            GlobalHotkey.keyCode,
+            GlobalHotkey.carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
 
         if registerResult != noErr {
             hotKeyRef = nil
-            Logging.info("Failed to register global hotkey: \(registerResult)")
+            setGlobalHotkeyUnavailable(true)
+            Logging.info("Failed to register global hotkey \(GlobalHotkey.displayString): OSStatus \(registerResult)")
+        } else {
+            setGlobalHotkeyUnavailable(false)
         }
     }
 
     private func unregisterGlobalHotkey() {
+        setGlobalHotkeyUnavailable(false)
         guard let hotKeyRef else { return }
         UnregisterEventHotKey(hotKeyRef)
         self.hotKeyRef = nil
+    }
+
+    private func setGlobalHotkeyUnavailable(_ unavailable: Bool) {
+        guard isGlobalHotkeyUnavailable != unavailable else { return }
+        if Thread.isMainThread {
+            isGlobalHotkeyUnavailable = unavailable
+        } else {
+            DispatchQueue.main.async { self.isGlobalHotkeyUnavailable = unavailable }
+        }
     }
     
     // MARK: - Click Outside Monitoring
