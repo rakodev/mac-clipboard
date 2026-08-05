@@ -116,6 +116,14 @@ else
     codesign --force --deep --sign "$CERT_NAME" "$DEV_APP_PATH"
 fi
 
+# The build product in DerivedData has served its purpose now that a signed copy exists in
+# ~/Applications. Leaving it there means macOS indexes it as yet another "MacClipboard", which is
+# how a machine ends up with several identical looking entries in Spotlight, and it is ad hoc
+# signed so it could never keep an Accessibility grant anyway. The next build recreates it.
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+"$LSREGISTER" -u "$BUILD_PATH" 2>/dev/null || true
+rm -rf "$BUILD_PATH"
+
 echo "🚀 Starting MacClipboard from: $DEV_APP_PATH"
 
 # Open the app from consistent location

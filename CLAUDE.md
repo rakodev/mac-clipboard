@@ -99,7 +99,10 @@ under Settings > Installation.
 Rules that follow from it:
 
 - Never leave a built `.app` lying around in an indexed folder. `build.sh` deletes and unregisters
-  `build/export/MacClipboard.app` after packaging it (`--keep-export` opts out).
+  `build/export/MacClipboard.app` after packaging it (`--keep-export` opts out), and `run.sh`
+  deletes the DerivedData build product once it has copied and re-signed it into
+  `~/Applications/MacClipboard-Dev.app`. Running the tests or hitting Run in Xcode brings that
+  product back until the next `./run.sh`, which is harmless: it carries the dev bundle id.
 - `./scripts/clean-dev-artifacts.sh` reports stray copies; `--fix` removes them.
 - When diagnosing a permission report, read `[Install]` in the unified log first:
   `log show --predicate 'subsystem == "com.macclipboard.app"' --last 1h | grep Install`.
