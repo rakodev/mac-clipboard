@@ -31,17 +31,22 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
 - [ ] Research a safer default for sensitive-content auto-detection.
   - Why later: enabling more protection by default is attractive, but false positives and user trust need testing.
 
-- [ ] Decide whether anything should be done about the slow first launch after a Homebrew upgrade.
-  - Measured on the 0.1.16 to 0.1.17 upgrade: the app process started at 23:37:40 and reached
-    `applicationDidFinishLaunching` at 23:39:12, so the menu bar icon was missing for 92 seconds.
-    A plain relaunch of the same bundle a minute later checked in in 0.086 seconds, so this is
-    the one-time Gatekeeper assessment of a freshly installed bundle, not our code: Homebrew
-    quarantines cask apps (`com.apple.quarantine` is present on the installed app), and syspolicyd
-    opens a TLS connection at exec time to check the notarisation ticket. XProtect itself finished
-    in 30ms, so the time is in that check.
-  - Why later: it is macOS behaviour on a security check, and the old cask hid it by accident
-    rather than fixing it (its `open -a` just re-activated the still-running old copy, so the
-    check happened at some later launch instead). Stripping `com.apple.quarantine` in `postflight`
-    would remove the pause and the check with it, which is not a trade to make quietly. Worth
-    measuring on another machine and a slower network first, since a user seeing no icon for a
-    minute and a half may well quit and retry.
+- [ ] Decide whether an upgrade should still show the "downloaded from the Internet" dialog.
+  - What happens: Homebrew quarantines cask apps, so `com.apple.quarantine` is on the installed
+    bundle, and the cask's `postflight` launches it. macOS therefore asks the user to confirm
+    opening it, once per upgrade, and the app does not start until they answer. Measured on the
+    0.1.16 to 0.1.17 upgrade: process started 23:37:40, dialog answered 23:39:11
+    (`syspolicyd: handle prompt response=Acknowledge`, then `Allowing code due to user approval`,
+    then `updateQuarantineFlags flagsToSet=64`), app launched 23:39:12. So the 92 second gap was
+    entirely the dialog waiting for a person; a relaunch afterwards took 0.086 seconds. The
+    earlier guess that this was a slow notarisation check was wrong: XProtect finished in 30ms and
+    Gatekeeper had already assessed the bundle as `Notarized Developer ID`.
+  - The dialog is not new, but its timing is. The old `postflight` only re-activated the copy that
+    was already running, so the prompt turned up at whatever launch came next, most likely at the
+    next login, with no context. Now it appears immediately after `brew upgrade`, while the user is
+    still looking at the terminal, which is arguably where it belongs.
+  - Options if it should go away: `xattr -d com.apple.quarantine` in `postflight`, which drops the
+    consent step for an app Homebrew has already checksum-verified and that is notarised and
+    stapled, or leave it to users who set `HOMEBREW_CASK_OPTS=--no-quarantine`. Deliberately
+    removing a Gatekeeper prompt on the user's behalf is a product and security call, not a
+    cleanup, so it is parked here rather than done.
