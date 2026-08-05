@@ -14,20 +14,39 @@ class PermissionManager: ObservableObject {
 
     @Published var isAccessibilityGranted: Bool = false
 
-    /// True when this app was trusted at some point but is not any more.
+    /// Why the permission is missing, which decides what the banner should tell the user to do.
     ///
-    /// The usual cause is a stale TCC row: macOS keys an Accessibility grant on the bundle
-    /// id *and* the code signing requirement captured when the grant was made. If a
-    /// differently signed build ever used this bundle id (a locally built copy, say), the
-    /// row survives and keeps showing as switched on in System Settings while tccd denies
-    /// the running binary. Telling the user to "enable MacClipboard" is a dead end in that
-    /// state, so the banner offers a repair instead.
-    @Published private(set) var permissionLooksStale: Bool = false
+    /// macOS keys an Accessibility grant on the bundle id *and* the code signing requirement
+    /// captured when the grant was made, and it exposes none of that in the UI. So a grant can
+    /// read as switched on in System Settings while tccd refuses the running binary, and
+    /// "enable MacClipboard in System Settings" is then a dead end. The cases below need
+    /// genuinely different fixes.
+    enum Diagnosis: Equatable {
+        /// No grant was ever made for this app. Switching it on is the correct advice.
+        case notGranted
+
+        /// A record exists that macOS will not honour for this binary, because a differently
+        /// signed copy created it. The record has to be deleted and remade, so offer Repair.
+        case staleRecord
+
+        /// Another installed copy of the app owns the grant. Removing the extra copies is the
+        /// fix; resetting the record would only hand the problem to the other copy.
+        case conflictingCopies([AppInstallation.Copy])
+    }
+
+    @Published private(set) var diagnosis: Diagnosis = .notGranted
 
     @Published private(set) var isRepairing: Bool = false
     @Published private(set) var repairFailureMessage: String?
 
     private var timer: Timer?
+
+    /// Enumerating installed copies goes through LaunchServices and reads code signatures, which
+    /// is far too much work for a 2 second poll, and the answer changes only when the user
+    /// installs or removes something.
+    private var cachedConflictingCopies: [AppInstallation.Copy] = []
+    private var lastCopyScan: Date?
+    private static let copyScanInterval: TimeInterval = 30
 
     init() {
         checkPermission()
@@ -52,14 +71,15 @@ class PermissionManager: ObservableObject {
         if actuallyWorking && !defaults.bool(forKey: Self.wasGrantedBeforeKey) {
             defaults.set(true, forKey: Self.wasGrantedBeforeKey)
         }
-        let looksStale = !actuallyWorking && defaults.bool(forKey: Self.wasGrantedBeforeKey)
+
+        let newDiagnosis: Diagnosis = actuallyWorking ? .notGranted : diagnose()
 
         // Only update on change to avoid unnecessary UI updates
-        if actuallyWorking != isAccessibilityGranted || looksStale != permissionLooksStale {
+        if actuallyWorking != isAccessibilityGranted || newDiagnosis != diagnosis {
             DispatchQueue.main.async {
                 let statusChanged = actuallyWorking != self.isAccessibilityGranted
                 self.isAccessibilityGranted = actuallyWorking
-                self.permissionLooksStale = looksStale
+                self.diagnosis = newDiagnosis
                 if actuallyWorking {
                     self.repairFailureMessage = nil
                 }
@@ -70,16 +90,57 @@ class PermissionManager: ObservableObject {
                     if trusted && !canCreateEvents {
                         Logging.debug("[PermissionManager] AXIsProcessTrusted=true but CGEvent creation failed")
                     }
-                    if looksStale {
-                        Logging.info("[PermissionManager] Accessibility grant lost after previously working; likely a stale TCC record")
-                    }
+                }
+
+                switch newDiagnosis {
+                case .notGranted:
+                    break
+                case .staleRecord:
+                    Logging.info("[PermissionManager] Accessibility record exists but macOS refuses this binary; likely a stale TCC record")
+                case .conflictingCopies(let copies):
+                    Logging.info("[PermissionManager] Accessibility denied while other copies are installed: \(copies.map(\.displayPath).joined(separator: ", "))")
                 }
             }
         }
     }
 
+    /// Work out which of the three failure modes we are in.
+    private func diagnose() -> Diagnosis {
+        let copies = conflictingCopies()
+        if !copies.isEmpty { return .conflictingCopies(copies) }
+
+        // Trusted at some point, refused now: the record no longer matches this binary.
+        if UserDefaults.standard.bool(forKey: Self.wasGrantedBeforeKey) { return .staleRecord }
+
+        // Never seen working, and this copy has no stable signing identity, so any record that
+        // does exist was made by a different build and can never match. Dev builds are excluded:
+        // `run.sh` gives them a persistent identity and their own bundle id.
+        if !BuildInfo.isDevBuild && AppInstallation.isAdHocSigned { return .staleRecord }
+
+        return .notGranted
+    }
+
+    private func conflictingCopies() -> [AppInstallation.Copy] {
+        if let lastCopyScan, Date().timeIntervalSince(lastCopyScan) < Self.copyScanInterval {
+            return cachedConflictingCopies
+        }
+        lastCopyScan = Date()
+        cachedConflictingCopies = AppInstallation.duplicateCopies()
+        return cachedConflictingCopies
+    }
+
+    /// Bring the extra copies to the user's attention in Finder.
+    func revealConflictingCopies() {
+        guard case .conflictingCopies(let copies) = diagnosis else { return }
+        AppInstallation.reveal(copies)
+    }
+
     /// Force a permission refresh (useful after user has gone to System Settings)
+    ///
+    /// The user may have just removed a duplicate copy or moved the app, so the cached copy scan
+    /// is discarded rather than reused here.
     func refreshPermission() {
+        lastCopyScan = nil
         checkPermission()
     }
 
@@ -147,7 +208,8 @@ class PermissionManager: ObservableObject {
                     defaults.removeObject(forKey: Self.hasRequestedPromptKey)
                     defaults.set(false, forKey: Self.wasGrantedBeforeKey)
                     self.isAccessibilityGranted = false
-                    self.permissionLooksStale = false
+                    self.diagnosis = .notGranted
+                    self.lastCopyScan = nil
                     self.forcePermissionPrompt()
 
                 case .failure(let message):

@@ -19,6 +19,27 @@ Run this before creating a distribution build or publishing a Homebrew cask upda
       the banner to change to "Accessibility permission stopped working", press Repair, and
       confirm the system prompt appears and the grant works afterwards.
 
+## Installation Hygiene
+
+These paths move and trash app bundles, so exercise them by hand on a secondary account before
+shipping. Build with `./build.sh --keep-export` so a loose bundle is available to copy around.
+
+- [ ] Copy the exported app to `~/Downloads` and open it from there. Confirm the alert says
+      MacClipboard is not in your Applications folder, press **Move to Applications**, and check
+      that it relaunches from `/Applications`, the `~/Downloads` copy is in the Trash, and the
+      Accessibility grant still holds.
+- [ ] Open the DMG and launch the app from the mounted image. Confirm the alert names the disk
+      image and that **Not Now** leaves the app running.
+- [ ] With a good copy in `/Applications`, put a second copy in `~/Applications` and launch the
+      `/Applications` one. Confirm the duplicate alert lists the other copy and names the copy to
+      keep, that **Show in Finder** reveals it, and that **Move Others to Trash** removes it.
+- [ ] Confirm the same information appears under Settings > Installation while a duplicate exists,
+      and that the section disappears once the copy is gone.
+- [ ] Confirm the popover banner reads "More than one copy of MacClipboard is installed" when a
+      duplicate holds the grant, rather than the plain "enable it in System Settings" text.
+- [ ] `log show --predicate 'subsystem == "com.macclipboard.app"' --last 10m | grep Install`
+      prints one `[Install]` line per launch with the path, identity and any duplicates.
+
 ## Signing
 
 - [ ] `codesign -d --entitlements - --xml /Applications/MacClipboard.app` lists

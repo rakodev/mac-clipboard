@@ -14,6 +14,7 @@
 		A01234567890123456789007 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789008 /* MenuBarController.swift */; };
 		A01234567890123456789009 /* UserPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789010 /* UserPreferences.swift */; };
 		A01234567890123456789011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789012 /* Assets.xcassets */; };
+		A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0APPINSTALL000000000000 /* AppInstallation.swift */; };
 		A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0BUILDINFO00000000000000 /* BuildInfo.swift */; };
 		A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0LOGGINGFILE00000000000000 /* Logging.swift */; };
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
@@ -44,6 +45,7 @@
 		A01234567890123456789010 /* UserPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserPreferences.swift; sourceTree = "<group>"; };
 		A01234567890123456789012 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A01234567890123456789013 /* MacClipboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacClipboard.entitlements; sourceTree = "<group>"; };
+		A0APPINSTALL000000000000 /* AppInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInstallation.swift; sourceTree = "<group>"; };
 		A0BUILDINFO00000000000000 /* BuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
 		A0LOGGINGFILE00000000000000 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		A0PERMISSIONMGR000000000000 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
@@ -92,6 +94,7 @@
 				A01234567890123456789006 /* ClipboardMonitor.swift */,
 				A01234567890123456789008 /* MenuBarController.swift */,
 				A01234567890123456789010 /* UserPreferences.swift */,
+				A0APPINSTALL000000000000 /* AppInstallation.swift */,
 				A0BUILDINFO00000000000000 /* BuildInfo.swift */,
 				A0LOGGINGFILE00000000000000 /* Logging.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
@@ -228,6 +231,7 @@
 				A01234567890123456789007 /* MenuBarController.swift in Sources */,
 				A01234567890123456789009 /* UserPreferences.swift in Sources */,
 				A01234567890123456789001 /* MacClipboardApp.swift in Sources */,
+				A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */,
 				A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */,
 				A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
@@ -390,6 +394,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "MacClipboard Dev";
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
 				INFOPLIST_KEY_LSUIElement = YES;
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
@@ -398,7 +403,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.14;
-				PRODUCT_BUNDLE_IDENTIFIER = com.macclipboard.app;
+				PRODUCT_BUNDLE_IDENTIFIER = com.macclipboard.app.dev;
 				PRODUCT_NAME = MacClipboard;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

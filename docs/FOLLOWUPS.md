@@ -4,6 +4,12 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
 
 ## Future Improvements
 
+- [ ] Show the install location and signing identity in the Accessibility onboarding window, not just in Settings and the popover banner.
+  - Why later: the launch alert and Settings > Installation already cover the failure cases; onboarding copy should be revisited as a whole rather than patched.
+
+- [ ] Consider having the Homebrew cask refuse to install while a copy exists outside `/Applications`.
+  - Why later: needs care not to break users who deliberately keep the app in `~/Applications`, and cask preflight behaviour should be tested against a real upgrade.
+
 - [ ] Evaluate configurable clipboard exclusion rules for apps or content patterns.
   - Why later: valuable for privacy, but needs careful UX so users do not accidentally miss expected captures.
 

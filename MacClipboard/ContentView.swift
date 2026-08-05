@@ -369,7 +369,18 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             VStack(alignment: .leading, spacing: 4) {
-                if permissionManager.permissionLooksStale {
+                switch permissionManager.diagnosis {
+                case .conflictingCopies(let copies):
+                    // Any grant that exists belongs to one specific copy, and it may well be one
+                    // of the others. A reset here would only move the problem across, so name the
+                    // real cause instead of asking the user to switch something on again.
+                    Text("More than one copy of MacClipboard is installed")
+                        .font(.caption).bold()
+                    Text("macOS gives Accessibility access to one specific copy of an app, so a permission granted to another copy does not apply here. Keep a single copy in Applications and remove \(copies.map(\.displayPath).joined(separator: ", ")). You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                case .staleRecord:
                     // Telling the user to switch the app on is useless here: it already looks
                     // switched on. The record has to be deleted and recreated instead.
                     Text("Accessibility permission stopped working")
@@ -377,7 +388,8 @@ struct ContentView: View {
                     Text("MacClipboard may still show as enabled in System Settings while macOS refuses it, usually after an update. Repair removes the stale entry and asks again. You can still copy items.")
                         .font(.caption2)
                         .foregroundColor(.secondary)
-                } else {
+
+                case .notGranted:
                     Text("Accessibility permission required for auto‑paste")
                         .font(.caption).bold()
                     Text("Enable MacClipboard in System Settings > Privacy & Security > Accessibility. You can still copy items.")
@@ -401,14 +413,23 @@ struct ContentView: View {
                     }
                     .buttonStyle(.borderless)
 
-                    if permissionManager.permissionLooksStale {
+                    switch permissionManager.diagnosis {
+                    case .conflictingCopies:
+                        Button("Show Copies") {
+                            permissionManager.revealConflictingCopies()
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Reveal the other installed copies of MacClipboard in Finder")
+
+                    case .staleRecord:
                         Button(permissionManager.isRepairing ? "Repairing…" : "Repair") {
                             permissionManager.repairPermission()
                         }
                         .buttonStyle(.borderless)
                         .disabled(permissionManager.isRepairing)
                         .help("Remove the stale Accessibility entry for MacClipboard and request permission again")
-                    } else {
+
+                    case .notGranted:
                         Button("Force Reset") {
                             permissionManager.forcePermissionPrompt()
                         }

@@ -46,6 +46,7 @@ NC='\033[0m' # No Color
 CREATE_RELEASE=false
 NEW_VERSION=""
 RELEASE_NOTES=""
+KEEP_EXPORT=false
 HAS_ARGS=false
 
 # Parse arguments. `--version=` and `--notes=` pre-answer the two interactive prompts so a
@@ -62,9 +63,12 @@ for arg in "$@"; do
         --notes=*)
             RELEASE_NOTES="${arg#*=}"
             ;;
+        --keep-export)
+            KEEP_EXPORT=true
+            ;;
         *)
             echo -e "${RED}❌ Unknown argument: ${arg}${NC}"
-            echo "Usage: ./build.sh [release] [--version=X.Y.Z] [--notes=\"...\"]"
+            echo "Usage: ./build.sh [release] [--version=X.Y.Z] [--notes=\"...\"] [--keep-export]"
             exit 1
             ;;
     esac
@@ -454,9 +458,32 @@ else
     echo -e "${RED}   Install it with: brew install create-dmg${NC}"
 fi
 
+# ============================================================================
+# CLEAN UP THE LOOSE EXPORTED APP
+# ============================================================================
+# The exported bundle is now inside the ZIP and the DMG, so the copy left in build/export is
+# dead weight, and not a harmless one: LaunchServices registers every .app it sees, so that
+# copy shows up as another "MacClipboard" in Spotlight and counts as a duplicate install. Two
+# copies under one bundle id are exactly what breaks an Accessibility grant, and the app now
+# warns the user when it finds them. Keeping the tree clean means those warnings only ever fire
+# for real problems. Pass --keep-export when you need the bundle for inspection.
+if [ "$KEEP_EXPORT" = false ] && [ -f "${ZIP_PATH}" ] && [ -d "${APP_PATH}" ]; then
+    echo -e "${YELLOW}🧹 Removing the loose exported app (kept in the ZIP and DMG)...${NC}"
+    # Unregister before deleting, so LaunchServices drops the entry rather than keeping a
+    # record that points at a path which no longer exists.
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -u "${APP_PATH}" 2>/dev/null || true
+    rm -rf "${APP_PATH}"
+    EXPORT_CLEANED=true
+fi
+
 echo ""
 echo -e "${GREEN}✅ Build completed successfully!${NC}"
-echo -e "${GREEN}📁 App location: ${APP_PATH}${NC}"
+if [ "${EXPORT_CLEANED:-false}" = true ]; then
+    echo -e "${GREEN}📁 App: packaged into the ZIP and DMG below (rerun with --keep-export to keep ${APP_PATH})${NC}"
+else
+    echo -e "${GREEN}📁 App location: ${APP_PATH}${NC}"
+fi
 echo -e "${GREEN}📁 ZIP archive: ${ZIP_PATH}${NC}"
 
 if [ -f "${DMG_PATH}" ]; then

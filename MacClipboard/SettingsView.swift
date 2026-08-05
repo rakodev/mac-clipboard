@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
+    @StateObject private var installation = InstallationHealth()
     let onDismiss: () -> Void
     let onCheckForUpdates: () -> Void
 
@@ -156,6 +157,11 @@ struct SettingsView: View {
                             }
                         }
                     }
+
+                    if installation.hasIssue {
+                        Divider()
+                        InstallationHealthSection(installation: installation)
+                    }
                 }
             }
 
@@ -208,6 +214,7 @@ struct SettingsView: View {
         .padding(20)
         .frame(width: 500, height: 480)
         .background(Color(NSColor.windowBackgroundColor))
+        .onAppear { installation.refresh() }
     }
 
     private var appVersion: String {
@@ -219,6 +226,74 @@ struct SettingsView: View {
             return String(format: "%.1fGB", Double(mb) / 1000.0)
         } else {
             return "\(mb)MB"
+        }
+    }
+}
+
+/// Shown only when something about the install will break permissions: a second copy of the app,
+/// or a copy running from somewhere macOS cannot keep a grant for.
+///
+/// The same problems are raised once at launch, but a user who clicked past that alert has no
+/// other way to find out why auto-paste keeps failing, so the panel keeps offering the fix.
+struct InstallationHealthSection: View {
+    @ObservedObject var installation: InstallationHealth
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text("Installation")
+                    .font(.headline)
+            }
+
+            if let problem = installation.locationProblem {
+                Text(AppInstallation.description(of: problem))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                Button("Move to Applications") {
+                    installation.moveToApplications()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
+
+            if !installation.duplicates.isEmpty {
+                Text("More than one copy of MacClipboard is installed. macOS grants Accessibility access to one specific copy, so extra copies make auto-paste stop working even while the switch stays on in System Settings.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Running: \(installation.ownPath)")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    ForEach(installation.duplicates) { copy in
+                        Text("Also installed: \(copy.displayPath) (\(copy.displayVersion))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                HStack(spacing: 8) {
+                    Button("Show in Finder") {
+                        installation.reveal()
+                    }
+                    .controlSize(.small)
+
+                    Button("Move Others to Trash") {
+                        installation.trashDuplicates()
+                    }
+                    .controlSize(.small)
+                }
+            }
+
+            if let message = installation.actionMessage {
+                Text(message)
+                    .font(.caption2)
+                    .foregroundColor(.orange)
+            }
         }
     }
 }

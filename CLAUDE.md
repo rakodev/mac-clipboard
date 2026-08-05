@@ -37,6 +37,10 @@ make clean            # Clean build artifacts
 
 # Release build (requires Developer ID certificate)
 ./build.sh release    # Full release: build, sign, notarize, create DMG/ZIP
+
+# Housekeeping
+./scripts/clean-dev-artifacts.sh          # Report stray copies of the app on this machine
+./scripts/clean-dev-artifacts.sh --fix    # Remove them
 ```
 
 ## Project Structure
@@ -52,6 +56,7 @@ MacClipboard/
 ├── UserPreferences.swift      # UserPreferencesManager singleton (UserDefaults)
 ├── PersistenceManager.swift   # Core Data stack, save/load items, image storage
 ├── PermissionManager.swift    # Accessibility permission handling
+├── AppInstallation.swift      # Install location, duplicate copies, signing identity
 ├── Logging.swift              # Debug/release logging utility
 └── ClipboardData.xcdatamodeld # Core Data model (PersistedClipboardItem entity)
 ```
@@ -63,15 +68,42 @@ must never collide. `BuildInfo.isDevBuild` is the single check; everything deriv
 
 | Concern | Release | Dev |
 |---------|---------|-----|
-| Bundle id | `com.macclipboard.app` | `com.macclipboard.app.dev` (set by `run.sh`) |
+| Bundle id | `com.macclipboard.app` (Release config) | `com.macclipboard.app.dev` (Debug config, and re-set by `run.sh`) |
 | Global hotkey | `Cmd+Shift+V` | `Cmd+Shift+Opt+V` |
 | Menu bar icon | outlined clipboard | filled clipboard |
 | Core Data store | `~/Library/Application Support/MacClipboard` | `.../MacClipboard (Dev)` |
 | Settings footer | `Release` badge | `Dev` badge |
+| Display name | MacClipboard | MacClipboard Dev |
+| Install checks | on | skipped (a dev build runs from wherever it was built) |
+
+An app process hosting an XCTest bundle skips the instance takeover and the install alerts, so
+running the tests never disturbs a dev build you have open.
 
 Never change the release-side values: the bundle id and the pinned designated requirement in
 `build.sh` are what keep every user's Accessibility grant valid across upgrades, and the store
 path is where their history lives.
+
+The Debug configuration carries the `.dev` bundle id so that building and running straight from
+Xcode cannot contend for the release Accessibility record either. Only the Release configuration
+may ever use `com.macclipboard.app`.
+
+## One Copy, In Applications
+
+An Accessibility grant belongs to a single copy of the app, keyed on bundle id *and* the code
+signing requirement recorded when the grant was made. So a second copy under the same bundle id
+is refused while System Settings keeps showing the app as enabled, and extra copies also clutter
+Spotlight, poll the pasteboard twice and fight over the global hotkey. `AppInstallation` detects
+this and the app offers the fix (move into Applications, or trash the extra copies) at launch and
+under Settings > Installation.
+
+Rules that follow from it:
+
+- Never leave a built `.app` lying around in an indexed folder. `build.sh` deletes and unregisters
+  `build/export/MacClipboard.app` after packaging it (`--keep-export` opts out).
+- `./scripts/clean-dev-artifacts.sh` reports stray copies; `--fix` removes them.
+- When diagnosing a permission report, read `[Install]` in the unified log first:
+  `log show --predicate 'subsystem == "com.macclipboard.app"' --last 1h | grep Install`.
+  It gives the path, the signing identity, and every duplicate that was found.
 
 ## Architecture
 

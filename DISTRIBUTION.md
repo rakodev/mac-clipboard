@@ -78,9 +78,17 @@ This will:
 ### Output Files
 
 After a successful build, you'll find:
-- `./build/export/MacClipboard.app` - The signed app bundle
 - `./build/MacClipboard.zip` - ZIP archive for sharing
 - `./build/MacClipboard-Installer.dmg` - DMG installer (if create-dmg is installed)
+
+The signed bundle itself is packaged into both of those and then removed from
+`./build/export/`, because macOS registers every `.app` it can see: a copy left there shows up as
+another "MacClipboard" in Spotlight and counts as a duplicate install, which is what breaks
+Accessibility grants. Pass `--keep-export` when you need the bundle on disk to inspect it:
+
+```bash
+./build.sh --keep-export
+```
 
 ### Optional: Install create-dmg
 
@@ -287,8 +295,16 @@ Common issues:
 
 ### Verify Notarization Status
 
+`build.sh` already verifies the signature and notarization before packaging. To check by hand,
+build with `--keep-export` so the bundle stays on disk, or unzip the archive first:
+
 ```bash
+./build.sh --keep-export
 spctl -a -vvv -t install ./build/export/MacClipboard.app
+
+# or, from the shipped archive
+unzip -q build/MacClipboard.zip -d /tmp/macclipboard-check
+spctl -a -vvv -t install /tmp/macclipboard-check/MacClipboard.app
 ```
 
 Should show: `source=Notarized Developer ID`

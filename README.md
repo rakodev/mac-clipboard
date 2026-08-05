@@ -215,6 +215,25 @@ tccutil reset Accessibility com.macclipboard.app
 open -a /Applications/MacClipboard.app
 ```
 
+**More than one MacClipboard in Spotlight, or the banner says another copy has the permission?**
+
+Keep exactly one copy, in your Applications folder. macOS grants Accessibility access to one
+specific copy of an app, so a leftover copy in Downloads, on the desktop, or in a second
+Applications folder makes auto-paste fail while the switch stays on. MacClipboard now says so on
+launch and lists the copies under **Settings > Installation**, where **Move Others to Trash**
+cleans them up. To check by hand:
+
+```bash
+mdfind "kMDItemCFBundleIdentifier == 'com.macclipboard.app'"
+```
+
+**Opened MacClipboard straight from the DMG or from Downloads?**
+
+Do not run it from there. macOS runs a quarantined app from a temporary location that changes on
+every launch, so no permission can ever stick. MacClipboard offers to move itself to Applications
+when it detects this; accept the offer, or drag the app to Applications yourself and open it from
+there.
+
 **App not capturing clipboard?**
 
 * Try quitting and restarting the app
