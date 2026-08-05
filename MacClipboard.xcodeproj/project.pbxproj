@@ -17,11 +17,13 @@
 		A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0APPINSTALL000000000000 /* AppInstallation.swift */; };
 		A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0BUILDINFO00000000000000 /* BuildInfo.swift */; };
 		A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0LOGGINGFILE00000000000000 /* Logging.swift */; };
+		A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0FAVEXPORT00000000000000 /* FavoritesExport.swift */; };
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
 		A0UPDATESERVICE00000000001 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0UPDATESERVICE00000000000 /* UpdateService.swift */; };
 		A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */; };
 		E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2515D8D1089F4890B45C263D /* PersistenceManager.swift */; };
 		B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */; };
+		B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000014 /* FavoritesExportTests.swift */; };
 		B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */; };
 		B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000013 /* UpdateServiceTests.swift */; };
 /* End PBXBuildFile section */
@@ -48,6 +50,7 @@
 		A0APPINSTALL000000000000 /* AppInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInstallation.swift; sourceTree = "<group>"; };
 		A0BUILDINFO00000000000000 /* BuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
 		A0LOGGINGFILE00000000000000 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
+		A0FAVEXPORT00000000000000 /* FavoritesExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesExport.swift; sourceTree = "<group>"; };
 		A0PERMISSIONMGR000000000000 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
 		A0UPDATESERVICE00000000000 /* UpdateService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateService.swift; sourceTree = "<group>"; };
 		A0SETTINGSVIEW0000000000 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
@@ -55,6 +58,7 @@
 		2515D8D1089F4890B45C263D /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000010 /* MacClipboardTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MacClipboardTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClipboardHistoryMergerTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000014 /* FavoritesExportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesExportTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveContentDetectorTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000013 /* UpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateServiceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -97,6 +101,7 @@
 				A0APPINSTALL000000000000 /* AppInstallation.swift */,
 				A0BUILDINFO00000000000000 /* BuildInfo.swift */,
 				A0LOGGINGFILE00000000000000 /* Logging.swift */,
+				A0FAVEXPORT00000000000000 /* FavoritesExport.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
 				A0UPDATESERVICE00000000000 /* UpdateService.swift */,
 				A0SETTINGSVIEW0000000000 /* SettingsView.swift */,
@@ -121,6 +126,7 @@
 			isa = PBXGroup;
 			children = (
 				B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */,
+				B0TEST000000000000000014 /* FavoritesExportTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
 				B0TEST000000000000000013 /* UpdateServiceTests.swift */,
 			);
@@ -234,6 +240,7 @@
 				A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */,
 				A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */,
 				A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */,
+				A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
 				A0UPDATESERVICE00000000001 /* UpdateService.swift in Sources */,
 				A0SETTINGSVIEW0000000001 /* SettingsView.swift in Sources */,
@@ -247,6 +254,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */,
+				B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,
 				B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */,
 			);

@@ -130,6 +130,52 @@ Key singletons:
 - `note`: String (user-added)
 - `createdAt`, `updatedAt`: Date
 
+## Images Are the Storage Cost, Not Text
+
+Measured on a real 1859-item history: 1683 text clips came to 717 KB, 176 images to 1.2 GB. Text is
+a rounding error. Two things follow, and both are load-bearing:
+
+- **Store images as PNG**, via `NSImage.clipboardStorageData`. Never go back to
+  `tiffRepresentation`: AppKit writes TIFF uncompressed, which measured about 40 times larger for
+  the same pixels. `compactImageStorage()` re-encodes a pre-existing history once per install,
+  guarded by `UserPreferencesManager.imageStorageCompacted`.
+- **Images have their own retention window**, `imagePersistenceDays` (default 30), separate from
+  `persistenceDays`. File items follow the text window on purpose: a file clip stores only its
+  paths, so it costs about as much as a line of text.
+
+Under storage pressure, `evictImagesUntilWithin(byteLimit:)` drops oldest non-favorite images
+rather than shortening the retention window. The previous behaviour halved `persistenceDays` once
+per pass, which could never reach the limit and so silently kept history at half the age the user
+asked for. `getStorageSize()` stats the store directory: do not go back to summing `imageData`
+lengths, which faults every external image file into memory once an hour.
+
+Bulk deletes use batched object deletion, not `NSBatchDeleteRequest`. A batch delete runs directly
+against the store, so Core Data never removes the external file behind `imageData`, and those files
+are the whole cost. See `docs/BACKLOG.md` for the orphans left by the old behaviour.
+
+## Favorites Are Permanent
+
+The empty state tells users favorites are never auto-deleted, so the code has to make that true
+rather than remember to be careful:
+
+- Every bulk delete goes through `PersistenceManager.bulkDeleteNonFavorites`, which always ands in
+  `isFavorite == NO`. Add new cleanup paths through that method, never a bare
+  `NSBatchDeleteRequest`. Age cleanup and storage pressure both run through it.
+- A favorite leaves the store only via `deleteItems(withIds:)`, which is a request for those
+  specific items, i.e. the user deleting something directly.
+- `clearAllData` (Clear History, and the popover trash button) keeps favorites, and
+  `ClipboardMonitor.clearHistory` keeps the same rows in memory so the two stay in step.
+- `addToHistory` saves the replacement row *before* deleting the row it supersedes, both on one
+  queue. The reverse order committed the delete synchronously while the save was async, so a quit
+  in between lost the item entirely. Re-copying is what happens to a favorite snippet constantly,
+  so favorites were the most exposed. Do not reintroduce a delete-then-save ordering.
+- `Settings > Persistence > Export Favorites` writes a zip (`favorites.json` plus `images/`) via
+  `FavoritesExport`, so a favorite can be recovered from outside the app. Hidden favorites are
+  included and flagged `"sensitive": true`; the save panel says so before writing.
+
+`docs/BACKLOG.md` tracks the missing test seam: nothing may construct `PersistenceManager` or
+`ClipboardMonitor` in a test, because both reach the user's real store.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
@@ -153,8 +199,9 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `maxClipboardItems`: 10-1000 (default: 200)
 - `persistenceEnabled`: Bool (default: true)
 - `saveImages`: Bool (default: true)
-- `maxStorageSize`: Bytes (default: 1GB)
-- `persistenceDays`: 1-365 (default: 60)
+- `maxStorageSize`: MB (default: 1000), enforced by evicting oldest non-favorite images
+- `persistenceDays`: 1-365 (default: 60), applies to every kind of item
+- `imagePersistenceDays`: 1-365 (default: 30), images only, shorter because they are the space
 - `hotKeyEnabled`: Bool (default: true)
 - `shortcutsEnabled`: Bool (default: true)
 - `autoStartEnabled`: Bool (default: true)
@@ -180,6 +227,11 @@ When modifying clipboard functionality:
 - [ ] Text, images, and files are captured correctly
 - [ ] Global hotkey works from any app
 - [ ] Favorites and notes persist after restart
+- [ ] Re-copying a favorite, then quitting immediately, keeps it starred after relaunch
+- [ ] Clear History leaves favorites in place
+- [ ] Export Favorites produces a zip whose JSON and images open
+- [ ] Copied images are stored as PNG (check bytes in `_EXTERNAL_DATA` start with the PNG header)
+- [ ] Images age out on `imagePersistenceDays` while older text survives on `persistenceDays`
 - [ ] Search filters by content and notes
 - [ ] Sensitive mode hides/reveals correctly
 

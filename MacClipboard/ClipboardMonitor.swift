@@ -240,8 +240,9 @@ class ClipboardMonitor: ObservableObject {
         self.loadPersistedHistory { [weak self] in
             self?.startMonitoring()
         }
-        
+
         startMaintenanceTimer()
+        compactImageStorageIfNeeded()
         
         // Listen for preferences changes to trim history if needed
         NotificationCenter.default.addObserver(
@@ -292,6 +293,28 @@ class ClipboardMonitor: ObservableObject {
     }
     
     
+    /// Re-encodes a pre-existing history's uncompressed images, once per install.
+    ///
+    /// New clips are stored as PNG from here on, but an installed copy upgrading into this can be
+    /// holding a gigabyte of TIFF that no retention setting would ever have explained. Runs at
+    /// utility priority so it stays out of the way of the first paste after launch.
+    private func compactImageStorageIfNeeded() {
+        guard userPreferences.persistenceEnabled, !userPreferences.imageStorageCompacted else { return }
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let reclaimed = self.persistenceManager.compactImageStorage()
+
+            DispatchQueue.main.async {
+                // Set only after a completed pass, so an interrupted one runs again next launch.
+                self.userPreferences.imageStorageCompacted = true
+                if reclaimed > 0 {
+                    Logging.info("💾 Reclaimed \(reclaimed / 1_048_576) MB by re-encoding stored images")
+                }
+            }
+        }
+    }
+
     private func startMaintenanceTimer() {
         // Run maintenance every hour
         maintenanceTimer = Timer.scheduledTimer(withTimeInterval: 3600, repeats: true) { [weak self] _ in
@@ -320,11 +343,17 @@ class ClipboardMonitor: ObservableObject {
         }
     }
     
-    private func saveItemToPersistence(_ item: ClipboardItem) {
+    /// Saves `item`, then removes any rows it replaces. Both run on the same queue, in that
+    /// order, so there is no moment where neither the old row nor the new one is on disk.
+    private func saveItemToPersistence(_ item: ClipboardItem, superseding supersededIDs: Set<UUID> = []) {
         guard userPreferences.persistenceEnabled else { return }
-        
+
         DispatchQueue.global(qos: .utility).async {
             self.persistenceManager.saveClipboardItem(item, saveImages: self.userPreferences.saveImages)
+
+            if !supersededIDs.isEmpty {
+                self.persistenceManager.deleteItems(withIds: supersededIDs)
+            }
         }
     }
     
@@ -332,17 +361,21 @@ class ClipboardMonitor: ObservableObject {
         guard userPreferences.persistenceEnabled else { return }
         
         DispatchQueue.global(qos: .utility).async {
-            // Clean up old items
             self.persistenceManager.cleanupOldItems(olderThan: self.userPreferences.persistenceDays)
-            
-            // Check storage size and clean up if needed
-            let currentSize = self.persistenceManager.getStorageSize()
-            let maxSizeBytes = Int64(self.userPreferences.maxStorageSize) * 1024 * 1024 // Convert MB to bytes
-            
-            if currentSize > maxSizeBytes {
-                // In a more sophisticated implementation, we could selectively remove larger items first
-                self.persistenceManager.cleanupOldItems(olderThan: max(1, self.userPreferences.persistenceDays / 2))
-            }
+
+            // Images age out on their own, shorter clock. Keeping a text clip costs a few hundred
+            // bytes and it is often something you come back to; keeping an image costs thousands
+            // of times more and it has usually been pasted once and forgotten.
+            self.persistenceManager.cleanupOldItems(
+                olderThan: self.userPreferences.imagePersistenceDays,
+                scope: .images
+            )
+
+            // Then, if the store is still over budget, drop oldest images until it fits. This used
+            // to halve the retention window once instead, which could never get under the limit:
+            // it just kept history at half the age the user asked for, every hour, for ever.
+            let limit = Int64(self.userPreferences.maxStorageSize) * 1024 * 1024
+            self.persistenceManager.evictImagesUntilWithin(byteLimit: limit)
         }
     }
     
@@ -617,14 +650,14 @@ class ClipboardMonitor: ObservableObject {
             let result = ClipboardHistoryMerger.inserting(item, into: self.clipboardHistory)
             guard result.shouldPersistInsertedItem else { return }
 
-            if !result.removedItemIDs.isEmpty {
-                self.persistenceManager.deleteItems(withIds: result.removedItemIDs)
-            }
-
             self.clipboardHistory = result.history
 
-            // Save to persistence
-            self.saveItemToPersistence(self.clipboardHistory[0])
+            // Write the replacement row before dropping the one it supersedes. The delete used to
+            // run first, and committed synchronously, while the save was dispatched async: in
+            // between, the item existed in memory only. A quit in that window lost it for good.
+            // Re-copying something you already have is exactly what happens to a favorite
+            // snippet, so favorites were the items most exposed to it.
+            self.saveItemToPersistence(self.clipboardHistory[0], superseding: result.removedItemIDs)
 
             // Limit to max items
             self.trimHistoryToLimitPreservingFavorites()
@@ -799,10 +832,11 @@ class ClipboardMonitor: ObservableObject {
     
     func clearHistory() {
         DispatchQueue.main.async {
-            self.clipboardHistory.removeAll()
+            // Keep favorites. Clear History clears the history, not the items the user pinned;
+            // `clearAllData` spares the same rows, so memory and store stay in step.
+            self.clipboardHistory.removeAll { !$0.isFavorite }
         }
 
-        // Also clear persistent storage permanently
         DispatchQueue.global(qos: .utility).async {
             self.persistenceManager.clearAllData()
         }

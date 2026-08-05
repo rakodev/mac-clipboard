@@ -1,10 +1,41 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
     @StateObject private var installation = InstallationHealth()
+    @State private var exportState: ExportState = .idle
     let onDismiss: () -> Void
     let onCheckForUpdates: () -> Void
+
+    enum ExportState: Equatable {
+        case idle
+        case working
+        case exported(count: Int)
+        case failed(reason: String)
+
+        var message: String? {
+            switch self {
+            case .idle, .working:
+                return nil
+            case .exported(let count):
+                return count == 1
+                    ? L10n.string("Exported 1 favorite.", comment: "Export confirmation")
+                    : String(
+                        format: L10n.string("Exported %d favorites.", comment: "Export confirmation"),
+                        count
+                    )
+            case .failed(let reason):
+                return reason
+            }
+        }
+
+        var isFailure: Bool {
+            if case .failed = self { return true }
+            return false
+        }
+    }
 
     init(onDismiss: @escaping () -> Void = {}, onCheckForUpdates: @escaping () -> Void = {}) {
         self.onDismiss = onDismiss
@@ -99,9 +130,47 @@ struct SettingsView: View {
                                 .monospacedDigit()
                         }
 
-                        Text("Favorites are kept indefinitely.")
+                        HStack {
+                            Text("Keep images:")
+                                .frame(width: 80, alignment: .leading)
+
+                            Slider(
+                                value: Binding(
+                                    get: { Double(preferences.imagePersistenceDays) },
+                                    set: { preferences.imagePersistenceDays = Int($0) }
+                                ),
+                                in: 1...365,
+                                step: 1
+                            )
+                            .disabled(!preferences.persistenceEnabled)
+
+                            Text("\(preferences.imagePersistenceDays) days")
+                                .frame(width: 70, alignment: .trailing)
+                                .monospacedDigit()
+                        }
+
+                        Text("Images are given a shorter life than text because they take almost all the space: a thousand text clips take under a megabyte, while a hundred screenshots can take a gigabyte. Favorites are kept indefinitely, whatever their type.")
                             .font(.caption)
                             .foregroundColor(.secondary)
+
+                        HStack(spacing: 8) {
+                            Button("Export Favorites…") {
+                                exportFavorites()
+                            }
+                            .disabled(exportState == .working)
+
+                            if exportState == .working {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+
+                            if let message = exportState.message {
+                                Text(message)
+                                    .font(.caption)
+                                    .foregroundColor(exportState.isFailure ? .red : .secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
                     }
 
                     Divider()
@@ -226,6 +295,46 @@ struct SettingsView: View {
             return String(format: "%.1fGB", Double(mb) / 1000.0)
         } else {
             return "\(mb)MB"
+        }
+    }
+
+    /// Favorites are the one thing in the history a user is told is permanent, so they get a way
+    /// to take a copy out of the app. Reading the store and encoding happen off the main thread:
+    /// image favorites are megabytes each.
+    private func exportFavorites() {
+        let panel = NSSavePanel()
+        panel.title = L10n.string("Export Favorites", comment: "Save panel title")
+        panel.nameFieldStringValue = FavoritesExport.suggestedFileName()
+        panel.canCreateDirectories = true
+        panel.allowedContentTypes = [.zip]
+        // Hidden favorites are included, so say so before anything is written to disk.
+        panel.message = L10n.string(
+            "Favorites are exported as readable text, including any that are hidden. Choose somewhere you trust.",
+            comment: "Save panel message warning that the export is not encrypted"
+        )
+
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        exportState = .working
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let favorites = PersistenceManager.shared.loadFavorites()
+            let outcome: ExportState
+
+            do {
+                let count = try FavoritesExport.write(favorites, to: destination)
+                outcome = .exported(count: count)
+            } catch {
+                Logging.info("Favorites export failed: \(error.localizedDescription)")
+                outcome = .failed(reason: error.localizedDescription)
+            }
+
+            DispatchQueue.main.async {
+                exportState = outcome
+                if case .exported = outcome {
+                    NSWorkspace.shared.activateFileViewerSelecting([destination])
+                }
+            }
         }
     }
 }

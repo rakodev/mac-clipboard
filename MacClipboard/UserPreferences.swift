@@ -16,6 +16,8 @@ class UserPreferencesManager: ObservableObject {
         static let saveImages = "saveImages"
         static let maxStorageSize = "maxStorageSize"
         static let persistenceDays = "persistenceDays"
+        static let imagePersistenceDays = "imagePersistenceDays"
+        static let imageStorageCompacted = "imageStorageCompacted"
         static let shortcutsEnabled = "shortcutsEnabled"
         static let autoDetectSensitiveData = "autoDetectSensitiveData"
         static let autoHidePasswordLikeStrings = "autoHidePasswordLikeStrings"
@@ -28,6 +30,11 @@ class UserPreferencesManager: ObservableObject {
     static let minStorageSize = 10
     static let maxStorageSize = 10000
     static let defaultStorageSize = 1000
+    static let defaultPersistenceDays = 60
+    /// Images get a shorter default window than text. One image costs thousands of times more to
+    /// keep than one text clip, and a screenshot is usually pasted once, while a copied snippet is
+    /// often reference material you come back to weeks later.
+    static let defaultImagePersistenceDays = 30
     
     // Maximum number of clipboard items to keep
     @Published var maxClipboardItems: Int {
@@ -133,6 +140,25 @@ class UserPreferencesManager: ObservableObject {
         }
     }
 
+    // Number of days to keep images. Kept separate from `persistenceDays` because images are
+    // effectively the entire storage cost of a history.
+    @Published var imagePersistenceDays: Int {
+        didSet {
+            let clampedValue = max(1, min(365, imagePersistenceDays))
+            if clampedValue != imagePersistenceDays {
+                imagePersistenceDays = clampedValue
+                return
+            }
+            defaults.set(imagePersistenceDays, forKey: Keys.imagePersistenceDays)
+        }
+    }
+
+    /// Whether the one-time re-encode of pre-PNG stored images has run. Not user facing.
+    var imageStorageCompacted: Bool {
+        get { defaults.bool(forKey: Keys.imageStorageCompacted) }
+        set { defaults.set(newValue, forKey: Keys.imageStorageCompacted) }
+    }
+
     // Whether keyboard shortcuts are enabled
     @Published var shortcutsEnabled: Bool {
         didSet {
@@ -174,7 +200,9 @@ class UserPreferencesManager: ObservableObject {
         self.persistenceEnabled = defaults.object(forKey: Keys.persistenceEnabled) as? Bool ?? true
         self.saveImages = defaults.object(forKey: Keys.saveImages) as? Bool ?? true // Images saved by default
         self.maxStorageSize = defaults.object(forKey: Keys.maxStorageSize) as? Int ?? Self.defaultStorageSize
-        self.persistenceDays = defaults.object(forKey: Keys.persistenceDays) as? Int ?? 60 // 60 days default
+        self.persistenceDays = defaults.object(forKey: Keys.persistenceDays) as? Int ?? Self.defaultPersistenceDays
+        self.imagePersistenceDays = defaults.object(forKey: Keys.imagePersistenceDays) as? Int
+            ?? Self.defaultImagePersistenceDays
 
         // Keyboard shortcuts - enabled by default
         self.shortcutsEnabled = defaults.object(forKey: Keys.shortcutsEnabled) as? Bool ?? true
@@ -194,7 +222,8 @@ class UserPreferencesManager: ObservableObject {
         persistenceEnabled = true
         saveImages = true
         maxStorageSize = Self.defaultStorageSize
-        persistenceDays = 60
+        persistenceDays = Self.defaultPersistenceDays
+        imagePersistenceDays = Self.defaultImagePersistenceDays
         shortcutsEnabled = true
         autoDetectSensitiveData = false
         autoHidePasswordLikeStrings = false

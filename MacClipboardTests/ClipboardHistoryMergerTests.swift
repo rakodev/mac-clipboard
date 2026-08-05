@@ -162,7 +162,7 @@ final class ClipboardDeletionConfirmationContentTests: XCTestCase {
         XCTAssertEqual(ClipboardDeletionConfirmationContent.deleteAllTitle(itemCount: 42), "Delete All 42 Items?")
         XCTAssertEqual(
             ClipboardDeletionConfirmationContent.deleteAllMessage(itemCount: 42),
-            "Are you sure? This will permanently delete ALL 42 items from your clipboard history. This action cannot be undone."
+            "Are you sure? This will permanently delete 42 items from your clipboard history. Favorites are kept, so unstar anything you also want removed. This action cannot be undone."
         )
     }
 

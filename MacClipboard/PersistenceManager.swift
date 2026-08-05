@@ -201,7 +201,7 @@ class PersistenceManager: ObservableObject {
                     // Preserve text representation for mixed clipboard payloads (image + text)
                     persistedItem.textContent = item.associatedText
                     if saveImages, let image = item.content as? NSImage {
-                        persistedItem.imageData = image.tiffRepresentation
+                        persistedItem.imageData = image.clipboardStorageData
                     }
 
                 case .file:
@@ -404,6 +404,47 @@ class PersistenceManager: ObservableObject {
         return false
     }
 
+    /// A favorite read straight out of the store, carrying the raw stored bytes rather than an
+    /// `NSImage`. The export re-encodes them itself, so it must not go through the UI's
+    /// lazy-image path, which drops the data for anything past the first few images.
+    struct FavoriteSnapshot {
+        let id: UUID
+        let type: ClipboardContentType
+        let createdAt: Date
+        let note: String?
+        let isSensitive: Bool
+        let text: String?
+        let imageData: Data?
+        let fileURLs: [URL]
+    }
+
+    func loadFavorites() -> [FavoriteSnapshot] {
+        do {
+            return try performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = NSPredicate(format: "isFavorite == YES")
+                request.sortDescriptors = [NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: false)]
+
+                return try backgroundContext.fetch(request).compactMap { item in
+                    guard let id = item.id, let createdAt = item.createdAt else { return nil }
+                    return FavoriteSnapshot(
+                        id: id,
+                        type: ClipboardContentType(rawValue: Int(item.contentType)) ?? .text,
+                        createdAt: createdAt,
+                        note: item.note,
+                        isSensitive: item.isSensitive,
+                        text: item.textContent,
+                        imageData: item.imageData,
+                        fileURLs: (item.fileURLs as? [URL]) ?? []
+                    )
+                }
+            }
+        } catch {
+            Logging.info("💾 Load favorites error: \(error.localizedDescription)")
+            return []
+        }
+    }
+
     func updateNote(itemId: UUID, note: String?) {
         do {
             try performOnContext {
@@ -521,71 +562,197 @@ class PersistenceManager: ObservableObject {
 
     // MARK: - Storage Management
 
+    /// Bytes the history occupies on disk.
+    ///
+    /// Measured from the files rather than by walking the objects. Reading `imageData` on every
+    /// row faults each external image file into memory, so the old implementation moved the whole
+    /// image store, better than a gigabyte on a real history, just to produce a number, once an
+    /// hour. Stat calls cost nothing by comparison and count the SQLite files too.
     func getStorageSize() -> Int64 {
-        do {
-            let items: [PersistedClipboardItem] = try performOnContext {
-                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
-                return try backgroundContext.fetch(request)
-            }
-            let totalSize = items.reduce(0) { total, item in
-                var itemSize: Int64 = 0
-                
-                // Text size
-                if let text = item.textContent {
-                    itemSize += Int64(text.utf8.count)
-                }
-                
-                // Image size
-                if let imageData = item.imageData {
-                    itemSize += Int64(imageData.count)
-                }
-                
-                // File URLs (small overhead)
-                if let urls = item.fileURLs as? [URL] {
-                    itemSize += Int64(urls.count * 100) // Estimate 100 bytes per URL
-                }
-                
-                return total + Int(itemSize)
-            }
-            
-            return Int64(totalSize)
-        } catch {
-            Logging.info("💾 Error calculating storage size: \(error.localizedDescription)")
-            return 0
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileSizeKey]
+        guard let walker = FileManager.default.enumerator(
+            at: Self.storeDirectoryURL,
+            includingPropertiesForKeys: keys
+        ) else { return 0 }
+
+        var total: Int64 = 0
+        for case let url as URL in walker {
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            total += Int64(values?.totalFileAllocatedSize ?? values?.fileSize ?? 0)
         }
+        return total
+    }
+
+    /// Evicts the oldest non-favorite images until the store fits inside `byteLimit`, returning
+    /// how many were removed.
+    ///
+    /// Images are the only thing worth evicting under pressure. On a measured history, 1683 text
+    /// clips came to 717 KB while 176 images came to 1.2 GB, so deleting text to make room would
+    /// throw away the useful history to protect the expensive one. Favorites are never evicted.
+    @discardableResult
+    func evictImagesUntilWithin(byteLimit: Int64, batchSize: Int = 20) -> Int {
+        var evicted = 0
+        // The store cannot shrink below its non-image content, so stop rather than spin if
+        // evicting every image still is not enough.
+        while getStorageSize() > byteLimit {
+            let removed = (try? deleteBatchOfNonFavorites(matching: Self.imagesOnly, limit: batchSize)) ?? 0
+            guard removed > 0 else { break }
+            evicted += removed
+        }
+
+        if evicted > 0 {
+            Logging.debug("💾 Evicted \(evicted) images to stay within the storage limit")
+        }
+        return evicted
+    }
+
+    /// Re-encodes stored images that predate PNG storage, returning the bytes reclaimed.
+    ///
+    /// Runs once per install, guarded by `UserPreferencesManager.imageStorageCompacted`: new clips
+    /// are already PNG, but an existing history can be holding a gigabyte of uncompressed TIFF,
+    /// and that is where the win is. Works in small batches, refreshing between them, so peak
+    /// memory stays a few images rather than the whole store. A blob is only replaced when the
+    /// PNG decodes and is actually smaller, so a failure here cannot damage an image.
+    @discardableResult
+    func compactImageStorage(batchSize: Int = 5) -> Int64 {
+        var reclaimed: Int64 = 0
+        var offset = 0
+
+        while true {
+            let batch: (processed: Int, saved: Int64) = (try? performOnContext {
+                let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+                request.predicate = Self.imagesOnly
+                request.sortDescriptors = [
+                    NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: true)
+                ]
+                // Nothing is deleted here, so paging by offset is stable.
+                request.fetchOffset = offset
+                request.fetchLimit = batchSize
+
+                let items = try backgroundContext.fetch(request)
+                guard !items.isEmpty else { return (0, 0) }
+
+                var saved: Int64 = 0
+                for item in items {
+                    guard let stored = item.imageData, !stored.isPNGEncoded,
+                          let png = Data.pngEncoded(from: stored), png.count < stored.count else { continue }
+                    item.imageData = png
+                    saved += Int64(stored.count - png.count)
+                }
+
+                if backgroundContext.hasChanges {
+                    try backgroundContext.save()
+                }
+                backgroundContext.refreshAllObjects()
+                return (items.count, saved)
+            }) ?? (0, 0)
+
+            guard batch.processed > 0 else { break }
+            reclaimed += batch.saved
+            offset += batch.processed
+        }
+
+        Logging.debug("💾 Re-encoding stored images reclaimed \(reclaimed) bytes")
+        return reclaimed
     }
     
-    func cleanupOldItems(olderThan days: Int) {
+    // MARK: - Bulk Deletion
+
+    /// Favorites are permanent, and the UI says so. The only way to keep that promise is to make
+    /// it impossible to forget: every bulk delete runs through `bulkDeleteNonFavorites`, which
+    /// always ands this in. A favorite leaves the store one way only, through
+    /// `deleteItems(withIds:)`, which is a request for those specific items.
+    private static let excludesFavorites = NSPredicate(format: "isFavorite == NO")
+
+    static let imagesOnly = NSPredicate(
+        format: "contentType == %d", ClipboardContentType.image.rawValue
+    )
+
+    /// What a cleanup pass applies to. Images get their own window: see `CleanupScope.images`.
+    enum CleanupScope {
+        /// Every kind of item. File items belong here rather than with images, because a file
+        /// clip stores only its paths, so it costs about as much as a line of text.
+        case everything
+        /// Images alone, which are effectively the whole storage cost of a history.
+        case images
+
+        var predicate: NSPredicate? {
+            switch self {
+            case .everything: return nil
+            case .images: return PersistenceManager.imagesOnly
+            }
+        }
+    }
+
+    /// Deletes one batch of the non-favorites matching `predicate`, oldest first. Returns how many
+    /// rows went, so a caller can keep going until it returns zero.
+    ///
+    /// Deliberately object deletion rather than `NSBatchDeleteRequest`. A batch delete runs
+    /// straight against the store, so Core Data is never told to remove the external files behind
+    /// `imageData`, and those files are the entire storage cost. A real store was found still
+    /// holding orphaned image files from rows deleted months earlier, which meant deleting images
+    /// to reclaim space could reclaim nothing at all.
+    @discardableResult
+    private func deleteBatchOfNonFavorites(matching predicate: NSPredicate?, limit: Int) throws -> Int {
+        try performOnContext {
+            let request: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+            request.predicate = predicate.map {
+                NSCompoundPredicate(andPredicateWithSubpredicates: [$0, Self.excludesFavorites])
+            } ?? Self.excludesFavorites
+            request.sortDescriptors = [
+                NSSortDescriptor(keyPath: \PersistedClipboardItem.createdAt, ascending: true)
+            ]
+            request.fetchLimit = limit
+
+            let items = try backgroundContext.fetch(request)
+            guard !items.isEmpty else { return 0 }
+
+            items.forEach(backgroundContext.delete)
+            try backgroundContext.save()
+            backgroundContext.refreshAllObjects()
+            return items.count
+        }
+    }
+
+    /// Deletes every non-favorite matching `predicate`, in batches. Returns the number removed.
+    @discardableResult
+    private func bulkDeleteNonFavorites(matching predicate: NSPredicate?, batchSize: Int = 100) throws -> Int {
+        var deleted = 0
+
+        while true {
+            let removed = try deleteBatchOfNonFavorites(matching: predicate, limit: batchSize)
+            guard removed > 0 else { break }
+            deleted += removed
+        }
+
+        return deleted
+    }
+
+    func cleanupOldItems(olderThan days: Int, scope: CleanupScope = .everything) {
         let cutoffDate = Calendar.current.date(byAdding: .day, value: -days, to: Date()) ?? Date()
+        var predicates = [NSPredicate(format: "createdAt < %@", cutoffDate as NSDate)]
+        if let scoped = scope.predicate {
+            predicates.append(scoped)
+        }
 
         do {
-            try performOnContext {
-                let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-                // Skip favorites - they persist indefinitely
-                request.predicate = NSPredicate(format: "createdAt < %@ AND isFavorite == NO", cutoffDate as NSDate)
-
-                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-                let result = try backgroundContext.execute(deleteRequest) as? NSBatchDeleteResult
-                let deletedCount = result?.result as? Int ?? 0
-                Logging.debug("💾 Cleaned up \(deletedCount) old items")
-
-                // Refresh the context
-                backgroundContext.refreshAllObjects()
+            let deletedCount = try bulkDeleteNonFavorites(
+                matching: NSCompoundPredicate(andPredicateWithSubpredicates: predicates)
+            )
+            if deletedCount > 0 {
+                Logging.debug("💾 Cleaned up \(deletedCount) items older than \(days) days (\(scope))")
             }
         } catch {
             Logging.info("💾 Cleanup error: \(error.localizedDescription)")
         }
     }
-    
+
+    /// Clears the history, keeping favorites. Starred items are the ones the user asked to hold
+    /// on to, so Clear History leaves them: unstar or delete an item to remove it for good.
     func clearAllData() {
         do {
-            try performOnContext {
-                let request: NSFetchRequest<NSFetchRequestResult> = PersistedClipboardItem.fetchRequest()
-                let deleteRequest = NSBatchDeleteRequest(fetchRequest: request)
-                try backgroundContext.execute(deleteRequest)
-                backgroundContext.refreshAllObjects()
-                Logging.debug("💾 Cleared all persistent data")
-            }
+            let deletedCount = try bulkDeleteNonFavorites(matching: nil)
+            Logging.debug("💾 Cleared \(deletedCount) items, kept favorites")
         } catch {
             Logging.info("💾 Clear all error: \(error.localizedDescription)")
         }
@@ -606,6 +773,35 @@ class PersistenceManager: ObservableObject {
         } catch {
             Logging.info("💾 Delete items error: \(error.localizedDescription)")
         }
+    }
+}
+
+// MARK: - Image Storage Format
+
+extension NSImage {
+    /// The bytes to store for a clipboard image.
+    ///
+    /// Images were stored as `tiffRepresentation`, which AppKit writes uncompressed. Measured over
+    /// a real history, that averaged 7 MB per screenshot and 1.2 GB in total, where the same pixels
+    /// as PNG came to roughly a fortieth of the size. PNG is lossless, so nothing is traded away
+    /// for it. Falls back to the TIFF bytes if re-encoding fails, since keeping the image matters
+    /// more than keeping it small.
+    var clipboardStorageData: Data? {
+        guard let tiff = tiffRepresentation else { return nil }
+        return Data.pngEncoded(from: tiff) ?? tiff
+    }
+}
+
+extension Data {
+    /// Re-encodes any image bytes AppKit can read as PNG, or nil if they will not decode.
+    static func pngEncoded(from data: Data) -> Data? {
+        guard let representation = NSBitmapImageRep(data: data) else { return nil }
+        return representation.representation(using: .png, properties: [:])
+    }
+
+    /// Whether these bytes already carry the PNG signature.
+    var isPNGEncoded: Bool {
+        starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
     }
 }
 

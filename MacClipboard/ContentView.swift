@@ -349,7 +349,9 @@ struct ContentView: View {
         .clipboardDeletionConfirmation(
             selectedItem: selectedItem,
             selectedItemIds: $selectedItemIds,
-            itemCount: clipboardMonitor.clipboardHistory.count,
+            // Only what Clear History will actually remove, so the count is not a promise the
+            // confirmation cannot keep: favorites stay.
+            itemCount: clipboardMonitor.clipboardHistory.lazy.filter { !$0.isFavorite }.count,
             showDeleteConfirmation: $showClearConfirmation,
             showDeleteAllConfirmation: $showDeleteAllConfirmation,
             onDeleteCurrent: { item in
@@ -973,7 +975,7 @@ struct ClipboardDeletionConfirmationContent {
     }
 
     static func deleteAllMessage(itemCount: Int) -> String {
-        "Are you sure? This will permanently delete ALL \(itemCount) items from your clipboard history. This action cannot be undone."
+        "Are you sure? This will permanently delete \(itemCount) item\(itemCount == 1 ? "" : "s") from your clipboard history. Favorites are kept, so unstar anything you also want removed. This action cannot be undone."
     }
 }
 
