@@ -44,7 +44,7 @@ If you ever need to re-create the credentials (new machine, revoked password, et
 
 ```bash
 xcrun notarytool store-credentials "MacClipboard-Notarize" \
-  --apple-id "ramax@atalist.com" \
+  --apple-id "YOUR_APPLE_ID" \
   --team-id "K542B2Z65M"
 ```
 
@@ -55,7 +55,7 @@ When prompted, enter an app-specific password from appleid.apple.com.
 | Setting | Value |
 |---------|-------|
 | Keychain Profile | `MacClipboard-Notarize` |
-| Apple ID | `ramax@atalist.com` |
+| Apple ID | the Apple ID that owns the Developer ID certificate |
 | Team ID | `K542B2Z65M` |
 
 This is stored securely in your macOS Keychain, not in any file.
