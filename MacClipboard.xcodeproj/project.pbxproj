@@ -401,7 +401,7 @@
 				CODE_SIGN_ENTITLEMENTS = MacClipboard/MacClipboard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -414,7 +414,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.16;
+				MARKETING_VERSION = 0.1.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.macclipboard.app.dev;
 				PRODUCT_NAME = MacClipboard;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -430,7 +430,7 @@
 				CODE_SIGN_ENTITLEMENTS = MacClipboard/MacClipboard.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 28;
+				CURRENT_PROJECT_VERSION = 29;
 				DEVELOPMENT_TEAM = "";
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -442,7 +442,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 0.1.16;
+				MARKETING_VERSION = 0.1.17;
 				PRODUCT_BUNDLE_IDENTIFIER = com.macclipboard.app;
 				PRODUCT_NAME = MacClipboard;
 				SWIFT_EMIT_LOC_STRINGS = YES;
