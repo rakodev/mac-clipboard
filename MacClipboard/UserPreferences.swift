@@ -65,7 +65,17 @@ class UserPreferencesManager: ObservableObject {
     }
 
     /// Updates the login item registration based on autoStartEnabled preference
+    ///
+    /// Dev builds are skipped. `SMAppService.mainApp` registers whichever bundle is running, so a
+    /// dev build asks macOS to launch `~/Applications/MacClipboard-Dev.app` at every login, which
+    /// nobody wants, and the user ends up with dev copies in their Login Items list next to the
+    /// real app. The preference is still stored; it takes effect for the installed build.
     private func updateLoginItem() {
+        guard !BuildInfo.isDevBuild else {
+            Logging.debug("Skipping login item update for a dev build (\(BuildInfo.bundleIdentifier))")
+            return
+        }
+
         let shouldEnable = autoStartEnabled
         DispatchQueue.global(qos: .utility).async {
             do {
