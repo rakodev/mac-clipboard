@@ -144,6 +144,43 @@ So the app handles it itself, and the cask backs it up:
   its executable path and waits for it to exit before `open`. `postflight` comes from the *new*
   cask, so a cask fix reaches users who are still on the old app.
 
+## Editing a Copy Never Touches the Original
+
+Clicking the preview text, `Cmd+E`, or the pencil in the preview toolbar opens a text item in an
+editor that takes over the whole popover. Saving writes a *new* item
+(`ClipboardMonitor.saveEditedText` → `ClipboardTextEdit`), so history stays a log of what was on the
+pasteboard plus copies the user made deliberately. Five things this depends on:
+
+- **Preview and editor are both `NSTextView`s** (`ClipboardTextView`, one representable in two
+  modes). A click in the preview has to become a caret at the same character in the editor, and
+  neither `Text` nor `TextEditor` can report or set a caret. Two consequences worth keeping:
+  automatic quote, dash, replacement and spelling substitutions are all switched off, because a clip
+  is data and a curly quote would change what gets pasted; and the callbacks are wired in
+  `makeNSView` as well as `updateNSView`, because a click can land before SwiftUI's first update.
+  A click only opens the editor when it leaves the selection empty
+  (`ClipboardPreviewClick.opensEditor`), so dragging, double clicking and modified clicks still
+  select text in the preview. Escape there hands the keyboard back to the list rather than editing.
+
+- **The draft lives on `MenuBarController`, not in `ContentView`.** `showPopover` rebuilds the
+  content view controller on every open, and any click outside closes the popover, so SwiftUI state
+  would lose an edit the moment the user checked something in another app.
+  `ClipboardEditDraftStore` keeps it, `ContentView.restoreEditDraftIfNeeded` picks it up on the next
+  open, and while a draft is dirty the click-outside monitor and `togglePopover` refuse to dismiss
+  the popover. Nothing is ever saved to history implicitly: the draft either gets saved by the user
+  or restored for them.
+- **The global key handler must stay out of the way.** `handleKeyEvent` returns straight into
+  `handleEditorKeyEvent` while editing. `performKeyEquivalent` reaches `KeyEventView` whatever holds
+  first responder, so without that, `Cmd+Backspace` would offer to clear the history instead of
+  deleting to the start of a line, a digit would jump the selection, and `Cmd+V` would toggle a
+  reveal instead of pasting. Escape arrives via `.onExitCommand` on the editor, because the key
+  handler sits in a sibling branch of the view tree and only sees key equivalents.
+- **First responder has to be handed back.** `KeyEventHandler.focusToken` is bumped when the editor
+  closes; nothing else gives the responder back, and arrows and Enter stay dead until it is.
+- **Masking can only be gained.** The edited text is re-run through
+  `ClipboardSensitivityPolicy.flags` and or-ed with the source's own `isSensitive`, and a masked
+  item cannot be edited at all until it is revealed. Content is never trimmed (whitespace in a clip
+  is content, unlike in a note), and favorite and note are not inherited.
+
 ## Managed Objects Never Leave Their Context
 
 `PersistenceManager.performOnContext` runs on the background context's queue, and what it returns
@@ -232,6 +269,7 @@ rather than remember to be careful:
 |----------|--------|
 | `Cmd+Shift+V` | Global: Open clipboard (from any app) |
 | `Enter` | Paste selected item |
+| `Cmd+E` | Edit a copy of a text item |
 | `0-9` | Quick paste by position |
 | `↑/↓` | Navigate items |
 | `Cmd+F` | Cycle filter tabs |
@@ -242,6 +280,9 @@ rather than remember to be careful:
 | `Cmd+Z` | Full-size image preview |
 | `Cmd+Backspace` | Delete item(s) |
 | `Escape` | Close popover |
+
+While the editor is open: `Cmd+S` saves as a new item, `Cmd+Enter` saves and pastes, `Enter` adds a
+line, `Escape` cancels. Nothing else in the table applies (see below).
 
 ## User Preferences
 
@@ -291,6 +332,21 @@ When modifying UI:
 - [ ] Multi-select deletion works
 - [ ] Image preview opens with Cmd+Z
 
+When modifying the editor:
+- [ ] Clicking the preview text opens it with the caret where the click landed
+- [ ] Dragging over the preview text selects it and does not open the editor; Cmd+C copies it
+- [ ] Cmd+E and the pencil open it; all three are unavailable on images, files, and masked items
+- [ ] Enter adds a line, Cmd+S saves, Cmd+Enter saves and pastes, Escape cancels (with a confirm
+      once the text has changed)
+- [ ] Cmd+A, Cmd+C, Cmd+V, Cmd+X, Cmd+Z and Cmd+Backspace behave as text editing, not as the
+      popover's shortcuts
+- [ ] Saving adds a new item at the top, selects it, and leaves the original as it was
+- [ ] Saving an edit that matches an existing item says so instead of adding a duplicate
+- [ ] Type, close the popover with the X or the hotkey, reopen: the edit comes back
+- [ ] Type, then click another app: the popover stays open
+- [ ] Arrows and Enter still work in the list after cancelling or saving an edit
+- [ ] An edit of a hidden item is hidden too
+
 ## Code Conventions
 
 - Use `@Published` properties in ObservableObject for reactive updates
@@ -327,4 +383,5 @@ if the entitlements are missing, or if debug-only `get-task-allow` is present.
 | Modify settings | `SettingsView.swift`, `UserPreferences.swift` |
 | Update data model | `ClipboardData.xcdatamodeld`, `PersistenceManager.swift`, `ClipboardMonitor.swift` |
 | Change UI layout | `ContentView.swift` |
+| Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |
 | Modify menu bar behavior | `MenuBarController.swift` |

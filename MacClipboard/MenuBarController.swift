@@ -3,7 +3,46 @@ import AppKit
 import Carbon
 import Combine
 
+/// A text edit in progress, held outside `ContentView`.
+///
+/// `showPopover` builds a fresh `ContentView` on every open so the selection resets, and any click
+/// outside the popover closes it. A draft kept in SwiftUI state would therefore be lost the moment
+/// the user looked something up in another app, which is exactly what people do while editing. One
+/// draft at a time is enough: the editor takes over the whole popover.
+///
+/// The source item is stored by value so a draft outlives it: the row can be deleted, aged out, or
+/// trimmed away while the popover is closed, and the edit still saves as a new item.
+final class ClipboardEditDraftStore {
+    struct Draft {
+        let source: ClipboardItem
+        var text: String
+
+        var isDirty: Bool { text != source.fullText }
+    }
+
+    private(set) var draft: Draft?
+
+    var isDirty: Bool { draft?.isDirty ?? false }
+
+    func begin(source: ClipboardItem, text: String) {
+        draft = Draft(source: source, text: text)
+    }
+
+    func update(text: String) {
+        draft?.text = text
+    }
+
+    func clear() {
+        draft = nil
+    }
+}
+
 class MenuBarController: NSObject, ObservableObject {
+    /// Not `@Published`: nothing observes it, and republishing on every keystroke would redraw the
+    /// popover for no reason. `ContentView` reads it when it appears and writes to it as the user
+    /// types.
+    let editDraft = ClipboardEditDraftStore()
+
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var clipboardMonitor: ClipboardMonitor
@@ -338,6 +377,10 @@ class MenuBarController: NSObject, ObservableObject {
         guard let button = statusItem?.button else { return }
         
         if popover?.isShown == true {
+            guard !editDraft.isDirty else {
+                focusPopover()
+                return
+            }
             stopClickOutsideMonitoring()
             popover?.close()
         } else {
@@ -362,14 +405,25 @@ class MenuBarController: NSObject, ObservableObject {
 
             // Make it key shortly after appearing
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                self.popover?.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
+                self.focusPopover()
             }
         }
     }
-    
+
+    private func focusPopover() {
+        popover?.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     func togglePopover() {
         if popover?.isShown == true {
+            // An unsaved edit is not something to lose to the hotkey or a stray click on the menu
+            // bar icon, so those bring the popover back instead of dismissing it. Closing it is
+            // still one Esc, or one click on the X, away.
+            guard !editDraft.isDirty else {
+                focusPopover()
+                return
+            }
             hidePopover()
         } else {
             showPopover()
@@ -573,6 +627,10 @@ class MenuBarController: NSObject, ObservableObject {
             
             // Check if the click is outside the popover bounds
             if !popoverWindow.frame.contains(screenLocation) {
+                // An unsaved edit outweighs the convenience of click-to-dismiss: the popover stays
+                // open until the user saves, cancels, or closes it deliberately.
+                guard !self.editDraft.isDirty else { return }
+
                 DispatchQueue.main.async {
                     self.hidePopoverAndActivatePreviousApp()
                 }

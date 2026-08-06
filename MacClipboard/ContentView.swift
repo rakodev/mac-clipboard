@@ -87,6 +87,17 @@ struct ContentView: View {
     @State private var showShortcuts: Bool = false
     @State private var isScrolledDown: Bool = false
     @State private var shouldResetSelectionAfterFilterChange = false
+    @State private var isEditing = false
+    @State private var editSource: ClipboardItem?
+    @State private var editText: String = ""
+    @State private var editDraftRestored = false
+    @State private var showDiscardEditConfirmation = false
+    @State private var editStatus: ClipboardEditStatus?
+    @State private var editStatusTask: Task<Void, Never>?
+    @State private var pendingSelectionId: UUID?
+    @State private var keyFocusToken = 0
+    @State private var editorFocusToken = 0
+    @State private var editCaretOffset: Int?
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
@@ -127,9 +138,27 @@ struct ContentView: View {
     }
     
     private var dynamicHeight: CGFloat {
-        let baseHeight: CGFloat = 78  // header + search + filter picker + minimal padding
+        // Get screen height and limit to reasonable size
+        let screenHeight = NSScreen.main?.visibleFrame.height ?? 1000
+        let maxAllowedHeight = screenHeight * 0.6 // Reduced to 60% for cleaner look
+
         let itemHeight: CGFloat = 32  // Compact row height
-        
+
+        // Permission banner height (when shown)
+        let permissionHeight: CGFloat = !permissionManager.isAccessibilityGranted ? 80 : 0
+
+        // Hotkey conflict banner height (when shown)
+        let hotkeyWarningHeight: CGFloat = menuBarController.isGlobalHotkeyUnavailable ? 58 : 0
+
+        // The editor replaces the list and the preview, so give it as much room as the popover is
+        // allowed to take. 259pt of preview pane is not somewhere anyone can edit text. The banners
+        // are added on top rather than taken out of it, so the editor is the same size either way.
+        if isEditing {
+            return min(maxAllowedHeight, 460 + permissionHeight + hotkeyWarningHeight)
+        }
+
+        let baseHeight: CGFloat = 78  // header + search + filter picker + minimal padding
+
         // Calculate items to show based on available content
         let itemCount = filteredItems.count
         let minItemsToShow: Int = min(itemCount, 6)  // Show at least 6 items if available
@@ -137,24 +166,17 @@ struct ContentView: View {
         let itemsToShow = max(minItemsToShow, min(maxItemsToShow, itemCount))
         
         let listHeight = CGFloat(itemsToShow) * itemHeight
-        
-        // Permission banner height (when shown)
-        let permissionHeight: CGFloat = !permissionManager.isAccessibilityGranted ? 80 : 0
 
-        // Hotkey conflict banner height (when shown)
-        let hotkeyWarningHeight: CGFloat = menuBarController.isGlobalHotkeyUnavailable ? 58 : 0
+        // Post-save confirmation line (when shown)
+        let editStatusHeight: CGFloat = editStatus == nil ? 0 : 22
 
         // Calculate total height (no additional preview height since it's now horizontal)
-        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + listHeight
-        
+        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + editStatusHeight + listHeight
+
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
         let minimumHeight: CGFloat = 325  // Enough space for header + search + list + preview
-        
-        // Get screen height and limit to reasonable size
-        let screenHeight = NSScreen.main?.visibleFrame.height ?? 1000
-        let maxAllowedHeight = screenHeight * 0.6 // Reduced to 60% for cleaner look
-        
+
         let finalHeight = max(minimumHeight, min(totalHeight, maxAllowedHeight))
         
         return finalHeight
@@ -169,10 +191,28 @@ struct ContentView: View {
             if menuBarController.isGlobalHotkeyUnavailable {
                 hotkeyConflictBanner
             }
-            searchBarView
-            filterPickerView
+            if !isEditing {
+                searchBarView
+                filterPickerView
 
-            if showShortcuts {
+                if let editStatus {
+                    ClipboardEditStatusBanner(status: editStatus)
+                }
+            }
+
+            if isEditing, let editSource {
+                ClipboardTextEditorView(
+                    source: editSource,
+                    text: $editText,
+                    focusToken: editorFocusToken,
+                    caretOffset: editCaretOffset,
+                    isRestoredDraft: editDraftRestored,
+                    canSave: canSaveEdit,
+                    onCancel: requestCancelEdit,
+                    onSave: { saveEdit(thenPaste: false) },
+                    onSaveAndPaste: { saveEdit(thenPaste: true) }
+                )
+            } else if showShortcuts {
                 ShortcutReferenceView()
             } else if filteredItems.isEmpty {
                 ClipboardEmptyStateView(selectedFilter: selectedFilter)
@@ -228,6 +268,12 @@ struct ContentView: View {
                             },
                             onSaveNote: {
                                 saveNote(for: selectedItem)
+                            },
+                            onEdit: { caretOffset in
+                                beginEditing(caretOffset: caretOffset)
+                            },
+                            onReleaseKeyboard: {
+                                keyFocusToken += 1
                             }
                         )
                             .frame(width: 259)
@@ -245,13 +291,16 @@ struct ContentView: View {
             // Initialize time cache when popover opens
             initializeTimeCache()
 
+            // Pick up an edit a previous close interrupted, before anything moves the selection.
+            restoreEditDraftIfNeeded()
+
             // Initialize filtered items immediately
             computedFilteredItems = clipboardMonitor.clipboardHistory
             recomputeFilteredItems()
 
             // Ensure we have items and properly select the first one
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                if !filteredItems.isEmpty {
+                if !isEditing, !filteredItems.isEmpty {
                     selectedIndex = 0
                     updateSelectedItem()
                 }
@@ -265,8 +314,14 @@ struct ContentView: View {
             // Cancel any pending tasks
             searchDebounceTask?.cancel()
             filterTask?.cancel()
+            editStatusTask?.cancel()
             // Clear revealed sensitive items when popover closes
             revealedSensitiveIds.removeAll()
+        }
+        .onChange(of: editText) { newValue in
+            // Mirror every keystroke into the controller's draft. This view does not survive the
+            // popover closing, and the draft has to.
+            menuBarController.editDraft.update(text: newValue)
         }
         .onChange(of: searchText) { newValue in
             // Debounce search to keep typing smooth
@@ -293,6 +348,19 @@ struct ContentView: View {
             updatePopoverSize()
         }
         .onChange(of: computedFilteredItems) { newItems in
+            // A specific row was asked for (a saved edit, or the item an edit was cancelled on).
+            // Checked before the filter reset below, which would otherwise jump back to the top.
+            if let wanted = pendingSelectionId,
+               let index = newItems.firstIndex(where: { $0.id == wanted }) {
+                pendingSelectionId = nil
+                shouldResetSelectionAfterFilterChange = false
+                selectedItemIds.removeAll()
+                selectedIndex = index
+                selectedItem = newItems[index]
+                updatePopoverSize()
+                return
+            }
+
             if shouldResetSelectionAfterFilterChange {
                 shouldResetSelectionAfterFilterChange = false
                 selectedIndex = 0
@@ -343,9 +411,19 @@ struct ContentView: View {
                 }
             }
         }
-        .background(KeyEventHandler { keyEvent in
+        .background(KeyEventHandler(focusToken: keyFocusToken) { keyEvent in
             handleKeyEvent(keyEvent)
         })
+        .alert("Discard changes?", isPresented: $showDiscardEditConfirmation) {
+            Button("Keep Editing", role: .cancel) {
+                focusEditor()
+            }
+            Button("Discard", role: .destructive) {
+                endEditing(selecting: editSource?.id)
+            }
+        } message: {
+            Text("Your edit has not been saved as a new item yet.")
+        }
         .clipboardDeletionConfirmation(
             selectedItem: selectedItem,
             selectedItemIds: $selectedItemIds,
@@ -665,8 +743,165 @@ struct ContentView: View {
         }
     }
     
+    // MARK: - Editing a Copy
+
+    /// Text only, and only when it is actually on screen. Editing a masked item would be editing
+    /// blind, and it would write the secret into a new row the user never got to read.
+    private var canEditSelectedItem: Bool {
+        guard let item = selectedItem, item.type == .text else { return false }
+        return !item.isSensitive || revealedSensitiveIds.contains(item.id)
+    }
+
+    private var canSaveEdit: Bool {
+        guard let editSource else { return false }
+        return ClipboardTextEdit.intent(newText: editText, sourceText: editSource.fullText) == .save
+    }
+
+    /// `caretOffset` is a UTF-16 offset into the item's text, from a click in the preview. Nil (the
+    /// pencil, or ⌘E) starts at the beginning.
+    private func beginEditing(caretOffset: Int?) {
+        guard canEditSelectedItem, let item = selectedItem else { return }
+
+        saveCurrentNote()
+        isSearchFocused = false
+        isNoteFocused = false
+        showShortcuts = false
+        clearEditStatus()
+
+        editSource = item
+        editText = item.fullText
+        editDraftRestored = false
+        isEditing = true
+        menuBarController.editDraft.begin(source: item, text: item.fullText)
+        editCaretOffset = caretOffset ?? 0
+        editorFocusToken += 1
+    }
+
+    /// Picks up an edit that closing the popover interrupted. The draft lives on the controller
+    /// precisely because this view is rebuilt from scratch on every open.
+    private func restoreEditDraftIfNeeded() {
+        guard let draft = menuBarController.editDraft.draft, draft.isDirty else {
+            menuBarController.editDraft.clear()
+            return
+        }
+
+        editSource = draft.source
+        editText = draft.text
+        editDraftRestored = true
+        isEditing = true
+        // Line the list up behind the editor, so cancelling lands back on the item being edited.
+        pendingSelectionId = draft.source.id
+        editCaretOffset = nil
+        editorFocusToken += 1
+    }
+
+    /// Puts the keyboard back in the editor without moving the caret, after the discard alert.
+    private func focusEditor() {
+        editCaretOffset = nil
+        editorFocusToken += 1
+    }
+
+    private func requestCancelEdit() {
+        guard let editSource else {
+            endEditing(selecting: nil)
+            return
+        }
+
+        if editText != editSource.fullText {
+            showDiscardEditConfirmation = true
+            return
+        }
+
+        endEditing(selecting: editSource.id)
+    }
+
+    private func endEditing(selecting id: UUID?) {
+        menuBarController.editDraft.clear()
+        isEditing = false
+        editSource = nil
+        editText = ""
+        editDraftRestored = false
+        editCaretOffset = nil
+
+        // The editor held first responder and nothing hands it back when it disappears, so the
+        // key handler has to take it, or arrows and Enter stay dead for the rest of the session.
+        keyFocusToken += 1
+
+        if let id {
+            selectItem(withId: id)
+        }
+    }
+
+    private func saveEdit(thenPaste: Bool) {
+        guard let editSource else { return }
+
+        switch clipboardMonitor.saveEditedText(editText, basedOn: editSource) {
+        case .empty, .unchanged:
+            // Both buttons are disabled in these cases; nothing to do if one is triggered anyway.
+            return
+        case .saved(let id):
+            finishSave(id: id, status: .savedNew, thenPaste: thenPaste)
+        case .alreadyInHistory(let id):
+            finishSave(id: id, status: .alreadyInHistory, thenPaste: thenPaste)
+        }
+    }
+
+    private func finishSave(id: UUID, status: ClipboardEditStatus, thenPaste: Bool) {
+        endEditing(selecting: nil)
+
+        guard let saved = clipboardMonitor.clipboardHistory.first(where: { $0.id == id }) else {
+            showEditStatus(status)
+            return
+        }
+
+        if thenPaste {
+            pasteItem(saved)
+            return
+        }
+
+        // Show the row that was just written whatever tab or search the user was on: a save that
+        // lands outside the current filter looks like a save that did nothing. The All tab shows
+        // every item, hidden ones included.
+        if ClipboardFilter.filteredItems(from: [saved], selectedFilter: selectedFilter, searchText: searchText).isEmpty {
+            searchText = ""
+            debouncedSearchText = ""
+            selectedFilter = .all
+        }
+
+        selectItem(withId: id)
+        showEditStatus(status)
+    }
+
+    /// Selects `id` if it is in the list already, otherwise leaves it pending for the next
+    /// recompute. Saving changes the history, and filtering it again is asynchronous.
+    private func selectItem(withId id: UUID) {
+        if let index = filteredItems.firstIndex(where: { $0.id == id }) {
+            pendingSelectionId = nil
+            selectedIndex = index
+            selectedItem = filteredItems[index]
+        } else {
+            pendingSelectionId = id
+        }
+    }
+
+    private func showEditStatus(_ status: ClipboardEditStatus) {
+        editStatusTask?.cancel()
+        editStatus = status
+        editStatusTask = Task {
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run { editStatus = nil }
+        }
+    }
+
+    private func clearEditStatus() {
+        editStatusTask?.cancel()
+        editStatusTask = nil
+        editStatus = nil
+    }
+
     // MARK: - Navigation Functions
-    
+
     private func navigateUp() {
         // Always navigate, unfocus search if needed
         if isSearchFocused {
@@ -790,6 +1025,14 @@ struct ContentView: View {
     // MARK: - Key Event Handling
     
     private func handleKeyEvent(_ keyEvent: NSEvent) -> Bool {
+        // The editor owns the keyboard while it is open. Everything below assumes a list to
+        // navigate: ⌘⌫ would offer to clear the history instead of deleting to the start of a
+        // line, a digit would jump the selection, ⌘V would toggle a reveal instead of pasting into
+        // the text. Only the keys that leave the editor are claimed.
+        if isEditing {
+            return handleEditorKeyEvent(keyEvent)
+        }
+
         switch keyEvent.keyCode {
         case 126: // Up arrow
             if keyEvent.modifierFlags.contains(.command) {
@@ -865,6 +1108,13 @@ struct ContentView: View {
                     return true
                 }
             }
+        case 14: // E key
+            if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
+                if canEditSelectedItem {
+                    beginEditing(caretOffset: nil)
+                    return true
+                }
+            }
         case 4: // H key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if var item = selectedItem {
@@ -934,6 +1184,28 @@ struct ContentView: View {
         return false
     }
     
+    /// Keys handled while the editor is open. Everything not claimed here falls through to the
+    /// text view, so ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z all do what they do in any other text field.
+    private func handleEditorKeyEvent(_ keyEvent: NSEvent) -> Bool {
+        let hasCommand = keyEvent.modifierFlags.contains(.command)
+
+        switch keyEvent.keyCode {
+        case 53: // Escape
+            requestCancelEdit()
+            return true
+        case 1 where hasCommand: // S key
+            if canSaveEdit { saveEdit(thenPaste: false) }
+            return true
+        case 36 where hasCommand: // Return/Enter
+            // Enter on its own belongs to the text view: it adds a line. Only ⌘⏎ saves and pastes,
+            // which is what Enter means everywhere else in the popover.
+            if canSaveEdit { saveEdit(thenPaste: true) }
+            return true
+        default:
+            return false
+        }
+    }
+
     private func isPrintableCharacter(_ keyEvent: NSEvent) -> Bool {
         // Check if it's a printable character (letters, symbols, space)
         // Exclude special keys and number keys (used for navigation)
@@ -1086,6 +1358,10 @@ struct ClipboardCompactPreviewView: View {
     let onReveal: () -> Void
     let onLoadImage: () -> Void
     let onSaveNote: () -> Void
+    /// Opens the editor. The offset is where in the text the caret should land, nil for the start.
+    let onEdit: (Int?) -> Void
+    /// Escape while the preview text has the keyboard: hand it back to the list.
+    let onReleaseKeyboard: () -> Void
 
     private var isMasked: Bool {
         item.isSensitive && !isRevealed
@@ -1125,32 +1401,48 @@ struct ClipboardCompactPreviewView: View {
 
             Spacer()
 
-            Button(action: onToggleFavorite) {
-                Image(systemName: item.isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 12))
-                    .foregroundColor(item.isFavorite ? .yellow : .secondary)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(item.isFavorite ? "Remove from favorites" : "Add to favorites")
-            .help(item.isFavorite ? "Remove from favorites (⌘D)" : "Add to favorites (⌘D)")
-
-            Button(action: onToggleSensitive) {
-                Image(systemName: item.isSensitive ? "lock.fill" : "lock.open")
-                    .font(.system(size: 12))
-                    .foregroundColor(item.isSensitive ? .orange : .secondary)
-            }
-            .buttonStyle(.borderless)
-            .accessibilityLabel(item.isSensitive ? "Remove sensitive flag" : "Mark as sensitive")
-            .help(item.isSensitive ? "Remove sensitive flag (⌘H)" : "Mark as sensitive (⌘H)")
-
-            if item.isSensitive {
-                Button(action: onToggleReveal) {
-                    Image(systemName: isMasked ? "eye" : "eye.slash")
+            // Tighter than the default spacing: with a sensitive text item this row carries four
+            // icons and the Copy button in 259pt.
+            HStack(spacing: 6) {
+                Button(action: onToggleFavorite) {
+                    Image(systemName: item.isFavorite ? "star.fill" : "star")
                         .font(.system(size: 12))
+                        .foregroundColor(item.isFavorite ? .yellow : .secondary)
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel(isMasked ? "Reveal content" : "Hide content")
-                .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
+                .accessibilityLabel(item.isFavorite ? "Remove from favorites" : "Add to favorites")
+                .help(item.isFavorite ? "Remove from favorites (⌘D)" : "Add to favorites (⌘D)")
+
+                Button(action: onToggleSensitive) {
+                    Image(systemName: item.isSensitive ? "lock.fill" : "lock.open")
+                        .font(.system(size: 12))
+                        .foregroundColor(item.isSensitive ? .orange : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(item.isSensitive ? "Remove sensitive flag" : "Mark as sensitive")
+                .help(item.isSensitive ? "Remove sensitive flag (⌘H)" : "Mark as sensitive (⌘H)")
+
+                if item.isSensitive {
+                    Button(action: onToggleReveal) {
+                        Image(systemName: isMasked ? "eye" : "eye.slash")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(isMasked ? "Reveal content" : "Hide content")
+                    .help(isMasked ? "Reveal content (⌘V)" : "Hide content (⌘V)")
+                }
+
+                if item.type == .text {
+                    Button(action: { onEdit(nil) }) {
+                        Image(systemName: "square.and.pencil")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isMasked)
+                    .accessibilityLabel("Edit a copy")
+                    .help(isMasked ? "Reveal this item before editing it (⌘V)" : "Edit a copy, saved as a new item (⌘E)")
+                }
             }
 
             Button("Copy ⏎", action: onCopy)
@@ -1209,11 +1501,24 @@ struct ClipboardCompactPreviewView: View {
         }
     }
 
-    private var previewContent: some View {
-        ScrollView {
-            if isMasked {
+    @ViewBuilder private var previewContent: some View {
+        if isMasked {
+            ScrollView {
                 maskedContent
-            } else {
+            }
+        } else if item.type == .text {
+            // A click here becomes a caret in the editor, which needs a real text view.
+            ClipboardTextView(
+                text: .constant(item.fullText),
+                isEditable: false,
+                fontSize: 11,
+                onPlainClick: { offset in onEdit(offset) },
+                onEscape: onReleaseKeyboard
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .help("Click the text to edit a copy of it (⌘E). Drag to select without editing.")
+        } else {
+            ScrollView {
                 unmaskedContent
             }
         }
@@ -1240,11 +1545,8 @@ struct ClipboardCompactPreviewView: View {
     @ViewBuilder private var unmaskedContent: some View {
         switch item.type {
         case .text:
-            Text(item.fullText)
-                .font(.system(.caption, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .lineLimit(nil)
+            // Handled in `previewContent`, which gives text its own text view.
+            EmptyView()
         case .image:
             imagePreview
             imageAssociatedText
@@ -1365,6 +1667,165 @@ struct ClipboardCompactPreviewView: View {
         .padding(.vertical, 4)
         .background(Color(NSColor.textBackgroundColor).opacity(0.5))
         .cornerRadius(4)
+    }
+}
+
+enum ClipboardEditStatus: Equatable {
+    case savedNew
+    case alreadyInHistory
+
+    var icon: String {
+        switch self {
+        case .savedNew:
+            return "checkmark.circle"
+        case .alreadyInHistory:
+            return "arrow.up.circle"
+        }
+    }
+
+    var message: LocalizedStringKey {
+        switch self {
+        case .savedNew:
+            return "Saved as a new item. The original is unchanged."
+        case .alreadyInHistory:
+            return "That text was already in your history, so it moved to the top."
+        }
+    }
+}
+
+private struct ClipboardEditStatusBanner: View {
+    let status: ClipboardEditStatus
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: status.icon)
+                .font(.system(size: 10))
+                .foregroundColor(.accentColor)
+            Text(status.message)
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineLimit(1)
+            Spacer()
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 4)
+    }
+}
+
+/// Edits a copy of a text item. Takes over the whole popover: the preview pane is 259pt wide, and
+/// the list, the search field and the filter tabs all do nothing useful while an edit is open.
+private struct ClipboardTextEditorView: View {
+    let source: ClipboardItem
+    @Binding var text: String
+    let focusToken: Int
+    let caretOffset: Int?
+    let isRestoredDraft: Bool
+    let canSave: Bool
+    let onCancel: () -> Void
+    let onSave: () -> Void
+    let onSaveAndPaste: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            header
+            if isRestoredDraft {
+                restoredNotice
+            }
+            editor
+            footer
+        }
+        .padding(8)
+        .background(Color(NSColor.controlBackgroundColor))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        // Escape reaches the text view, not the popover's key handler: the handler sits in a
+        // sibling branch of the view tree, so it only sees key equivalents. This is the path that
+        // actually cancels an edit; the handler's Escape case covers the case where it does see it.
+        .onExitCommand(perform: onCancel)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "square.and.pencil")
+                .font(.system(size: 11))
+                .foregroundColor(.secondary)
+            Text("Editing a copy")
+                .font(.caption)
+                .fontWeight(.semibold)
+
+            if source.isSensitive {
+                HStack(spacing: 3) {
+                    Image(systemName: "lock.fill")
+                    Text("Stays hidden")
+                }
+                .font(.system(size: 10))
+                .foregroundColor(.orange)
+            }
+
+            Spacer()
+
+            Button("Cancel", action: onCancel)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .font(.caption)
+                .help("Discard this edit (Esc)")
+
+            Button("Save & Paste ⌘⏎", action: onSaveAndPaste)
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .font(.caption)
+                .disabled(!canSave)
+                .help("Save as a new item, then paste it into the app you came from")
+
+            Button("Save ⌘S", action: onSave)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .font(.caption)
+                .disabled(!canSave)
+                .help(canSave ? "Save as a new item" : "Change the text to save it as a new item")
+        }
+    }
+
+    private var restoredNotice: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "arrow.uturn.backward.circle")
+                .foregroundColor(.orange)
+            Text("Unsaved edit restored")
+            Spacer()
+        }
+        .font(.system(size: 10))
+        .foregroundColor(.secondary)
+    }
+
+    private var editor: some View {
+        ClipboardTextView(
+            text: $text,
+            isEditable: true,
+            fontSize: 12,
+            focusToken: focusToken,
+            caretOffset: caretOffset,
+            onEscape: onCancel
+        )
+        .padding(2)
+        .background(Color(NSColor.textBackgroundColor))
+        .cornerRadius(4)
+        .overlay(
+            RoundedRectangle(cornerRadius: 4)
+                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Text("\(text.count) chars")
+            Text("•")
+                .foregroundColor(.secondary.opacity(0.6))
+            Text("Enter adds a line. Saving keeps the original and adds a new item.")
+            Spacer()
+        }
+        .font(.system(size: 10))
+        .foregroundColor(.secondary)
+        .lineLimit(1)
     }
 }
 
@@ -1553,25 +2014,192 @@ struct ClipboardItemRow: View {
 
 // MARK: - Key Event Handler
 
+/// Plain monospaced text, read-only for the preview and editable for the copy editor.
+///
+/// AppKit rather than `Text` and `TextEditor` because a click in the preview has to become a caret
+/// at the same character in the editor, and neither SwiftUI view can report or set a caret.
+struct ClipboardTextView: NSViewRepresentable {
+    @Binding var text: String
+    let isEditable: Bool
+    let fontSize: CGFloat
+    /// Bump to take first responder. Applied together with `caretOffset`, so opening the editor and
+    /// returning to it after the discard alert both put the caret where they should.
+    var focusToken: Int = 0
+    /// UTF-16 offset for the caret, or nil to leave the selection alone.
+    var caretOffset: Int?
+    /// Read-only mode: a click that selected nothing, with the character index it landed on.
+    var onPlainClick: ((Int) -> Void)?
+    var onEscape: (() -> Void)?
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let textView = CallbackTextView()
+        textView.delegate = context.coordinator
+        textView.string = text
+        // Wired here as well as in `updateNSView`: a click can arrive before SwiftUI's first update.
+        textView.onPlainClick = onPlainClick
+        textView.onEscape = onEscape
+        textView.isEditable = isEditable
+        textView.isSelectable = true
+        textView.isRichText = false
+        textView.allowsUndo = isEditable
+        textView.drawsBackground = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        textView.textContainerInset = NSSize(width: 2, height: 3)
+
+        // A clip is data. Curly quotes, an em dash, or a corrected spelling would change what the
+        // user pastes, so every automatic substitution stays off.
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
+        textView.isContinuousSpellCheckingEnabled = false
+        textView.isGrammarCheckingEnabled = false
+
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.minSize = .zero
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        return scrollView
+    }
+
+    func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        guard let textView = scrollView.documentView as? CallbackTextView else { return }
+
+        textView.onPlainClick = onPlainClick
+        textView.onEscape = onEscape
+        textView.isEditable = isEditable
+
+        if textView.string != text {
+            textView.string = text
+        }
+
+        guard context.coordinator.appliedFocusToken != focusToken else { return }
+        context.coordinator.appliedFocusToken = focusToken
+        guard isEditable else { return }
+
+        let offset = caretOffset
+        func takeFocus() {
+            textView.window?.makeFirstResponder(textView)
+            guard let offset else { return }
+            let clamped = min(max(0, offset), (textView.string as NSString).length)
+            textView.setSelectedRange(NSRange(location: clamped, length: 0))
+            textView.scrollRangeToVisible(NSRange(location: clamped, length: 0))
+        }
+
+        DispatchQueue.main.async { takeFocus() }
+        // A popover that has just opened hands first responder around for a moment (the key handler
+        // claims it in `viewDidMoveToWindow`), so a restored draft needs a second go. Skipped once
+        // the editor holds it, which also means a caret the user has since moved is left alone.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+            guard textView.window?.firstResponder !== textView else { return }
+            takeFocus()
+        }
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        private let text: Binding<String>
+        var appliedFocusToken: Int?
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func textDidChange(_ notification: Notification) {
+            guard let textView = notification.object as? NSTextView else { return }
+            text.wrappedValue = textView.string
+        }
+    }
+}
+
+/// Whether a finished click in the read-only preview should open the editor.
+struct ClipboardPreviewClick {
+    /// An empty selection is what separates a plain click from a drag, a double click (selects a
+    /// word) and a triple click (selects a paragraph); all of those are someone selecting text to
+    /// copy, so they stay in the preview. A modified click is a selection gesture too.
+    ///
+    /// The click count is deliberately not part of this: a synthetic click can report 0.
+    static func opensEditor(selectionLength: Int, modifiers: NSEvent.ModifierFlags) -> Bool {
+        guard selectionLength == 0 else { return false }
+        return modifiers.isDisjoint(with: [.command, .shift, .option, .control])
+    }
+}
+
+final class CallbackTextView: NSTextView {
+    var onPlainClick: ((Int) -> Void)?
+    var onEscape: (() -> Void)?
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+
+        // NSTextView tracks the drag inside super, so this returns once the click is finished and
+        // `selectedRange` tells us whether it was a click or a selection.
+        super.mouseDown(with: event)
+
+        guard let onPlainClick,
+              ClipboardPreviewClick.opensEditor(
+                selectionLength: selectedRange().length,
+                modifiers: event.modifierFlags
+              ) else { return }
+
+        let index = characterIndexForInsertion(at: point)
+        DispatchQueue.main.async { onPlainClick(index) }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Escape is bound to `complete:` in a text view, not to `cancelOperation:`, so it has to be
+        // caught here to mean "leave the editor".
+        if event.keyCode == 53, let onEscape {
+            onEscape()
+            return
+        }
+        super.keyDown(with: event)
+    }
+}
+
 struct KeyEventHandler: NSViewRepresentable {
+    /// Bump to make the handler take first responder back. Needed when a text editor that held it
+    /// has been removed from the hierarchy, which leaves nothing listening for arrows or Enter.
+    let focusToken: Int
     let onKeyEvent: (NSEvent) -> Bool
-    
+
     func makeNSView(context: Context) -> NSView {
         let view = KeyEventView()
         view.onKeyEvent = onKeyEvent
+        view.focusToken = focusToken
         return view
     }
-    
+
     func updateNSView(_ nsView: NSView, context: Context) {
-        if let keyView = nsView as? KeyEventView {
-            keyView.onKeyEvent = onKeyEvent
+        guard let keyView = nsView as? KeyEventView else { return }
+        keyView.onKeyEvent = onKeyEvent
+
+        guard keyView.focusToken != focusToken else { return }
+        keyView.focusToken = focusToken
+        DispatchQueue.main.async {
+            keyView.window?.makeFirstResponder(keyView)
         }
     }
 }
 
 class KeyEventView: NSView {
     var onKeyEvent: ((NSEvent) -> Bool)?
-    
+    var focusToken = 0
+
     override var acceptsFirstResponder: Bool { 
         return true 
     }
@@ -1872,6 +2500,7 @@ private struct ShortcutReferenceView: View {
 
                 ShortcutReferenceSection(title: "Actions", shortcuts: [
                     ("Enter", "Paste selected item"),
+                    ("⌘E", "Edit a copy of a text item"),
                     ("⌘D", "Toggle favorite"),
                     ("⌘H", "Toggle sensitive"),
                     ("⌘V", "Reveal sensitive item"),
@@ -1881,6 +2510,12 @@ private struct ShortcutReferenceView: View {
                     ("⌘F", "Toggle favorites filter"),
                     ("⌘/", "Show shortcuts"),
                     ("Esc", "Close / unfocus"),
+                ])
+
+                ShortcutReferenceSection(title: "While editing a copy", shortcuts: [
+                    ("⌘S", "Save as a new item"),
+                    ("⌘⏎", "Save as a new item and paste it"),
+                    ("Esc", "Cancel the edit"),
                 ])
             }
             .padding(12)

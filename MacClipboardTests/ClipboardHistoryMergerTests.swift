@@ -125,6 +125,164 @@ final class ClipboardHistoryMergerTests: XCTestCase {
     }
 }
 
+final class ClipboardTextEditTests: XCTestCase {
+    func testIntentDistinguishesEmptyUnchangedAndSave() {
+        XCTAssertEqual(ClipboardTextEdit.intent(newText: "", sourceText: "original"), .empty)
+        XCTAssertEqual(ClipboardTextEdit.intent(newText: "original", sourceText: "original"), .unchanged)
+        XCTAssertEqual(ClipboardTextEdit.intent(newText: "edited", sourceText: "original"), .save)
+    }
+
+    func testIntentTreatsWhitespaceOnlyChangesAsAnEdit() {
+        // Whitespace is content in a clip, so " original " is not the same text as "original".
+        XCTAssertEqual(ClipboardTextEdit.intent(newText: " original ", sourceText: "original"), .save)
+        XCTAssertEqual(ClipboardTextEdit.intent(newText: "   ", sourceText: "original"), .save)
+    }
+
+    func testEditedItemPreservesWhitespaceExactly() {
+        let source = ClipboardItem(id: UUID(), content: "before", type: .text, timestamp: Date())
+
+        let edited = ClipboardTextEdit.editedItem(
+            from: source,
+            text: "  padded line\n\n",
+            sensitivity: Self.noFlags
+        )
+
+        XCTAssertEqual(edited.content as? String, "  padded line\n\n")
+        XCTAssertEqual(edited.type, .text)
+    }
+
+    func testEditedItemDoesNotInheritFavoriteOrNote() {
+        let source = ClipboardItem(
+            id: UUID(),
+            content: "before",
+            type: .text,
+            timestamp: Date(),
+            isFavorite: true,
+            note: "source note"
+        )
+
+        let edited = ClipboardTextEdit.editedItem(from: source, text: "after", sensitivity: Self.noFlags)
+
+        XCTAssertNotEqual(edited.id, source.id)
+        XCTAssertFalse(edited.isFavorite)
+        XCTAssertNil(edited.note)
+    }
+
+    func testEditingAHiddenItemKeepsTheCopyHidden() {
+        // The edited text triggers nothing on its own, so only the source's own flag can mask it.
+        let source = ClipboardItem(
+            id: UUID(),
+            content: "sk-livekeythatwasdetected0000",
+            type: .text,
+            timestamp: Date(),
+            isSensitive: true,
+            isAutoSensitive: true
+        )
+
+        let edited = ClipboardTextEdit.editedItem(from: source, text: "harmless note", sensitivity: Self.noFlags)
+
+        XCTAssertTrue(edited.isSensitive)
+        XCTAssertFalse(edited.isAutoSensitive)
+        XCTAssertFalse(edited.isManuallyUnsensitive)
+    }
+
+    func testEditingIntoASecretHidesTheCopy() {
+        let source = ClipboardItem(id: UUID(), content: "harmless", type: .text, timestamp: Date())
+        let secret = "AKIAIOSFODNN7EXAMPLE"
+        let sensitivity = ClipboardSensitivityPolicy.flags(
+            for: secret,
+            hasSensitivePasteboardType: false,
+            autoDetectSensitiveData: true,
+            autoHidePasswordLikeStrings: true
+        )
+
+        let edited = ClipboardTextEdit.editedItem(from: source, text: secret, sensitivity: sensitivity)
+
+        XCTAssertTrue(edited.isSensitive)
+        XCTAssertTrue(edited.isAutoSensitive)
+    }
+
+    private static let noFlags = ClipboardSensitivityFlags(
+        isSensitive: false,
+        isAutoSensitive: false,
+        isPasswordLike: false
+    )
+}
+
+final class ClipboardPreviewClickTests: XCTestCase {
+    func testAPlainClickOpensTheEditor() {
+        XCTAssertTrue(ClipboardPreviewClick.opensEditor(selectionLength: 0, modifiers: []))
+    }
+
+    func testASelectionStaysInThePreview() {
+        // Dragging, double clicking and triple clicking all leave something selected: the user is
+        // selecting text to copy, not asking to edit.
+        XCTAssertFalse(ClipboardPreviewClick.opensEditor(selectionLength: 12, modifiers: []))
+    }
+
+    func testModifiedClicksStayInThePreview() {
+        for modifier in [NSEvent.ModifierFlags.command, .shift, .option, .control] {
+            XCTAssertFalse(
+                ClipboardPreviewClick.opensEditor(selectionLength: 0, modifiers: modifier),
+                "\(modifier) is a selection gesture, not an edit"
+            )
+        }
+    }
+
+    func testUnrelatedModifiersStillOpenTheEditor() {
+        XCTAssertTrue(ClipboardPreviewClick.opensEditor(selectionLength: 0, modifiers: [.capsLock, .function]))
+    }
+}
+
+final class ClipboardTextViewCaretTests: XCTestCase {
+    /// The click point handed to `characterIndexForInsertion(at:)` is in view coordinates, so it has
+    /// to include the text container origin. Getting that wrong puts the caret a line or a few
+    /// characters away from where the user clicked, which is the whole point of the feature.
+    ///
+    /// The index is a caret position, not a character: it snaps to the nearest character boundary,
+    /// so a click lands before or after the glyph depending on which half was hit.
+    func testAClickOnAGlyphMapsToTheBoundaryItIsNearest() throws {
+        let text = "first line\nsecond line\nthird line"
+        let textView = Self.makeTextView(text: text)
+        let layoutManager = try XCTUnwrap(textView.layoutManager)
+        let container = try XCTUnwrap(textView.textContainer)
+        layoutManager.ensureLayout(for: container)
+
+        // The "s" that starts "second line", i.e. the character after the first newline.
+        let target = NSRange(location: 11, length: 1)
+        let glyphRange = layoutManager.glyphRange(forCharacterRange: target, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: container)
+        let origin = textView.textContainerOrigin
+
+        let leadingEdge = NSPoint(x: rect.minX + 1 + origin.x, y: rect.midY + origin.y)
+        XCTAssertEqual(textView.characterIndexForInsertion(at: leadingEdge), 11)
+
+        let trailingEdge = NSPoint(x: rect.maxX - 1 + origin.x, y: rect.midY + origin.y)
+        XCTAssertEqual(textView.characterIndexForInsertion(at: trailingEdge), 12)
+    }
+
+    func testAPointPastTheEndMapsToTheEndOfTheText() {
+        let text = "one\ntwo"
+        let textView = Self.makeTextView(text: text)
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
+
+        let point = NSPoint(x: 380, y: 190)
+
+        XCTAssertEqual(textView.characterIndexForInsertion(at: point), (text as NSString).length)
+    }
+
+    private static func makeTextView(text: String) -> CallbackTextView {
+        // Configured the way ClipboardTextView configures it, inset included.
+        let textView = CallbackTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        textView.string = text
+        textView.isRichText = false
+        textView.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        textView.textContainerInset = NSSize(width: 2, height: 3)
+        textView.textContainer?.widthTracksTextView = true
+        return textView
+    }
+}
+
 final class ClipboardFilterTests: XCTestCase {
     func testSelectedFilterLimitsItemsByTab() {
         let favorite = ClipboardItem(id: UUID(), content: "favorite", type: .text, timestamp: Date(), isFavorite: true)

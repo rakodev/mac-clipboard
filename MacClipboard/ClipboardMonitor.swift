@@ -217,6 +217,66 @@ struct ClipboardHistoryMerger {
     }
 }
 
+/// Deriving a new text item from an edited copy of an existing one.
+///
+/// The source row is never touched, so history stays a log of what was actually on the pasteboard
+/// plus the copies the user deliberately made.
+struct ClipboardTextEdit {
+    /// What saving an edit should do, decided before any history is touched so it can be tested
+    /// on its own and so the Save buttons can be disabled for the cases that do nothing.
+    enum Intent: Equatable {
+        case empty
+        case unchanged
+        case save
+    }
+
+    static func intent(newText: String, sourceText: String) -> Intent {
+        if newText.isEmpty { return .empty }
+        if newText == sourceText { return .unchanged }
+        return .save
+    }
+
+    /// Builds the new item.
+    ///
+    /// Whitespace is preserved exactly. Unlike a note, leading and trailing whitespace in a clip
+    /// is often the point of it, so nothing is trimmed here.
+    ///
+    /// Masking can only be gained: `sensitivity` is the policy's verdict on the edited text, and
+    /// it is or-ed with the source's own flag. So editing a hidden item cannot produce a visible
+    /// copy of it, and editing an innocent one into a secret still hides the result. Favorite and
+    /// note are deliberately not inherited: this is not the item the user starred or annotated.
+    static func editedItem(
+        from source: ClipboardItem,
+        text: String,
+        sensitivity: ClipboardSensitivityFlags,
+        id: UUID = UUID(),
+        timestamp: Date = Date()
+    ) -> ClipboardItem {
+        ClipboardItem(
+            id: id,
+            content: text,
+            type: .text,
+            timestamp: timestamp,
+            isFavorite: false,
+            isSensitive: sensitivity.isSensitive || source.isSensitive,
+            isAutoSensitive: sensitivity.isAutoSensitive,
+            isPasswordLike: sensitivity.isPasswordLike,
+            isManuallyUnsensitive: false,
+            note: nil
+        )
+    }
+}
+
+/// What `ClipboardMonitor.saveEditedText` actually did. The popover has to be able to say that an
+/// edit which already existed was moved to the top rather than added again, otherwise Save looks
+/// like it dropped the edit.
+enum ClipboardTextEditOutcome: Equatable {
+    case empty
+    case unchanged
+    case saved(id: UUID)
+    case alreadyInHistory(id: UUID)
+}
+
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
     private var changeCount: Int = 0
@@ -647,24 +707,34 @@ class ClipboardMonitor: ObservableObject {
     
     private func addToHistory(_ item: ClipboardItem) {
         DispatchQueue.main.async {
-            let result = ClipboardHistoryMerger.inserting(item, into: self.clipboardHistory)
-            guard result.shouldPersistInsertedItem else { return }
-
-            self.clipboardHistory = result.history
-
-            // Write the replacement row before dropping the one it supersedes. The delete used to
-            // run first, and committed synchronously, while the save was dispatched async: in
-            // between, the item existed in memory only. A quit in that window lost it for good.
-            // Re-copying something you already have is exactly what happens to a favorite
-            // snippet, so favorites were the items most exposed to it.
-            self.saveItemToPersistence(self.clipboardHistory[0], superseding: result.removedItemIDs)
-
-            // Limit to max items
-            self.trimHistoryToLimitPreservingFavorites()
-
-            // Unload old images from memory to prevent memory bloat
-            self.unloadOldImages()
+            self.insertIntoHistory(item)
         }
+    }
+
+    /// Merges `item` into the history and persists it. Main thread only.
+    ///
+    /// Returns nil when the item was already at the top, so nothing was written.
+    @discardableResult
+    private func insertIntoHistory(_ item: ClipboardItem) -> ClipboardHistoryInsertionResult? {
+        let result = ClipboardHistoryMerger.inserting(item, into: clipboardHistory)
+        guard result.shouldPersistInsertedItem else { return nil }
+
+        clipboardHistory = result.history
+
+        // Write the replacement row before dropping the one it supersedes. The delete used to
+        // run first, and committed synchronously, while the save was dispatched async: in
+        // between, the item existed in memory only. A quit in that window lost it for good.
+        // Re-copying something you already have is exactly what happens to a favorite
+        // snippet, so favorites were the items most exposed to it.
+        saveItemToPersistence(clipboardHistory[0], superseding: result.removedItemIDs)
+
+        // Limit to max items
+        trimHistoryToLimitPreservingFavorites()
+
+        // Unload old images from memory to prevent memory bloat
+        unloadOldImages()
+
+        return result
     }
 
     /// Maximum number of images to keep loaded in memory
@@ -868,6 +938,41 @@ class ClipboardMonitor: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Saves `text` as a new text item derived from `source`, leaving `source` untouched.
+    ///
+    /// Main thread only: it mutates `clipboardHistory` and returns what happened, because the
+    /// caller has to be able to report it. The pasteboard is deliberately not written here, so
+    /// saving an edit does not silently replace whatever the user has copied.
+    @discardableResult
+    func saveEditedText(_ text: String, basedOn source: ClipboardItem) -> ClipboardTextEditOutcome {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        switch ClipboardTextEdit.intent(newText: text, sourceText: source.fullText) {
+        case .empty:
+            return .empty
+        case .unchanged:
+            return .unchanged
+        case .save:
+            break
+        }
+
+        let sensitivity = ClipboardSensitivityPolicy.flags(
+            for: text,
+            hasSensitivePasteboardType: false,
+            autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+            autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+        )
+        let edited = ClipboardTextEdit.editedItem(from: source, text: text, sensitivity: sensitivity)
+
+        // The merger dedupes by content, so an edit that happens to match something already in
+        // history moves that row to the top instead of adding a second copy of it.
+        guard let result = insertIntoHistory(edited) else {
+            return .alreadyInHistory(id: clipboardHistory.first?.id ?? source.id)
+        }
+
+        return result.removedItemIDs.isEmpty ? .saved(id: edited.id) : .alreadyInHistory(id: edited.id)
     }
 
     func toggleSensitive(_ item: ClipboardItem) {

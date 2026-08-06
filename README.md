@@ -83,6 +83,7 @@ After installation, the menu bar icon appears. Press `Cmd+Shift+V` or click it t
 | Shortcut | Action |
 |----------|--------|
 | `Cmd+Shift+V` | Open clipboard history (global) |
+| `Cmd+E` | Edit a copy of the selected text item |
 | `Cmd+F` | Switch between All / Favorites view |
 | `Cmd+D` | Toggle favorite on selected item |
 | `Cmd+H` | Toggle sensitive/hidden on selected item |
@@ -96,12 +97,22 @@ After installation, the menu bar icon appears. Press `Cmd+Shift+V` or click it t
 | `↑` `↓` | Navigate between items |
 | `Escape` | Close clipboard window / unfocus fields |
 
+While editing a copy:
+
+| Shortcut | Action |
+|----------|--------|
+| `Cmd+S` | Save as a new item |
+| `Cmd+Enter` | Save as a new item and paste it |
+| `Enter` | Add a line (editing never pastes) |
+| `Escape` | Cancel the edit |
+
 ### Using Clipboard Items
 
 * **Preview**: Click any item to see full content in the preview panel
 * **Paste**: Click, press Enter, or use number keys (0-9) for quick paste
 * **Favorite**: Click the star icon or press `Cmd+D` to save important items
 * **Sensitive**: Press `Cmd+H` to hide content - useful when showing clipboard in public. Press `Cmd+V` or click the eye icon to temporarily reveal (auto-hides when you switch items or close)
+* **Edit a copy**: Click the preview text (the caret lands where you clicked), press `Cmd+E`, or click the pencil icon. Saving adds a new item and leaves the original untouched. An edit of a hidden item stays hidden. Drag over the preview text to select it without opening the editor.
 * **Notes**: Add a note to any item (press `Cmd+N` or click the note field) - useful for labeling passwords, API keys, etc.
 * **Search**: Start typing to filter items instantly (searches content and notes)
 * **Multi-select**: Hold `Cmd` and click to select multiple items for deletion
