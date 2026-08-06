@@ -68,7 +68,7 @@ must never collide. `BuildInfo.isDevBuild` is the single check; everything deriv
 
 | Concern | Release | Dev |
 |---------|---------|-----|
-| Bundle id | `com.macclipboard.app` (Release config) | `com.macclipboard.app.dev` (Debug config, and re-set by `run.sh`) |
+| Bundle id | `com.macclipboard.app` (Release config) | `com.macclipboard.app.dev`, set by `run.sh`; the Debug config builds `.debug` |
 | Global hotkey | `Cmd+Shift+V` | `Cmd+Shift+Opt+V` |
 | Menu bar icon | outlined clipboard | filled clipboard |
 | Core Data store | `~/Library/Application Support/MacClipboard` | `.../MacClipboard (Dev)` |
@@ -83,9 +83,34 @@ Never change the release-side values: the bundle id and the pinned designated re
 `build.sh` are what keep every user's Accessibility grant valid across upgrades, and the store
 path is where their history lives.
 
-The Debug configuration carries the `.dev` bundle id so that building and running straight from
-Xcode cannot contend for the release Accessibility record either. Only the Release configuration
-may ever use `com.macclipboard.app`.
+### Three Bundle Ids, and Why `.dev` Is Handed Out By One Script Only
+
+Only the Release configuration may ever use `com.macclipboard.app`. The other two exist because
+TCC keys a grant on bundle id *and* the code signing identity recorded with it:
+
+- `com.macclipboard.app.debug` is what the Debug configuration builds, so Xcode's Run button and
+  the test host have an id of their own.
+- `com.macclipboard.app.dev` is handed out by `run.sh` alone, with `PlistBuddy` and a re-sign with
+  the persistent dev certificate, to the copy it installs in `~/Applications`.
+
+Until 0.1.17 the Debug configuration itself carried `.dev`, so every Run and every test pass put an
+ad hoc signed binary behind that id. tccd then logged `Failed to match existing code requirement
+for subject com.macclipboard.app.dev` and the grant held by the properly signed dev copy became
+unusable, which surfaced as the popover's "Accessibility permission stopped working" banner in the
+middle of ordinary work. Never give a bundle id to a build that is not signed with a stable
+identity, and keep `PRODUCT_NAME` at `MacClipboard` so the test target's `TEST_HOST` resolves.
+
+`run.sh`'s re-sign passes `--entitlements`, for the same reason `build.sh` must: `codesign --force`
+replaces a signature wholesale, so without it the dev build runs with no entitlements at all and
+silently differs from release on the Apple-events paste path. The script fails if the
+apple-events entitlement is missing afterwards. Xcode's debug-only `get-task-allow` does not
+survive that re-sign, which is intended: it is not in the entitlements file, and no shipped build
+has it.
+
+A build that cannot hold a grant says so rather than sending the developer to System Settings:
+`PermissionManager.cannotHoldGrant` (dev build plus ad hoc signature) drives its own banner text,
+and `handleAccessibilityPermissions` skips the one-shot system prompt for those builds and for a
+test host.
 
 ## One Copy, In Applications
 
@@ -107,7 +132,8 @@ Rules that follow from it:
   `build/export/MacClipboard.app` after packaging it (`--keep-export` opts out), and `run.sh`
   deletes the DerivedData build product once it has copied and re-signed it into
   `~/Applications/MacClipboard-Dev.app`. Running the tests or hitting Run in Xcode brings that
-  product back until the next `./run.sh`, which is harmless: it carries the dev bundle id.
+  product back until the next `./run.sh`. It carries the `.debug` bundle id, so it cannot take the
+  dev copy's Accessibility grant away; while it carried `.dev`, it did exactly that.
 - `./scripts/clean-dev-artifacts.sh` reports stray copies; `--fix` removes them.
 - When diagnosing a permission report, read `[Install]` in the unified log first:
   `log show --predicate 'subsystem == "com.macclipboard.app"' --last 1h | grep Install`.

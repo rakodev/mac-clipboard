@@ -347,6 +347,21 @@ the popover banner that runs the same reset. `run.sh --reset-permissions` does i
 This is why `run.sh` renames the dev bundle to `com.macclipboard.app.dev`: without that, every
 `./run.sh` overwrites the shared record and breaks the installed release copy.
 
+**The dev build loses permission after a build from Xcode:**
+
+Fixed in 0.1.17, and worth knowing if you see it on an older checkout. The Debug configuration used
+to build with the `.dev` bundle id, so hitting Run or Cmd+U put an ad hoc signed binary behind the
+id the signed dev copy holds its grant under. tccd logs the mismatch:
+
+```bash
+/usr/bin/log show --predicate 'process == "tccd"' --last 1h | grep macclipboard
+# Failed to match existing code requirement for subject com.macclipboard.app.dev
+```
+
+The Debug configuration now builds `com.macclipboard.app.debug`, and only `run.sh` promotes a copy
+to `.dev`. An ad hoc copy also stops asking for Accessibility it can never keep, and says so in the
+popover banner instead.
+
 **Clipboard not updating:**
 * Check `NSPasteboard.general.changeCount` is incrementing
 * Verify clipboard content type is supported

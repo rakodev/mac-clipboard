@@ -41,6 +41,13 @@ class PermissionManager: ObservableObject {
 
     @Published private(set) var diagnosis: Diagnosis = .notGranted
 
+    /// True for a build that cannot keep an Accessibility grant no matter what the user does,
+    /// because an ad hoc signature pins the grant to one exact binary hash and the next build
+    /// changes it. In practice this is a Debug build run straight from Xcode; `./run.sh` signs
+    /// with the persistent dev certificate precisely so that its copy is not in this state.
+    /// Advice differs: there is nothing to enable or repair, the copy is simply the wrong one.
+    var cannotHoldGrant: Bool { BuildInfo.isDevBuild && AppInstallation.isAdHocSigned }
+
     @Published private(set) var isRepairing: Bool = false
     @Published private(set) var repairFailureMessage: String?
 
@@ -126,7 +133,9 @@ class PermissionManager: ObservableObject {
 
         // Never seen working, and this copy has no stable signing identity, so any record that
         // does exist was made by a different build and can never match. Dev builds are excluded:
-        // `run.sh` gives them a persistent identity and their own bundle id.
+        // `run.sh` gives them a persistent identity and their own bundle id, and an ad hoc build
+        // straight out of Xcode carries `.debug`, so it has no record to be stale about. The
+        // banner names that case from `cannotHoldGrant` instead.
         if !BuildInfo.isDevBuild && AppInstallation.isAdHocSigned { return .staleRecord }
 
         return .notGranted

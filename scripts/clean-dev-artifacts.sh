@@ -17,6 +17,10 @@ set -e
 
 RELEASE_BUNDLE_ID="com.macclipboard.app"
 DEV_BUNDLE_ID="com.macclipboard.app.dev"
+# What the Debug configuration builds. Only run.sh promotes a copy to the .dev id, so anything
+# still carrying .debug is a build product: it can never hold an Accessibility grant, and it can
+# no longer take the dev copy's grant away either.
+DEBUG_BUNDLE_ID="com.macclipboard.app.debug"
 DEV_APP_PATH="$HOME/Applications/MacClipboard-Dev.app"
 
 RED='\033[0;31m'
@@ -119,8 +123,7 @@ while IFS= read -r app; do
             ;;
         "$DERIVED_DATA"/* | "$REPO_BUILD_DIR"/*)
             # Every `make dev` leaves one of these behind, and a build given an explicit
-            # -derivedDataPath leaves one under the repo's own build/. Both carry the dev bundle
-            # id, so they can only ever contend with the dev copy, and deleting them just slows
+            # -derivedDataPath leaves one under the repo's own build/. Deleting them just slows
             # the next build. Report them so the count is honest, but do not call them strays.
             echo -e "  ${CYAN}build${NC} $app  ($(describe "$app"), normal build output)"
             ;;
@@ -129,7 +132,7 @@ while IFS= read -r app; do
             STRAYS+=("$app")
             ;;
     esac
-done < <(copies_of "$DEV_BUNDLE_ID")
+done < <(copies_of "$DEV_BUNDLE_ID" ; copies_of "$DEBUG_BUNDLE_ID")
 
 echo ""
 
@@ -187,3 +190,4 @@ echo -e "${GREEN}✅ Cleanup done. Kept: ${KEEPER:-none}${NC}"
 echo -e "${CYAN}If Accessibility was granted to a copy that is now gone, open MacClipboard and use${NC}"
 echo -e "${CYAN}the banner's Repair button, or run:${NC}"
 echo -e "${CYAN}  tccutil reset Accessibility ${RELEASE_BUNDLE_ID}${NC}"
+echo -e "${CYAN}  ./run.sh --reset-permissions   # same thing for the dev copy${NC}"

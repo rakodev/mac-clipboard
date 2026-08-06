@@ -3,10 +3,19 @@ import Carbon
 
 /// Single source of truth for identifying which build of MacClipboard is running.
 ///
-/// `run.sh` gives development builds their own bundle identifier
-/// (`com.macclipboard.app.dev`) so macOS treats them as a separate app in the TCC
-/// database. Anything that has to behave differently between a dev build and an
-/// installed release build keys off this type instead of re-deriving the check.
+/// There are three bundle identifiers, and the split exists entirely because macOS keys an
+/// Accessibility grant on bundle id *and* the code signing identity recorded with it:
+///
+/// - `com.macclipboard.app` is the shipped release.
+/// - `com.macclipboard.app.dev` is only ever produced by `run.sh`, which signs it with the
+///   persistent dev certificate, so its grant survives rebuilds.
+/// - `com.macclipboard.app.debug` is what the Debug configuration builds, so Xcode's Run button
+///   and the test host get an id of their own. Those products are ad hoc signed, and while they
+///   shared the `.dev` id every Run or test pass made tccd refuse the dev copy afterwards
+///   ("Failed to match existing code requirement").
+///
+/// Anything that has to behave differently between a dev build and an installed release build
+/// keys off this type instead of re-deriving the check.
 enum BuildInfo {
     static let bundleIdentifier: String = Bundle.main.bundleIdentifier ?? "com.macclipboard.app"
 

@@ -449,42 +449,7 @@ struct ContentView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundColor(.orange)
             VStack(alignment: .leading, spacing: 4) {
-                switch permissionManager.diagnosis {
-                case .conflictingCopies(let copies):
-                    // Any grant that exists belongs to one specific copy, and it may well be one
-                    // of the others. A reset here would only move the problem across, so name the
-                    // real cause instead of asking the user to switch something on again.
-                    Text("More than one copy of MacClipboard is installed")
-                        .font(.caption).bold()
-                    Text("macOS gives Accessibility access to one specific copy of an app, so a permission granted to another copy does not apply here. Keep a single copy in Applications and remove \(copies.map(\.displayPath).joined(separator: ", ")). You can still copy items.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                case .updatedInPlace:
-                    // The grant is fine and belongs to the new binary. This process is the stale
-                    // one, so the only thing to fix is that it is still running.
-                    Text("MacClipboard was updated and needs to restart")
-                        .font(.caption).bold()
-                    Text("The app was replaced on disk while this copy kept running, so macOS no longer accepts it for Accessibility. Restarting restores auto‑paste and the hotkey. Nothing needs changing in System Settings. You can still copy items.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                case .staleRecord:
-                    // Telling the user to switch the app on is useless here: it already looks
-                    // switched on. The record has to be deleted and recreated instead.
-                    Text("Accessibility permission stopped working")
-                        .font(.caption).bold()
-                    Text("MacClipboard may still show as enabled in System Settings while macOS refuses it, usually after an update. Repair removes the stale entry and asks again. You can still copy items.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-
-                case .notGranted:
-                    Text("Accessibility permission required for auto‑paste")
-                        .font(.caption).bold()
-                    Text("Enable MacClipboard in System Settings > Privacy & Security > Accessibility. You can still copy items.")
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
+                permissionMessage
 
                 if let repairFailureMessage = permissionManager.repairFailureMessage {
                     Text("Repair failed: \(repairFailureMessage). Remove MacClipboard from the Accessibility list with the “−” button, then add it again.")
@@ -539,6 +504,68 @@ struct ContentView: View {
         .padding(8)
         .background(Color.orange.opacity(0.12))
         .overlay(Divider(), alignment: .bottom)
+    }
+
+    /// What the banner says. Each case needs a different fix, and naming the wrong one sends the
+    /// user to System Settings to switch on something that is already on.
+    @ViewBuilder
+    private var permissionMessage: some View {
+        if permissionManager.cannotHoldGrant {
+            // An ad hoc signature is the whole problem, so every other message here is a dead
+            // end: the grant would be gone again after the next build. Only reachable in
+            // development, so it is deliberately not localised.
+            Text("This build cannot keep Accessibility permission")
+                .font(.caption).bold()
+            Text("It is ad hoc signed, so macOS pins any grant to this exact binary and the next build invalidates it. Run ./run.sh and use the copy it installs in ~/Applications, which is signed with the persistent dev certificate.")
+                .font(.caption2)
+                .foregroundColor(.secondary)
+        } else {
+            switch permissionManager.diagnosis {
+            case .conflictingCopies(let copies):
+                // Any grant that exists belongs to one specific copy, and it may well be one
+                // of the others. A reset here would only move the problem across, so name the
+                // real cause instead of asking the user to switch something on again.
+                Text("More than one copy of MacClipboard is installed")
+                    .font(.caption).bold()
+                Text("macOS gives Accessibility access to one specific copy of an app, so a permission granted to another copy does not apply here. Keep a single copy in Applications and remove \(copies.map(\.displayPath).joined(separator: ", ")). You can still copy items.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+            case .updatedInPlace:
+                // The grant is fine and belongs to the new binary. This process is the stale
+                // one, so the only thing to fix is that it is still running.
+                Text("MacClipboard was updated and needs to restart")
+                    .font(.caption).bold()
+                Text("The app was replaced on disk while this copy kept running, so macOS no longer accepts it for Accessibility. Restarting restores auto‑paste and the hotkey. Nothing needs changing in System Settings. You can still copy items.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+
+            case .staleRecord:
+                // Telling the user to switch the app on is useless here: it already looks
+                // switched on. The record has to be deleted and recreated instead.
+                Text("Accessibility permission stopped working")
+                    .font(.caption).bold()
+                if BuildInfo.isDevBuild {
+                    // A dev build is never updated by Homebrew, so "after an update" would be a
+                    // false lead. What does happen is that another locally built copy claimed the
+                    // same bundle id, which is what `./run.sh --reset-permissions` clears up.
+                    Text("macOS refuses this dev copy while still showing it as enabled, usually because another locally built copy claimed the same bundle id. Run ./run.sh --reset-permissions, or use Repair, then grant access once more. You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                } else {
+                    Text("MacClipboard may still show as enabled in System Settings while macOS refuses it, usually after an update. Repair removes the stale entry and asks again. You can still copy items.")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+            case .notGranted:
+                Text("Accessibility permission required for auto‑paste")
+                    .font(.caption).bold()
+                Text("Enable MacClipboard in System Settings > Privacy & Security > Accessibility. You can still copy items.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
     }
 
     private var hotkeyConflictBanner: some View {

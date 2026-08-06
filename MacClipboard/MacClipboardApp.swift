@@ -82,6 +82,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         terminationSignalSource = source
     }
 
+    /// True when this process was started to host a unit test bundle rather than to be used.
+    ///
+    /// `xcodebuild test` launches the app as the test host, under the Debug bundle id
+    /// (`com.macclipboard.app.debug`). Without this check, running the tests quietly quits the
+    /// copy a developer is using, and pops installation alerts in the middle of a test run.
+    private var isHostingTests: Bool {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+    }
+
     /// Ask any older copy of *this same* app to quit.
     ///
     /// A second instance normally cannot start, but it can when two bundles share one
@@ -91,18 +103,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// than exiting ourselves means an upgrade can never leave the user with nothing running.
     ///
     /// A dev build has its own bundle id, so it is never affected by this.
-    /// True when this process was started to host a unit test bundle rather than to be used.
-    ///
-    /// `xcodebuild test` launches the app as the test host, and it shares the Debug bundle id with
-    /// the dev copy in `~/Applications`. Without this check, running the tests quietly quits the
-    /// dev build a developer is using, and pops installation alerts in the middle of a test run.
-    private var isHostingTests: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-    }
-
     private func terminateOtherInstances() {
         guard !isHostingTests else {
             Logging.info("[App] Hosting an XCTest bundle; leaving other instances alone")
@@ -398,6 +398,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     private func handleAccessibilityPermissions() {
         if AXIsProcessTrusted() { return }
+
+        // An ad hoc signed build can never keep a grant: macOS pins it to one binary hash and the
+        // next build changes it. Prompting there teaches the developer to dismiss the system
+        // dialog, and it used to be how the dev copy's own grant got claimed by a throwaway
+        // binary. A test host is the same case with a dialog nobody is watching.
+        if isHostingTests || (BuildInfo.isDevBuild && AppInstallation.isAdHocSigned) {
+            Logging.debug("[AX] This build cannot keep a grant (ad hoc signed or hosting tests); not prompting")
+            return
+        }
 
         // IMPORTANT: AXIsProcessTrustedWithOptions(prompt: true) re-shows the system
         // "would like to control this computer" dialog on EVERY call while the process
