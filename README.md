@@ -2,6 +2,12 @@
 
 Lightweight macOS menu bar clipboard manager that keeps track of your clipboard history with quick access and global hotkey support. Built to be fast, unobtrusive, and native to macOS.
 
+<p align="center">
+  <img src="docs/assets/mac-clipboard.png"
+       alt="MacClipboard open in the menu bar: a searchable history list with All, Favorites, Images and Hidden tabs beside a preview of the selected item"
+       width="520">
+</p>
+
 ## Why
 
 Managing clipboard history shouldn't be complicated. MacClipboard gives you instant access to your recent copies with a clean interface and global hotkey support.
