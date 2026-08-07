@@ -46,6 +46,12 @@ Or in one command:
 brew install --cask rakodev/tap/macclipboard
 ```
 
+To update later:
+
+```bash
+brew update && brew upgrade --cask macclipboard
+```
+
 After installation, launch MacClipboard and enable Accessibility permissions (see [After Installation](#after-installation-required)).
 
 ### Direct Download
@@ -172,16 +178,9 @@ macOS 13.0 (Ventura) or later.
 
 ## Update
 
-### Homebrew
+If installed via Homebrew, run `brew update && brew upgrade --cask macclipboard` (see [Installation](#homebrew-recommended)).
 
-```bash
-brew update
-brew upgrade --cask macclipboard
-```
-
-### Direct Download
-
-Download the latest version from [GitHub Releases](https://github.com/rakodev/mac-clipboard/releases) and replace the app in your Applications folder.
+If installed manually, download the latest version from [GitHub Releases](https://github.com/rakodev/mac-clipboard/releases) and replace the app in your Applications folder.
 
 ## Uninstall
 
