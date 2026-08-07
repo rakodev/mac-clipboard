@@ -209,6 +209,37 @@ final class ClipboardTextEditTests: XCTestCase {
     )
 }
 
+final class ClipboardTimeAgoTests: XCTestCase {
+    /// Items that arrive while the popover is open used to render as "unknown", which is what an
+    /// edit saved as a new item always was: it is created while the user is looking at the list.
+    func testAnItemJustCreatedReadsAsNow() {
+        let now = Date()
+        let formatter = ClipboardTimeAgo.makeFormatter()
+
+        XCTAssertEqual(ClipboardTimeAgo.string(for: now, relativeTo: now, formatter: formatter), "now")
+        XCTAssertEqual(ClipboardTimeAgo.string(for: now.addingTimeInterval(-1), relativeTo: now, formatter: formatter), "now")
+    }
+
+    func testATimestampAheadOfTheReferenceAlsoReadsAsNow() {
+        let now = Date()
+        let formatter = ClipboardTimeAgo.makeFormatter()
+
+        XCTAssertEqual(ClipboardTimeAgo.string(for: now.addingTimeInterval(30), relativeTo: now, formatter: formatter), "now")
+    }
+
+    func testOlderItemsAreFormattedRelatively() {
+        let now = Date()
+        let formatter = ClipboardTimeAgo.makeFormatter()
+
+        for age in [ClipboardTimeAgo.nowThreshold, 60, 3600, 86_400] as [TimeInterval] {
+            let text = ClipboardTimeAgo.string(for: now.addingTimeInterval(-age), relativeTo: now, formatter: formatter)
+            XCTAssertNotEqual(text, "now", "\(age)s old should carry a relative time")
+            XCTAssertFalse(text.isEmpty)
+            XCTAssertNotEqual(text, "unknown")
+        }
+    }
+}
+
 final class ClipboardPreviewClickTests: XCTestCase {
     func testAPlainClickOpensTheEditor() {
         XCTAssertTrue(ClipboardPreviewClick.opensEditor(selectionLength: 0, modifiers: []))

@@ -367,6 +367,8 @@ When modifying the editor:
 - [ ] Cmd+A, Cmd+C, Cmd+V, Cmd+X, Cmd+Z and Cmd+Backspace behave as text editing, not as the
       popover's shortcuts
 - [ ] Saving adds a new item at the top, selects it, and leaves the original as it was
+- [ ] The saved item shows a relative time, not "unknown" (`cacheTimeAgoForNewItems` covers every
+      item that appears while the popover is open, captures included)
 - [ ] Saving an edit that matches an existing item says so instead of adding a duplicate
 - [ ] Type, close the popover with the X or the hotkey, reopen: the edit comes back
 - [ ] Type, then click another app: the popover stays open

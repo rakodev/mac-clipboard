@@ -22,6 +22,28 @@ enum FilterTab: String, CaseIterable {
     }
 }
 
+struct ClipboardTimeAgo {
+    /// Anything this new reads as "now". A clip that has just been captured, or an edit just saved
+    /// as a new item, is not "0 sec. ago" to the person watching it appear.
+    static let nowThreshold: TimeInterval = 5
+
+    static func makeFormatter() -> RelativeDateTimeFormatter {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }
+
+    static func string(for date: Date, relativeTo reference: Date, formatter: RelativeDateTimeFormatter) -> String {
+        // A negative interval (a clock change, or a timestamp taken a moment after this reference)
+        // also lands here, which is the right answer for it.
+        guard reference.timeIntervalSince(date) >= nowThreshold else {
+            return L10n.string("now", comment: "Relative time for a clipboard item created moments ago")
+        }
+
+        return formatter.localizedString(for: date, relativeTo: reference)
+    }
+}
+
 struct ClipboardFilter {
     static func filteredItems(
         from items: [ClipboardItem],
@@ -392,6 +414,8 @@ struct ContentView: View {
             recomputeFilteredItems()
         }
         .onChange(of: clipboardMonitor.clipboardHistory) { _ in
+            // Give anything that just arrived a relative time, or it renders as "unknown"
+            cacheTimeAgoForNewItems()
             // Recompute when clipboard history changes
             recomputeFilteredItems()
             // Reset selection if needed
@@ -713,7 +737,7 @@ struct ContentView: View {
                                         revealedSensitiveIds.insert(item.id)
                                     }
                                 },
-                                timeAgoText: timeAgoCache[item.id] ?? "unknown"
+                                timeAgoText: timeAgoText(for: item)
                             )
                             .id(item.id)
                             .onAppear {
@@ -1017,14 +1041,35 @@ struct ContentView: View {
     }
     
     private func initializeTimeCache() {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .abbreviated
-        let now = Date()
-        
         timeAgoCache.removeAll()
-        for item in clipboardMonitor.clipboardHistory {
-            let timeString = formatter.localizedString(for: item.timestamp, relativeTo: now)
-            timeAgoCache[item.id] = timeString
+        cacheTimeAgoForNewItems()
+    }
+
+    private func timeAgoText(for item: ClipboardItem) -> String {
+        if let cached = timeAgoCache[item.id] { return cached }
+
+        // Only reached if an item got into the list before the cache heard about it. Formatting one
+        // row costs less than showing "unknown", which is what this fallback used to do.
+        return ClipboardTimeAgo.string(
+            for: item.timestamp,
+            relativeTo: Date(),
+            formatter: ClipboardTimeAgo.makeFormatter()
+        )
+    }
+
+    /// Formats the relative time of any item that does not have one yet.
+    ///
+    /// The cache used to be filled once, when the popover appeared, so anything that arrived while
+    /// it was open rendered as "unknown": a copy made from another app, and every edit saved as a
+    /// new item, since that is created while the user is looking at the list.
+    private func cacheTimeAgoForNewItems() {
+        let missing = clipboardMonitor.clipboardHistory.filter { timeAgoCache[$0.id] == nil }
+        guard !missing.isEmpty else { return }
+
+        let formatter = ClipboardTimeAgo.makeFormatter()
+        let now = Date()
+        for item in missing {
+            timeAgoCache[item.id] = ClipboardTimeAgo.string(for: item.timestamp, relativeTo: now, formatter: formatter)
         }
     }
     
