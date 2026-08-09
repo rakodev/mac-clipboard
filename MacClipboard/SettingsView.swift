@@ -13,6 +13,10 @@ struct SettingsView: View {
     /// shows and the in-memory history is left in step with it. Optional because the SwiftUI
     /// preview builds this view without an app around it.
     private let clipboardMonitor: ClipboardMonitor?
+    /// Owns the hotkey registration: the recorder needs it out of the way while it listens, and
+    /// whether the last registration was refused is the one thing Settings cannot work out for
+    /// itself. Optional for the same reason as `clipboardMonitor`.
+    private let menuBarController: MenuBarController?
     let onDismiss: () -> Void
     let onCheckForUpdates: () -> Void
 
@@ -46,10 +50,12 @@ struct SettingsView: View {
 
     init(
         clipboardMonitor: ClipboardMonitor? = nil,
+        menuBarController: MenuBarController? = nil,
         onDismiss: @escaping () -> Void = {},
         onCheckForUpdates: @escaping () -> Void = {}
     ) {
         self.clipboardMonitor = clipboardMonitor
+        self.menuBarController = menuBarController
         self.onDismiss = onDismiss
         self.onCheckForUpdates = onCheckForUpdates
     }
@@ -260,7 +266,25 @@ struct SettingsView: View {
                         Text("Shortcuts")
                             .font(.headline)
 
-                        Toggle("Global hotkey (\(GlobalHotkey.displayString))", isOn: $preferences.hotKeyEnabled)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Toggle("Global hotkey", isOn: $preferences.hotKeyEnabled)
+
+                            GlobalHotkeyRecorder(
+                                preferences: preferences,
+                                menuBarController: menuBarController
+                            )
+                            .disabled(!preferences.hotKeyEnabled)
+
+                            Text("Opens MacClipboard from whatever app you are in. ⌘ ⇧ V is also \"Paste and Match Style\" in a lot of apps, so change it here if the two collide.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            if BuildInfo.isDevBuild {
+                                Text("This is a dev build, so it keeps its own shortcut and its own default. An installed release copy is unaffected by what you set here.")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
 
                         Toggle("In-app shortcuts", isOn: $preferences.shortcutsEnabled)
 
@@ -727,6 +751,174 @@ struct BuildChannelBadge: View {
             .foregroundColor(BuildInfo.isDevBuild ? .orange : .secondary)
             .help(BuildInfo.diagnosticSummary)
             .accessibilityLabel(Text("Build channel: \(BuildInfo.channelName)"))
+    }
+}
+
+/// Records the next key press as the global hotkey.
+///
+/// A local event monitor rather than a first-responder view: the combinations worth recording are
+/// exactly the ones that are already key equivalents somewhere (⌘⇧V is Paste and Match Style, ⌥⌘C
+/// is Copy Style), and a monitor sees a key event before `performKeyEquivalent` gets a chance to
+/// act on it. Returning nil from the monitor is what stops the rest of the app from also
+/// responding to the keys being recorded, including this window's own Done button.
+struct GlobalHotkeyRecorder: View {
+    @ObservedObject var preferences: UserPreferencesManager
+    let menuBarController: MenuBarController?
+
+    @State private var isRecording = false
+    @State private var eventMonitor: Any?
+    @State private var heldModifiers: UInt32 = 0
+    @State private var rejection: GlobalHotkeyRejection?
+
+    private static let escapeKeyCode: UInt16 = 53
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Button(action: toggleRecording) {
+                    Text(fieldLabel)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(minWidth: 130)
+                        .padding(.vertical, 2)
+                }
+                .buttonStyle(.bordered)
+                .help(isRecording
+                      ? Text("Press the combination you want, or Escape to leave it as it was.")
+                      : Text("Click, then press the combination you want."))
+                .accessibilityLabel(Text("Global hotkey"))
+                .accessibilityValue(Text(preferences.globalHotkey.displayString))
+
+                if isRecording {
+                    Button("Cancel") { stopRecording() }
+                        .buttonStyle(.borderless)
+                } else if preferences.globalHotkey != .defaultForCurrentBuild {
+                    Button("Reset to \(GlobalHotkeyShortcut.defaultForCurrentBuild.displayString)") {
+                        preferences.globalHotkey = .defaultForCurrentBuild
+                        rejection = nil
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+
+            if let rejection {
+                Text(rejection.message)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let menuBarController {
+                GlobalHotkeyAvailabilityNote(
+                    menuBarController: menuBarController,
+                    shortcut: preferences.globalHotkey
+                )
+            }
+        }
+        .onDisappear { stopRecording() }
+        // Clicking into another app while recording would otherwise leave the hotkey suspended and
+        // the field waiting for a key press nobody is about to make.
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
+            stopRecording()
+        }
+        // The toggle above is not disabled while recording, and switching it off disables this
+        // whole control, Cancel included. Stopping here is what keeps that from stranding a
+        // monitor that would swallow the next key press.
+        .onChange(of: preferences.hotKeyEnabled) { enabled in
+            if !enabled { stopRecording() }
+        }
+    }
+
+    private var fieldLabel: String {
+        guard isRecording else { return preferences.globalHotkey.displayString }
+
+        let held = GlobalHotkeyShortcut.modifierDisplayString(heldModifiers, spaced: true)
+        return held.isEmpty
+            ? L10n.string("Type a shortcut", comment: "Global hotkey recorder, waiting for a key press")
+            : held + " …"
+    }
+
+    private func toggleRecording() {
+        isRecording ? stopRecording() : startRecording()
+    }
+
+    private func startRecording() {
+        guard !isRecording, eventMonitor == nil else { return }
+
+        rejection = nil
+        heldModifiers = 0
+        isRecording = true
+        menuBarController?.setGlobalHotkeyRecording(true)
+
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
+            handle(event) ? nil : event
+        }
+    }
+
+    private func stopRecording() {
+        guard isRecording || eventMonitor != nil else { return }
+
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        isRecording = false
+        heldModifiers = 0
+        menuBarController?.setGlobalHotkeyRecording(false)
+    }
+
+    /// True when the event was consumed by the recorder.
+    private func handle(_ event: NSEvent) -> Bool {
+        guard isRecording else { return false }
+
+        if event.type == .flagsChanged {
+            heldModifiers = GlobalHotkeyShortcut.carbonModifiers(from: event.modifierFlags)
+            return true
+        }
+
+        guard event.type == .keyDown else { return false }
+
+        // Escape on its own is the way out. With a modifier held it is an ordinary candidate:
+        // ⌃⌥⎋ is a perfectly good hotkey.
+        let modifiers = GlobalHotkeyShortcut.carbonModifiers(from: event.modifierFlags)
+        if event.keyCode == Self.escapeKeyCode, modifiers == 0 {
+            stopRecording()
+            return true
+        }
+
+        let candidate = GlobalHotkeyShortcut(event: event)
+        if let reason = candidate.rejection {
+            // Stay in recording mode: the user still has to type something, and the message says
+            // what would make the next attempt work.
+            rejection = reason
+            return true
+        }
+
+        rejection = nil
+        preferences.globalHotkey = candidate
+        stopRecording()
+        return true
+    }
+}
+
+/// Says when macOS refused the shortcut, which it does when another app registered it first.
+///
+/// Split out so it can hold the `@ObservedObject`: the controller is optional in `SettingsView`,
+/// which a property wrapper cannot be.
+private struct GlobalHotkeyAvailabilityNote: View {
+    @ObservedObject var menuBarController: MenuBarController
+    let shortcut: GlobalHotkeyShortcut
+
+    var body: some View {
+        if menuBarController.isGlobalHotkeyUnavailable {
+            HStack(alignment: .top, spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.orange)
+                Text("\(shortcut.displayString) is already taken by another app, so it will not open MacClipboard. Record a different one, or quit the other app and switch the hotkey off and on again.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .font(.caption)
+            .foregroundColor(.orange)
+        }
     }
 }
 

@@ -164,20 +164,80 @@ See `SensitiveContentDetector` in `ClipboardMonitor.swift` for implementation de
 
 ### Global Hotkey
 
-Implemented using Carbon framework's `RegisterEventHotKey` for system-wide `Cmd+Shift+V` support.
+Implemented using Carbon framework's `RegisterEventHotKey` for system-wide support.
 
-The combination is defined once in `GlobalHotkey` (`BuildInfo.swift`). Dev builds use
-`Cmd+Shift+Opt+V` instead: `RegisterEventHotKey` is first-come-first-served system wide, so a
-dev build and an installed release build otherwise fight over `Cmd+Shift+V` and whichever
-launched second loses it without any visible sign. When registration fails, the popover now
-shows a banner rather than failing silently.
+The combination is a stored preference, `globalHotkey`, held as the pair Carbon takes: a virtual key
+code and a modifier mask (`GlobalHotkeyShortcut` in `GlobalHotkey.swift`). `Cmd+Shift+V` is the
+default, and a dev build defaults to `Cmd+Shift+Opt+V`: `RegisterEventHotKey` is
+first-come-first-served system wide, so a dev build and an installed release build otherwise fight
+over one combination and whichever launched second loses it without any visible sign. The two builds
+have different bundle identifiers and so different preference domains, which is what keeps a
+recorded shortcut on one from reaching the other. When registration fails, the popover and Settings
+both say so rather than leaving a dead key.
 
 ```swift
 // Carbon event handler for global hotkey
 var hotKeyRef: EventHotKeyRef?
 let hotKeyID = EventHotKeyID(signature: OSType("MCLP"), id: 1)
-RegisterEventHotKey(UInt32(kVK_ANSI_V), UInt32(cmdKey | shiftKey), hotKeyID, ...)
+RegisterEventHotKey(shortcut.keyCode, shortcut.carbonModifiers, hotKeyID, ...)
 ```
+
+`MenuBarController` unregisters and re-registers whenever the preference changes, and
+`setGlobalHotkeyRecording(_:)` lets go of the hotkey entirely while the Settings recorder is
+listening. Without that, the one combination the recorder could never capture would be the one
+already registered: Carbon takes it before the key event reaches the app, so pressing it would open
+the popover instead of being written down.
+
+#### Recording One
+
+`GlobalHotkeyRecorder` (`SettingsView.swift`) is a local `NSEvent` monitor rather than a first
+responder view. The combinations worth recording are exactly the ones that are already key
+equivalents somewhere (⌘⇧V is Paste and Match Style, ⌥⌘C is Copy Style), and a local monitor runs
+before `performKeyEquivalent`, so pressing one records it instead of performing it. Returning nil
+from the monitor is what stops the settings window's own Done button from firing on a recorded
+Return. Every exit from recording has to call `setGlobalHotkeyRecording(false)`, including Escape,
+Cancel, the window losing key, and the hotkey toggle being switched off underneath the recorder: a
+stranded monitor swallows the next key press anywhere in the app.
+
+Two combinations are refused, and both refusals are about other apps rather than about MacClipboard:
+
+* **No ⌘, ⌃ or ⌥** would fire the hotkey while the user types. Function keys are the exception, since
+  F13 on its own is a legitimate hotkey.
+* **⌘ plus one key** is how apps spell their menu items, so taking one globally removes Paste, Save
+  or Quit from everything the user runs.
+
+The same check runs on the value read back from disk, so a combination this build would refuse to
+record cannot arrive from an older one either. `GlobalHotkeyShortcut.init` also masks off the
+modifier bits Carbon does not take (caps lock, keypad, fn), which `NSEvent.modifierFlags` reports
+and which would otherwise make two identical shortcuts compare unequal.
+
+Key labels come from the current keyboard layout through `UCKeyTranslate`, not from a table of key
+codes to letters: key code 6 is Z on a US keyboard and W on a French one, and a recorder that named
+the wrong key would be describing a keyboard the user is not looking at. Keys the layout cannot
+label (Return, Escape, the arrows, F1 to F20) are named in `GlobalHotkeyKey`, and
+`GlobalHotkeyKey.label(for:)` never returns an empty string, since a shortcut nobody can see is
+worse than an ugly label.
+
+**Known limit: a collision is usually silent.** `isGlobalHotkeyUnavailable`, the popover banner and
+the Settings warning are all driven by the `OSStatus` from `RegisterEventHotKey`, and on macOS 26.5
+that call returns `noErr` for a combination another *process* already holds. Measured with a
+throwaway helper holding ⌃⌥N: a second process asking for the same combination got status 0. So the
+banner catches a refused registration when macOS reports one, and the everyday case, another app
+having got there first, still presents as a key that does nothing. Recording a different shortcut is
+the remedy either way, which is why the copy points at the recorder.
+
+#### Manual Checks
+
+- [ ] Recording a new combination takes effect without a relaunch, and the old one stops working
+- [ ] The combination currently registered can itself be recorded: pressing it while recording
+      writes it down instead of opening the popover
+- [ ] Escape leaves the shortcut as it was; Cancel and clicking another app both end recording, and
+      the hotkey works again afterwards
+- [ ] A key with no ⌘/⌃/⌥, and ⌘ plus one key, are both refused with a reason, and recording
+      continues rather than closing on the refusal
+- [ ] A function key on its own is accepted
+- [ ] The recorded shortcut survives a relaunch, and Reset restores the default for this build
+- [ ] The popover banner, the shortcut reference (⌘/) and Settings all name the current combination
 
 ### Launch at Login
 
@@ -277,7 +337,7 @@ PRs welcome for:
 ### Manual Testing Checklist
 
 - [ ] Clipboard monitoring captures text, images, files
-- [ ] Global hotkey `Cmd+Shift+V` works from any app
+- [ ] Global hotkey `Cmd+Shift+V` works from any app, and a recorded replacement works immediately
 - [ ] Favorites persist after app restart
 - [ ] Notes persist after app restart
 - [ ] Notes are searchable
@@ -324,8 +384,9 @@ If `log` prints "too many arguments", a shell alias is shadowing it. Use `/usr/b
 
 **Hotkey not registering:**
 * Check accessibility permissions
-* Verify no other app is using the combination (`Cmd+Shift+V` for release builds,
-  `Cmd+Shift+Opt+V` for dev builds). The popover shows a banner when registration is refused.
+* Verify no other app is using the combination (by default `Cmd+Shift+V` for release builds,
+  `Cmd+Shift+Opt+V` for dev builds). The popover and Settings both say so when registration is
+  refused; recording a different shortcut is the fix.
 
 **Accessibility shows as enabled but the app says permission is missing:**
 

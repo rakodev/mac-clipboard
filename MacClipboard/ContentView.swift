@@ -606,9 +606,9 @@ struct ContentView: View {
             Image(systemName: "keyboard.badge.ellipsis")
                 .foregroundColor(.orange)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Global hotkey \(GlobalHotkey.displayString) is unavailable")
+                Text("Global hotkey \(userPreferences.globalHotkey.displayString) is unavailable")
                     .font(.caption).bold()
-                Text("Another app registered it first. Click the menu bar icon to open MacClipboard, or turn the hotkey off and on again in Settings once the other app releases it.")
+                Text("Another app registered it first. Click the menu bar icon to open MacClipboard, or record a different shortcut in Settings.")
                     .font(.caption2)
                     .foregroundColor(.secondary)
             }
@@ -2623,7 +2623,7 @@ private struct ShortcutReferenceView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 ShortcutReferenceSection(title: "Global", shortcuts: [
-                    (GlobalHotkey.compactDisplayString, "Open clipboard"),
+                    (UserPreferencesManager.shared.globalHotkey.compactDisplayString, "Open clipboard"),
                 ])
 
                 ShortcutReferenceSection(title: "Navigation", shortcuts: [

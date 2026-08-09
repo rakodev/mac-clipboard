@@ -46,25 +46,9 @@ What was declined for now, with reasons, is in `FOLLOWUPS.md`: iCloud sync, sequ
 
 The numbers are stable identifiers, not positions: a completed task leaves a gap rather than
 renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or `FOLLOWUPS.md` keeps
-meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture) and task 6
-(deleting the store persistence left behind) were all completed on 2026-08-09.
-
-### 7. The global hotkey and the in-popover keys are not configurable
-
-`GlobalHotkey` is a hardcoded enum (`keyCode 9`, cmd + shift) registered through Carbon's
-`RegisterEventHotKey` in `MenuBarController`, and every in-popover key is hardcoded in
-`ContentView` behind one `shortcutsEnabled` on/off switch. Cmd+Shift+V collides with "Paste and
-Match Style" in a lot of apps and with other clipboard managers, and a user who hits that collision
-has nothing to change.
-
-Scope this to the **global hotkey only**. Rebinding the in-popover keys multiplies the conflict
-surface (the editor, the digit shortcuts, the arrow navigation, the reveal key) for a fraction of
-the benefit, and `CLAUDE.md`'s editor section shows how carefully that key handling is balanced.
-
-Done means: a shortcut recorder in Settings storing key code plus modifiers; re-registration on
-change with the failure from `RegisterEventHotKey` surfaced as "that shortcut is already taken by
-another app" rather than a silently dead key; a reset to default; and the dev build keeping a
-separate binding so the two copies still cannot fight over one combination.
+meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
+(deleting the store persistence left behind) and task 7 (a configurable global hotkey) were all
+completed on 2026-08-09.
 
 ### 8. Formatting is lost: only plain text is captured and pasted
 

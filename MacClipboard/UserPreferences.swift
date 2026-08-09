@@ -10,6 +10,8 @@ class UserPreferencesManager: ObservableObject {
     private enum Keys {
         static let maxClipboardItems = "maxClipboardItems"
         static let hotKeyEnabled = "hotKeyEnabled"
+        static let globalHotkeyKeyCode = "globalHotkeyKeyCode"
+        static let globalHotkeyModifiers = "globalHotkeyModifiers"
         static let showImagePreviews = "showImagePreviews"
         static let autoStartEnabled = "autoStartEnabled"
         static let persistenceEnabled = "persistenceEnabled"
@@ -59,7 +61,33 @@ class UserPreferencesManager: ObservableObject {
             defaults.set(hotKeyEnabled, forKey: Keys.hotKeyEnabled)
         }
     }
-    
+
+    /// The combination that opens the popover from any app.
+    ///
+    /// Stored as its two Carbon halves rather than as a string, because the key code is what
+    /// `RegisterEventHotKey` takes and the label is only ever derived for display. `MenuBarController`
+    /// re-registers on every change, so a shortcut is live the moment it is recorded.
+    @Published var globalHotkey: GlobalHotkeyShortcut {
+        didSet {
+            defaults.set(Int(globalHotkey.keyCode), forKey: Keys.globalHotkeyKeyCode)
+            defaults.set(Int(globalHotkey.carbonModifiers), forKey: Keys.globalHotkeyModifiers)
+        }
+    }
+
+    /// The stored shortcut, or nil when there is none or it is one this build would refuse to
+    /// record. A combination that could not be typed in Settings should not arrive from disk
+    /// either, whichever version of the app wrote it.
+    private static func storedGlobalHotkey(in defaults: UserDefaults) -> GlobalHotkeyShortcut? {
+        guard let keyCode = defaults.object(forKey: Keys.globalHotkeyKeyCode) as? Int,
+              let modifiers = defaults.object(forKey: Keys.globalHotkeyModifiers) as? Int,
+              keyCode >= 0, keyCode <= Int(UInt16.max), modifiers >= 0 else {
+            return nil
+        }
+
+        let shortcut = GlobalHotkeyShortcut(keyCode: UInt32(keyCode), carbonModifiers: UInt32(modifiers))
+        return shortcut.isValid ? shortcut : nil
+    }
+
     // Whether to show image previews
     @Published var showImagePreviews: Bool {
         didSet {
@@ -269,6 +297,7 @@ class UserPreferencesManager: ObservableObject {
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
         self.maxClipboardItems = max(Self.minClipboardItems, min(Self.maxClipboardItems, savedMaxItems))
         self.hotKeyEnabled = defaults.object(forKey: Keys.hotKeyEnabled) as? Bool ?? true
+        self.globalHotkey = Self.storedGlobalHotkey(in: defaults) ?? .defaultForCurrentBuild
         self.showImagePreviews = defaults.object(forKey: Keys.showImagePreviews) as? Bool ?? true
         self.autoStartEnabled = defaults.object(forKey: Keys.autoStartEnabled) as? Bool ?? true
         
@@ -308,6 +337,10 @@ class UserPreferencesManager: ObservableObject {
     func resetToDefaults() {
         maxClipboardItems = Self.defaultClipboardItems
         hotKeyEnabled = true
+        // Reset, unlike the three exemptions below, because a shortcut nobody can remember is
+        // exactly what this button is for. The default is named on the button next to the
+        // recorder as well, so this is the second way back to it rather than the only one.
+        globalHotkey = .defaultForCurrentBuild
         showImagePreviews = true
         autoStartEnabled = true
         persistenceEnabled = true

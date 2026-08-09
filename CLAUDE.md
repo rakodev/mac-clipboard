@@ -61,7 +61,8 @@ copy is touched: an installed release build has its own bundle id and keeps runn
 ```
 MacClipboard/
 ├── MacClipboardApp.swift      # App entry point & AppDelegate
-├── BuildInfo.swift            # Build channel (Dev/Release) + GlobalHotkey definition
+├── BuildInfo.swift            # Build channel (Dev/Release), bundle id, version
+├── GlobalHotkey.swift         # GlobalHotkeyShortcut: key code + modifiers, validation, labels
 ├── ClipboardMonitor.swift     # Clipboard polling (0.8s interval), history management
 ├── MenuBarController.swift    # Status bar item, popover, global hotkey registration
 ├── ContentView.swift          # Main UI: filter tabs, search, item list, preview
@@ -82,7 +83,7 @@ must never collide. `BuildInfo.isDevBuild` is the single check; everything deriv
 | Concern | Release | Dev |
 |---------|---------|-----|
 | Bundle id | `com.macclipboard.app` (Release config) | `com.macclipboard.app.dev`, set by `run.sh`; the Debug config builds `.debug` |
-| Global hotkey | `Cmd+Shift+V` | `Cmd+Shift+Opt+V` |
+| Global hotkey default | `Cmd+Shift+V` | `Cmd+Shift+Opt+V` |
 | Menu bar icon | outlined clipboard | filled clipboard |
 | Core Data store | `~/Library/Application Support/MacClipboard` | `.../MacClipboard (Dev)` |
 | Settings footer | `Release` badge | `Dev` badge |
@@ -424,11 +425,29 @@ Three things it depends on:
 `excludedBundleIdentifiers` alone: Reset is not where anyone looks to start recording again, and
 resuming is one click on an icon that is showing the pause the whole time.
 
+## The Global Hotkey Is Stored, Not Hardcoded
+
+`Cmd+Shift+V` is only the default. `GlobalHotkeyShortcut` (`GlobalHotkey.swift`) holds the pair
+Carbon takes, a virtual key code and a modifier mask, `MenuBarController` re-registers on every
+change, and Settings records a new one. Two rules that constrain any change here:
+
+- **The recorder needs the hotkey out of the way while it listens**
+  (`MenuBarController.setGlobalHotkeyRecording(_:)`), and every exit from recording must switch it
+  back on. Carbon takes a registered hotkey before the event reaches the app, so the combination
+  already set is otherwise the one combination that cannot be recorded.
+- **A combination with no ⌘/⌃/⌥, or ⌘ plus one key, is refused**, on the way in from the recorder
+  *and* on the way in from disk. A global hotkey is taken from every app, so a bad one is a broken
+  Mac rather than a MacClipboard problem.
+
+Dev and release need no rule of their own: different bundle ids mean different preference domains,
+and `defaultForCurrentBuild` keeps the defaults apart. Design notes, including why labels come from
+the keyboard layout, are in `docs/DEVELOPMENT.md`.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd+Shift+V` | Global: Open clipboard (from any app) |
+| `Cmd+Shift+V` | Global: Open clipboard (from any app). Default; rebindable in Settings |
 | `Enter` | Paste selected item |
 | `Cmd+E` | Edit a copy of a text item |
 | `0-9` | Quick paste by position |
@@ -455,6 +474,8 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `persistenceDays`: 1-365 (default: 60), applies to every kind of item
 - `imagePersistenceDays`: 1-365 (default: 30), images only, shorter because they are the space
 - `hotKeyEnabled`: Bool (default: true)
+- `globalHotkey`: key code plus Carbon modifiers (default: `Cmd+Shift+V`, `Cmd+Shift+Opt+V` on a dev
+  build), recorded in Settings; an unusable stored value falls back to the default
 - `shortcutsEnabled`: Bool (default: true)
 - `autoStartEnabled`: Bool (default: true)
 - `autoDetectSensitiveData`: Bool (default: false), masks recognisable secrets
@@ -516,6 +537,8 @@ When modifying clipboard functionality:
 - [ ] Switching it off with nothing but favorites saved asks nothing
 - [ ] With "Clear history when MacClipboard quits" on, quitting and relaunching comes back with
       favorites only, and with it off the history is still there
+
+When modifying the global hotkey: the checklist is in `docs/DEVELOPMENT.md`.
 
 When modifying UI:
 - [ ] Filter tabs work correctly
@@ -580,6 +603,7 @@ the only check that needs both the signature and the ticket to be there.
 | Task | Files to Modify |
 |------|-----------------|
 | Add keyboard shortcut | `ContentView.swift` (local), `MenuBarController.swift` (global) |
+| Change the global hotkey model | `GlobalHotkey.swift`, `UserPreferences.swift`, `SettingsView.swift` (`GlobalHotkeyRecorder`) |
 | Change clipboard polling | `ClipboardMonitor.swift` |
 | Modify settings | `SettingsView.swift`, `UserPreferences.swift` |
 | Update data model | `ClipboardData.xcdatamodeld`, `PersistenceManager.swift`, `ClipboardMonitor.swift` |

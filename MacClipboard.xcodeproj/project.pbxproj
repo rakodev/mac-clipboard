@@ -16,6 +16,7 @@
 		A01234567890123456789011 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A01234567890123456789012 /* Assets.xcassets */; };
 		A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0APPINSTALL000000000000 /* AppInstallation.swift */; };
 		A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0BUILDINFO00000000000000 /* BuildInfo.swift */; };
+		A0GLOBALHOTKEY0000000001 /* GlobalHotkey.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0GLOBALHOTKEY0000000000 /* GlobalHotkey.swift */; };
 		A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0LOGGINGFILE00000000000000 /* Logging.swift */; };
 		A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0FAVEXPORT00000000000000 /* FavoritesExport.swift */; };
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
@@ -28,6 +29,7 @@
 		B0TEST000000000000000006 /* PersistenceStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000016 /* PersistenceStoreTests.swift */; };
 		B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */; };
 		B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000013 /* UpdateServiceTests.swift */; };
+		B0TEST000000000000000007 /* GlobalHotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,6 +53,7 @@
 		A01234567890123456789013 /* MacClipboard.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MacClipboard.entitlements; sourceTree = "<group>"; };
 		A0APPINSTALL000000000000 /* AppInstallation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInstallation.swift; sourceTree = "<group>"; };
 		A0BUILDINFO00000000000000 /* BuildInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BuildInfo.swift; sourceTree = "<group>"; };
+		A0GLOBALHOTKEY0000000000 /* GlobalHotkey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkey.swift; sourceTree = "<group>"; };
 		A0LOGGINGFILE00000000000000 /* Logging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Logging.swift; sourceTree = "<group>"; };
 		A0FAVEXPORT00000000000000 /* FavoritesExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FavoritesExport.swift; sourceTree = "<group>"; };
 		A0PERMISSIONMGR000000000000 /* PermissionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PermissionManager.swift; sourceTree = "<group>"; };
@@ -65,6 +68,7 @@
 		B0TEST000000000000000016 /* PersistenceStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceStoreTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SensitiveContentDetectorTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000013 /* UpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateServiceTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyShortcutTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -104,6 +108,7 @@
 				A01234567890123456789010 /* UserPreferences.swift */,
 				A0APPINSTALL000000000000 /* AppInstallation.swift */,
 				A0BUILDINFO00000000000000 /* BuildInfo.swift */,
+				A0GLOBALHOTKEY0000000000 /* GlobalHotkey.swift */,
 				A0LOGGINGFILE00000000000000 /* Logging.swift */,
 				A0FAVEXPORT00000000000000 /* FavoritesExport.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
@@ -131,6 +136,7 @@
 			children = (
 				B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */,
 				B0TEST000000000000000014 /* FavoritesExportTests.swift */,
+				B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */,
 				B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */,
 				B0TEST000000000000000016 /* PersistenceStoreTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
@@ -245,6 +251,7 @@
 				A01234567890123456789001 /* MacClipboardApp.swift in Sources */,
 				A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */,
 				A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */,
+				A0GLOBALHOTKEY0000000001 /* GlobalHotkey.swift in Sources */,
 				A0LOGGINGFILE00000000000001 /* Logging.swift in Sources */,
 				A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
@@ -261,6 +268,7 @@
 			files = (
 				B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */,
 				B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */,
+				B0TEST000000000000000007 /* GlobalHotkeyShortcutTests.swift in Sources */,
 				B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */,
 				B0TEST000000000000000006 /* PersistenceStoreTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,

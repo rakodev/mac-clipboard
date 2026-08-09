@@ -39,6 +39,22 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
   - Why later: the picker covers the case the backlog asked for, and a running-apps list needs a rule
     for background and agent processes that never own a clip.
 
+- [ ] Find a way to detect a global hotkey another app already owns.
+  - `isGlobalHotkeyUnavailable`, the popover banner and the Settings warning are all driven by the
+    `OSStatus` from `RegisterEventHotKey`, and that is not the signal it was assumed to be. Measured
+    on macOS 26.5 on 2026-08-09 with a throwaway helper holding ⌃⌥N: a second process asking for the
+    same combination got status 0, not `eventHotKeyExistsErr`. So the everyday collision, another app
+    having got there first, still presents as a key that does nothing, and the banner only fires for
+    a registration macOS actually refuses.
+  - This predates the recorder shipped as backlog task 7 and is not caused by it. The recorder is the
+    remedy either way, since a user who notices a dead key can now change it rather than being stuck,
+    which is why the copy points at the recorder rather than at the toggle.
+  - Why later: no public API answers "who owns this combination". `CGSGetSymbolicHotKeyValue` covers
+    only the system's own hotkeys and is private, and inferring ownership by watching whether a
+    press arrives would mean asking the user to press the key, which is a worse experience than the
+    problem. Worth revisiting if a public API appears, or if it is worth reading
+    `com.apple.symbolichotkeys` to at least catch collisions with macOS itself.
+
 - [ ] Explore richer search ranking and tokenization.
   - Why later: current search is simple and understandable; improve only after measuring pain with larger histories.
 

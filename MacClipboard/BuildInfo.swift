@@ -1,5 +1,4 @@
 import Foundation
-import Carbon
 
 /// Single source of truth for identifying which build of MacClipboard is running.
 ///
@@ -68,29 +67,5 @@ enum BuildInfo {
     /// Identifying detail for tooltips and diagnostics. Never shown inline in the UI.
     static var diagnosticSummary: String {
         "\(bundleIdentifier)\n\(Bundle.main.bundlePath)"
-    }
-}
-
-/// The global hotkey that opens the clipboard popover.
-///
-/// Dev builds deliberately use a different combination. `RegisterEventHotKey` is
-/// first-come-first-served system wide, so a dev build and an installed release build
-/// would otherwise fight over ⌘⇧V and whichever launched second would silently lose it.
-enum GlobalHotkey {
-    /// Virtual key code for 'V'.
-    static let keyCode: UInt32 = 9
-
-    static var carbonModifiers: UInt32 {
-        BuildInfo.isDevBuild ? UInt32(cmdKey | shiftKey | optionKey) : UInt32(cmdKey | shiftKey)
-    }
-
-    /// Spaced form used in settings labels, e.g. "⌘ ⇧ V".
-    static var displayString: String {
-        BuildInfo.isDevBuild ? "⌘ ⇧ ⌥ V" : "⌘ ⇧ V"
-    }
-
-    /// Compact form used in the shortcut reference table, e.g. "⌘⇧V".
-    static var compactDisplayString: String {
-        BuildInfo.isDevBuild ? "⌘⇧⌥V" : "⌘⇧V"
     }
 }

@@ -15,7 +15,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 ## Key Features
 
 * 📋 **Automatic clipboard tracking** - Captures text, images, and files as you copy them
-* ⌨️ **Global hotkey** - Press `Cmd+Shift+V` to open clipboard history from anywhere
+* ⌨️ **Global hotkey** - Press `Cmd+Shift+V` to open clipboard history from anywhere, or record your own
 * ⭐ **Favorites** - Save important items that persist indefinitely
 * 🔒 **Sensitive mode** - Hide content from shoulder surfing with `Cmd+H` (reveal with `Cmd+V` or eye icon)
 * ⏸️ **Pause capture** - Stop saving new copies before a screen share or a customer's account, without quitting; the menu bar icon shows a struck-through clipboard while it is off
@@ -88,7 +88,7 @@ After installation, the menu bar icon appears. Press `Cmd+Shift+V` or click it t
 ### Opening Clipboard History
 
 * **Menu bar icon**: Left-click the clipboard icon in your menu bar
-* **Global hotkey**: Press `Cmd+Shift+V` from any application
+* **Global hotkey**: Press `Cmd+Shift+V` from any application, or whichever shortcut you recorded
 * **Right-click menu**: Right-click the icon for quick actions
 
 ### Pausing Capture
@@ -109,7 +109,7 @@ without quitting it:
 
 | Shortcut | Action |
 |----------|--------|
-| `Cmd+Shift+V` | Open clipboard history (global) |
+| `Cmd+Shift+V` | Open clipboard history (global, default; rebindable in Settings) |
 | `Cmd+E` | Edit a copy of the selected text item |
 | `Cmd+F` | Switch between All / Favorites view |
 | `Cmd+D` | Toggle favorite on selected item |
@@ -212,7 +212,12 @@ Two further settings hide items that *are* saved, revealed with `Cmd+V`:
 
 ### Global Hotkey
 
-* Enable/disable `Cmd+Shift+V` global shortcut
+* Enable/disable the global shortcut
+* Record your own: click the shortcut, then press the combination you want. `Cmd+Shift+V` is the
+  default, and it is also "Paste and Match Style" in many apps, so change it here if the two
+  collide. Escape leaves it as it was, and Reset puts the default back.
+* A combination needs `Cmd`, `Option` or `Control`, or a function key. `Cmd` plus a single key is
+  refused, because a global hotkey would take that key away from every app you run.
 
 ### Keyboard Shortcuts
 
@@ -266,8 +271,9 @@ See [Development Guide](docs/DEVELOPMENT.md) for how to build, contribute, and s
 
 * Check System Settings > Privacy & Security > Accessibility
 * Ensure MacClipboard is allowed
-* If another app already uses `Cmd+Shift+V`, MacClipboard cannot register it. The popover shows
-  a banner when this happens; click the menu bar icon to open MacClipboard in the meantime.
+* If another app already uses the same combination, MacClipboard cannot register it. The popover
+  and Settings both say so when this happens; record a different shortcut, or click the menu bar
+  icon to open MacClipboard in the meantime.
 
 **MacClipboard is switched on in Accessibility but still says permission is missing?**
 

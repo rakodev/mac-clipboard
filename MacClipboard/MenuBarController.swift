@@ -50,6 +50,9 @@ class MenuBarController: NSObject, ObservableObject {
     private var hotKeyEventHandlerRef: EventHandlerRef?
     private var hotKeyPreferenceCancellable: AnyCancellable?
     private var capturePauseCancellable: AnyCancellable?
+    /// True while the Settings recorder is waiting for a key press, which is the one time the
+    /// hotkey has to be out of the way. See `setGlobalHotkeyRecording`.
+    private var isRecordingGlobalHotkey = false
     private let updateService: UpdateService
     private var previousApplication: NSRunningApplication?
     private var clickOutsideMonitor: Any?
@@ -394,6 +397,7 @@ class MenuBarController: NSObject, ObservableObject {
         // Create settings view with window reference for proper dismissal
         let settingsView = SettingsView(
             clipboardMonitor: clipboardMonitor,
+            menuBarController: self,
             onDismiss: { [weak self] in
                 self?.settingsWindow?.close()
                 self?.settingsWindow = nil
@@ -593,21 +597,45 @@ class MenuBarController: NSObject, ObservableObject {
             }
     }
 
+    /// Both halves of the preference re-register: whether there is a hotkey at all, and which one.
+    ///
+    /// `@Published` fires before the property has taken its new value, so the hop to the main
+    /// runloop is load-bearing rather than tidy: without it the registration would read the value
+    /// being replaced and the new shortcut would take effect one change late.
     private func setupGlobalHotkeyPreferenceObserver() {
-        hotKeyPreferenceCancellable = UserPreferencesManager.shared.$hotKeyEnabled
+        let preferences = UserPreferencesManager.shared
+        hotKeyPreferenceCancellable = preferences.$hotKeyEnabled
             .removeDuplicates()
+            .map { _ in () }
+            .merge(with: preferences.$globalHotkey.removeDuplicates().map { _ in () })
             .receive(on: RunLoop.main)
-            .sink { [weak self] _ in
+            .sink { [weak self] in
                 self?.updateGlobalHotkeyRegistration()
             }
     }
 
+    /// Suspends the hotkey while Settings is recording a new one.
+    ///
+    /// A Carbon hotkey is taken system wide before the key event reaches this app, which makes the
+    /// combination currently registered the one combination a recorder could never capture:
+    /// pressing it would open the popover instead of being written down. Letting go of it for the
+    /// length of the recording is what makes "type your shortcut" mean every shortcut, including
+    /// the one already set.
+    func setGlobalHotkeyRecording(_ recording: Bool) {
+        guard isRecordingGlobalHotkey != recording else { return }
+        isRecordingGlobalHotkey = recording
+        updateGlobalHotkeyRegistration()
+    }
+
+    /// Always unregisters first. Carbon has no way to change a registration in place, and this runs
+    /// only when a preference changes or a recording starts or ends, so there is nothing to save by
+    /// working out whether the registration would have come back the same.
     private func updateGlobalHotkeyRegistration() {
-        if UserPreferencesManager.shared.hotKeyEnabled {
-            registerGlobalHotkeyIfNeeded()
-        } else {
-            unregisterGlobalHotkey()
-        }
+        unregisterGlobalHotkey()
+
+        guard !isRecordingGlobalHotkey, UserPreferencesManager.shared.hotKeyEnabled else { return }
+
+        registerGlobalHotkey(UserPreferencesManager.shared.globalHotkey)
     }
 
     private func installGlobalHotkeyHandlerIfNeeded() {
@@ -639,19 +667,16 @@ class MenuBarController: NSObject, ObservableObject {
         }
     }
 
-    private func registerGlobalHotkeyIfNeeded() {
-        guard hotKeyRef == nil else { return }
-
+    private func registerGlobalHotkey(_ shortcut: GlobalHotkeyShortcut) {
         installGlobalHotkeyHandlerIfNeeded()
         guard hotKeyEventHandlerRef != nil else {
             setGlobalHotkeyUnavailable(true)
             return
         }
 
-        // Release builds use ⌘⇧V; dev builds use ⌘⇧⌥V so the two can coexist. See GlobalHotkey.
         let registerResult = RegisterEventHotKey(
-            GlobalHotkey.keyCode,
-            GlobalHotkey.carbonModifiers,
+            shortcut.keyCode,
+            shortcut.carbonModifiers,
             hotKeyID,
             GetApplicationEventTarget(),
             0,
@@ -661,7 +686,7 @@ class MenuBarController: NSObject, ObservableObject {
         if registerResult != noErr {
             hotKeyRef = nil
             setGlobalHotkeyUnavailable(true)
-            Logging.info("Failed to register global hotkey \(GlobalHotkey.displayString): OSStatus \(registerResult)")
+            Logging.info("Failed to register global hotkey \(shortcut.displayString): OSStatus \(registerResult)")
         } else {
             setGlobalHotkeyUnavailable(false)
         }

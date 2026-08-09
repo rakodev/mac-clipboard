@@ -167,4 +167,5 @@ open "$DEV_APP_PATH"
 
 echo "✅ MacClipboard started! Look for the FILLED clipboard icon in the menu bar (dev build)."
 echo "Use Cmd+Shift+Opt+V to open the clipboard history from anywhere."
-echo "   (the release build keeps Cmd+Shift+V, so both can run at once - see GlobalHotkey in BuildInfo.swift)"
+echo "   (the release build defaults to Cmd+Shift+V, so both can run at once - see GlobalHotkey.swift)"
+echo "   Either build's shortcut can be re-recorded in Settings; each keeps its own."
