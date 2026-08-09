@@ -299,8 +299,34 @@ rather than remember to be careful:
   `FavoritesExport`, so a favorite can be recovered from outside the app. Hidden favorites are
   included and flagged `"sensitive": true`; the save panel says so before writing.
 
-`docs/BACKLOG.md` tracks the missing test seam: nothing may construct `PersistenceManager` or
-`ClipboardMonitor` in a test, because both reach the user's real store.
+All four automatic paths are covered by `FavoriteProtectionTests`, over a store of the test's own.
+See below for why that store has to be its own.
+
+## A Test Cannot Reach the User's History
+
+`PersistenceManager` is built over a `StoreLocation`, and only `shared` holds the
+`.applicationSupport` case. Everything else names a directory (`PersistenceManager(storeLocation:
+.directory(url))`), which is what `StoreBackedTestCase` hands each test in `/tmp`. Without that
+split there was no way to test the favorite guarantees above, because every path that could delete
+a favorite ran against the developer's own clips.
+
+Two things enforce it, and both are needed:
+
+- **`PersistenceManager.shared` traps under a test host.** `ClipboardMonitor.init` defaults to it,
+  so forgetting to inject a store would otherwise be silent, and the failure would be the user's
+  history quietly losing rows rather than a red test. `BuildInfo.isHostingTests` is the check, and
+  `StoreLocationTests` asserts it still recognises a test run: if Xcode ever changes those
+  environment variables, the whole protection lapses with nothing to say so.
+- **The test host does not start the app.** `xcodebuild test` launches MacClipboard itself as the
+  host, so `applicationDidFinishLaunching` runs during every test pass, and it used to build a
+  `MenuBarController(clipboardMonitor: ClipboardMonitor())` 0.25 s in. That polled the pasteboard,
+  loaded the dev history and ran hourly maintenance against it for the length of the run. It is now
+  guarded, alongside the instance takeover and the installation alerts that already were.
+
+`UserPreferencesManager` takes a `UserDefaults` for the same reason. Preferences decide whether
+persistence runs at all, so a machine with it switched off would fail an unrelated test, and
+`imageStorageCompacted` is *written* during ordinary use: a test sharing the standard domain would
+change what the developer's own copy does at its next launch.
 
 ## Skipping a Clip and Masking a Clip Are Different Decisions
 

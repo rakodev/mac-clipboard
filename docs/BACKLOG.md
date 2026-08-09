@@ -6,18 +6,9 @@ Move completed items to `BACKLOG_ARCHIVE.md` with the completion date and a shor
 
 ## Priority Tasks
 
-### 1. No test seam for the store, so favorite protection cannot be regression tested
-
-`PersistenceManager` is a singleton bound to the real store path and `ClipboardMonitor.init` loads
-from it, so a test that constructs either one reads and writes the user's actual history. That is
-why the favorite-protection guarantees added alongside this entry are covered only indirectly, by
-`FavoritesExportTests`, and why the bulk-delete predicate is enforced structurally
-(`bulkDeleteNonFavorites`) rather than by a test.
-
-Done means: an injectable persistence type backed by an in-memory store in tests, plus tests that
-assert favorites survive `cleanupOldItems`, `clearAllData`, and storage-pressure eviction, and
-that `addToHistory` never leaves a re-copied item with no row on disk. Any test touching
-persistence must be unable to reach the real store.
+Task 1 (the missing test seam for the store) was completed on 2026-08-09; see
+`BACKLOG_ARCHIVE.md`. The numbers here are stable identifiers, as in the product section below, so
+it leaves a gap rather than renumbering the entries under it.
 
 ### 2. The DMG is notarized and stapled but never code signed
 

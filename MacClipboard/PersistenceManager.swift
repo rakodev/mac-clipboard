@@ -7,7 +7,24 @@ extension Notification.Name {
 }
 
 class PersistenceManager: ObservableObject {
-    static let shared = PersistenceManager()
+    /// The manager over the user's own clipboard history.
+    ///
+    /// Deliberately unreachable from a test. Every destructive path in this file runs against
+    /// whatever store the manager was built over, so a test that reaches this one deletes the
+    /// user's real clips, and the favorite-protection guarantees below are exactly the ones worth
+    /// testing. Trapping is the only way to make that impossible rather than merely discouraged:
+    /// `ClipboardMonitor.init` defaults to this manager, so forgetting to inject a store is
+    /// otherwise silent. A test builds `PersistenceManager(storeLocation: .directory(...))` over a
+    /// temporary directory instead.
+    static let shared: PersistenceManager = {
+        precondition(!BuildInfo.isHostingTests, """
+            PersistenceManager.shared opens the store holding the user's clipboard history, and \
+            a test that touches it reads and writes that history for real. Build \
+            PersistenceManager(storeLocation: .directory(url)) over a temporary directory and \
+            inject it; ClipboardMonitor.init takes one.
+            """)
+        return PersistenceManager(storeLocation: .applicationSupport)
+    }()
 
     @Published private(set) var isUsingTemporaryStore = false
     @Published private(set) var lastStoreLoadError: String?
@@ -18,11 +35,40 @@ class PersistenceManager: ObservableObject {
         return "Clipboard history storage could not be opened. MacClipboard is using temporary storage for this session.\(details)"
     }
     
-    private init() {}
+    let storeLocation: StoreLocation
+
+    init(storeLocation: StoreLocation) {
+        self.storeLocation = storeLocation
+    }
 
     // MARK: - Store Location
 
-    /// Directory that holds the Core Data store.
+    /// Which store a manager works over.
+    ///
+    /// The whole point of the distinction is that `applicationSupport` is the user's history and
+    /// nothing else may end up pointed at it by accident. `shared` is the only holder of that
+    /// case, and it traps under a test host.
+    enum StoreLocation {
+        /// The user's clipboard history, under Application Support.
+        case applicationSupport
+        /// A store of its own, in `directory`, which is created if it does not exist. Tests pass
+        /// a temporary directory.
+        case directory(URL)
+    }
+
+    /// Directory that holds this manager's Core Data store.
+    var storeDirectoryURL: URL {
+        switch storeLocation {
+        case .applicationSupport: return Self.applicationSupportStoreDirectoryURL
+        case .directory(let url): return url
+        }
+    }
+
+    var storeURL: URL {
+        storeDirectoryURL.appendingPathComponent("ClipboardData.sqlite")
+    }
+
+    /// Directory holding the user's history.
     ///
     /// `NSPersistentContainer.defaultDirectoryURL()` resolves to the same
     /// `~/Library/Application Support/MacClipboard` folder for a dev build and an installed
@@ -36,7 +82,7 @@ class PersistenceManager: ObservableObject {
     /// The release path is deliberately left byte-for-byte as it was, so no installed copy
     /// loses its existing history. A dev build starts from an empty history the first time
     /// it runs after this change.
-    static var storeDirectoryURL: URL {
+    static var applicationSupportStoreDirectoryURL: URL {
         let defaultURL = NSPersistentContainer.defaultDirectoryURL()
         guard BuildInfo.isDevBuild else { return defaultURL }
         return defaultURL
@@ -44,8 +90,12 @@ class PersistenceManager: ObservableObject {
             .appendingPathComponent("\(defaultURL.lastPathComponent) (Dev)", isDirectory: true)
     }
 
-    static var storeURL: URL {
-        storeDirectoryURL.appendingPathComponent("ClipboardData.sqlite")
+    /// Whether the store already sits where `NSPersistentContainer` would put it unaided, which is
+    /// true of a shipped release build and nothing else. That path is left exactly as it was so no
+    /// installed copy can lose its history to a change of description.
+    private var usesContainerDefaultLocation: Bool {
+        guard case .applicationSupport = storeLocation else { return false }
+        return !BuildInfo.isDevBuild
     }
 
     // MARK: - Core Data Stack
@@ -64,15 +114,20 @@ class PersistenceManager: ObservableObject {
     }()
 
     private func configure(container: NSPersistentContainer) {
-        // Point dev builds at their own store file. See storeDirectoryURL.
-        if BuildInfo.isDevBuild {
-            let directoryURL = Self.storeDirectoryURL
+        // Point a dev build at its own folder, and a named store at the directory it asked for.
+        // See storeDirectoryURL.
+        if !usesContainerDefaultLocation {
             do {
-                try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-                container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: Self.storeURL)]
+                try FileManager.default.createDirectory(at: storeDirectoryURL, withIntermediateDirectories: true)
+                container.persistentStoreDescriptions = [NSPersistentStoreDescription(url: storeURL)]
             } catch {
-                // Fall back to the default location rather than failing to start. Worth
-                // knowing about, since it means sharing a store with a release build again.
+                // A dev build falls back to the default location rather than failing to start.
+                // Worth knowing about, since it means sharing a store with a release build again.
+                // A store that named its own directory must not fall back: that would put its
+                // writes in the user's history, which is the one thing the seam exists to prevent.
+                if case .directory = storeLocation {
+                    fatalError("Could not create the store directory at \(storeDirectoryURL.path): \(error.localizedDescription)")
+                }
                 Logging.info("💾 Could not create the dev store directory, using the default location: \(error.localizedDescription)")
             }
         }
@@ -115,7 +170,7 @@ class PersistenceManager: ObservableObject {
     }
 
     func resetPersistentStoreFiles() -> Bool {
-        let storeURL = Self.storeURL
+        let storeURL = self.storeURL
         let fileManager = FileManager.default
         var didFail = false
 
@@ -586,7 +641,7 @@ class PersistenceManager: ObservableObject {
     func getStorageSize() -> Int64 {
         let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileSizeKey]
         guard let walker = FileManager.default.enumerator(
-            at: Self.storeDirectoryURL,
+            at: storeDirectoryURL,
             includingPropertiesForKeys: keys
         ) else { return 0 }
 

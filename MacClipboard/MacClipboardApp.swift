@@ -49,6 +49,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // accessibility enabling and the app activation policy. Some macOS versions
         // can cause status item event handling to be lost if created too early.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+            // A test host is this same app, so a run of `xcodebuild test` would otherwise poll the
+            // pasteboard, load the developer's own history and run maintenance against it for the
+            // length of the run, alongside whatever the tests are doing. `PersistenceManager
+            // .shared` now traps under a test host, so this would be fatal rather than untidy.
+            guard !BuildInfo.isHostingTests else {
+                Logging.info("[App] Hosting an XCTest bundle; not starting the menu bar or the clipboard monitor")
+                return
+            }
+
             self.menuBarController = MenuBarController(clipboardMonitor: ClipboardMonitor())
             self.showPersistenceRecoveryAlertIfNeeded()
         }
@@ -82,18 +91,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         terminationSignalSource = source
     }
 
-    /// True when this process was started to host a unit test bundle rather than to be used.
-    ///
-    /// `xcodebuild test` launches the app as the test host, under the Debug bundle id
-    /// (`com.macclipboard.app.debug`). Without this check, running the tests quietly quits the
-    /// copy a developer is using, and pops installation alerts in the middle of a test run.
-    private var isHostingTests: Bool {
-        let environment = ProcessInfo.processInfo.environment
-        return environment["XCTestConfigurationFilePath"] != nil
-            || environment["XCTestBundlePath"] != nil
-            || environment["XCTestSessionIdentifier"] != nil
-    }
-
     /// Ask any older copy of *this same* app to quit.
     ///
     /// A second instance normally cannot start, but it can when two bundles share one
@@ -104,7 +101,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// A dev build has its own bundle id, so it is never affected by this.
     private func terminateOtherInstances() {
-        guard !isHostingTests else {
+        guard !BuildInfo.isHostingTests else {
             Logging.info("[App] Hosting an XCTest bundle; leaving other instances alone")
             return
         }
@@ -186,7 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     ///
     /// Polling costs one `stat` and only reads the signature once the file has actually changed.
     private func startWatchingForInPlaceUpdate() {
-        guard !BuildInfo.isDevBuild, !isHostingTests else { return }
+        guard !BuildInfo.isDevBuild, !BuildInfo.isHostingTests else { return }
 
         // Read the running binary's identity now, while it is still ours. `launchFingerprint` is
         // lazy, and a first read taken after an upgrade would describe the *new* bundle, leaving
@@ -210,7 +207,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func checkInstallationHygiene() {
         Logging.info("[Install] \(AppInstallation.diagnosticLine)")
-        guard !BuildInfo.isDevBuild, !isHostingTests else { return }
+        guard !BuildInfo.isDevBuild, !BuildInfo.isHostingTests else { return }
 
         // Wait for the menu bar item so an alert never appears before there is any app to see.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
@@ -366,6 +363,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func showPersistenceRecoveryAlertIfNeeded() {
+        // Reached by notification as well as directly, and a test's own store falling back to
+        // temporary storage posts the same notification. Touching `shared` here would trap.
+        guard !BuildInfo.isHostingTests else { return }
+
         guard !didShowPersistenceRecoveryAlert,
               let message = PersistenceManager.shared.persistenceDiagnosticsMessage else { return }
 
@@ -403,7 +404,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // next build changes it. Prompting there teaches the developer to dismiss the system
         // dialog, and it used to be how the dev copy's own grant got claimed by a throwaway
         // binary. A test host is the same case with a dialog nobody is watching.
-        if isHostingTests || (BuildInfo.isDevBuild && AppInstallation.isAdHocSigned) {
+        if BuildInfo.isHostingTests || (BuildInfo.isDevBuild && AppInstallation.isAdHocSigned) {
             Logging.debug("[AX] This build cannot keep a grant (ad hoc signed or hosting tests); not prompting")
             return
         }

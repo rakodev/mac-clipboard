@@ -31,6 +31,20 @@ enum BuildInfo {
     /// bundle id) or a Debug build launched straight from Xcode.
     static let isDevBuild: Bool = bundleIdentifier.hasSuffix(".dev") || isDebugBuild
 
+    /// True when this process was started to host a unit test bundle rather than to be used.
+    ///
+    /// `xcodebuild test` launches the app itself as the test host, under the Debug bundle id, so
+    /// everything `applicationDidFinishLaunching` does runs inside a test run. Without this check
+    /// the host quits the copy a developer is using, pops installation alerts nobody is watching,
+    /// and opens the store holding their clipboard history. `PersistenceManager.shared` refuses to
+    /// exist here for that last reason.
+    static let isHostingTests: Bool = {
+        let environment = ProcessInfo.processInfo.environment
+        return environment["XCTestConfigurationFilePath"] != nil
+            || environment["XCTestBundlePath"] != nil
+            || environment["XCTestSessionIdentifier"] != nil
+    }()
+
     /// Short label shown in the UI so two copies running side by side are tellable apart.
     static var channelName: String {
         isDevBuild

@@ -3,9 +3,9 @@ import ServiceManagement
 
 class UserPreferencesManager: ObservableObject {
     static let shared = UserPreferencesManager()
-    
-    private let defaults = UserDefaults.standard
-    
+
+    private let defaults: UserDefaults
+
     // Keys for UserDefaults
     private enum Keys {
         static let maxClipboardItems = "maxClipboardItems"
@@ -243,7 +243,15 @@ class UserPreferencesManager: ObservableObject {
         excludedBundleIdentifiers.removeAll { $0 == bundleIdentifier }
     }
 
-    private init() {
+    /// Reads and writes `defaults`, which is the standard domain for everything but a test.
+    ///
+    /// A test needs a domain of its own for two reasons: the settings here decide whether
+    /// persistence runs at all, so a machine with it switched off would fail an unrelated test,
+    /// and `imageStorageCompacted` is *written* during ordinary use, so a test sharing the
+    /// standard domain would change what the developer's own copy does on its next launch.
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+
         // Load saved preferences or set defaults
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
         self.maxClipboardItems = max(Self.minClipboardItems, min(Self.maxClipboardItems, savedMaxItems))
