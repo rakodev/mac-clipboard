@@ -24,6 +24,7 @@ class UserPreferencesManager: ObservableObject {
         static let skipConcealedClips = "skipConcealedClips"
         static let excludedBundleIdentifiers = "excludedBundleIdentifiers"
         static let capturePaused = "capturePaused"
+        static let clearHistoryOnQuit = "clearHistoryOnQuit"
     }
     
     // Constants
@@ -111,7 +112,19 @@ class UserPreferencesManager: ObservableObject {
             defaults.set(persistenceEnabled, forKey: Keys.persistenceEnabled)
         }
     }
-    
+
+    /// Whether the saved history is cleared when the app quits.
+    ///
+    /// The answer to "keep history while I work, keep nothing afterwards". Independent of
+    /// `persistenceEnabled` on purpose: switching saving off stops new writes but deletes nothing,
+    /// so this still has work to do for anyone who declined the purge offered at that moment.
+    /// Favorites are spared, like every other clear.
+    @Published var clearHistoryOnQuit: Bool {
+        didSet {
+            defaults.set(clearHistoryOnQuit, forKey: Keys.clearHistoryOnQuit)
+        }
+    }
+
     // Whether to save images to persistent storage
     @Published var saveImages: Bool {
         didSet {
@@ -287,6 +300,9 @@ class UserPreferencesManager: ObservableObject {
         // Capture runs unless the user switched it off, and a pause is remembered until they
         // switch it back on.
         self.capturePaused = defaults.object(forKey: Keys.capturePaused) as? Bool ?? false
+
+        // History outlives a quit unless the user asked otherwise.
+        self.clearHistoryOnQuit = defaults.object(forKey: Keys.clearHistoryOnQuit) as? Bool ?? false
     }
     
     func resetToDefaults() {
@@ -312,6 +328,10 @@ class UserPreferencesManager: ObservableObject {
         // share and then opened Settings would otherwise be recording again, and Reset is not
         // where anyone looks for that. Resuming is one click on the menu bar icon, which is
         // showing the paused clipboard the whole time.
+        //
+        // `clearHistoryOnQuit` is the third: turning it off here would leave a history the user
+        // expected to be gone sitting on disk after the next quit, with nothing on screen saying
+        // so. Every preference this method does reset is one whose default is the safe direction.
     }
 }
 

@@ -173,7 +173,14 @@ Access settings via the gear icon or right-click menu.
 
 ### Clipboard Persistence
 
-* **Save clipboard history**: Enable/disable persistent storage (default: on)
+* **Save clipboard history** (default: on): writes what you copy to disk, so your history is still
+  there the next time you launch. With it off, only the current session is kept and nothing new is
+  written. Switching it off does not delete what is already saved, so MacClipboard offers to delete
+  that for you at the moment you switch it off, and says how much there is.
+* **Clear history when MacClipboard quits** (default: off): saves your history as usual while you
+  work, then deletes it when you quit, including a quit from a logout or an update. Favorites are
+  kept. A force quit or a power cut leaves the history on disk, because nothing gets to run at that
+  point.
 * **Save images to disk**: Store images for faster loading (default: on)
 * **Storage limit**: 10MB - 10GB (default: 1GB)
 * **Keep items for**: 1 - 365 days (default: 60 days)

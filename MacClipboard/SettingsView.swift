@@ -6,6 +6,13 @@ struct SettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
     @StateObject private var installation = InstallationHealth()
     @State private var exportState: ExportState = .idle
+    @State private var purgeSummary: PersistenceManager.SavedHistorySummary?
+    @State private var showPurgeOffer = false
+    @State private var purgeMessage: String?
+    /// Whatever the app is actually running over, so a purge reaches the same store the popover
+    /// shows and the in-memory history is left in step with it. Optional because the SwiftUI
+    /// preview builds this view without an app around it.
+    private let clipboardMonitor: ClipboardMonitor?
     let onDismiss: () -> Void
     let onCheckForUpdates: () -> Void
 
@@ -37,7 +44,12 @@ struct SettingsView: View {
         }
     }
 
-    init(onDismiss: @escaping () -> Void = {}, onCheckForUpdates: @escaping () -> Void = {}) {
+    init(
+        clipboardMonitor: ClipboardMonitor? = nil,
+        onDismiss: @escaping () -> Void = {},
+        onCheckForUpdates: @escaping () -> Void = {}
+    ) {
+        self.clipboardMonitor = clipboardMonitor
         self.onDismiss = onDismiss
         self.onCheckForUpdates = onCheckForUpdates
     }
@@ -87,7 +99,40 @@ struct SettingsView: View {
                         Text("Persistence")
                             .font(.headline)
 
-                        Toggle("Save clipboard history", isOn: $preferences.persistenceEnabled)
+                        // One toggle decides whether the history is written at all, the next
+                        // decides whether what was written survives a quit. Stacked bare they
+                        // read as two ways of saying the same thing, so each carries its own
+                        // caption, tight against it, rather than one paragraph under the pair.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Save clipboard history", isOn: $preferences.persistenceEnabled)
+                                .onChange(of: preferences.persistenceEnabled) { enabled in
+                                    purgeMessage = nil
+                                    guard !enabled else { return }
+                                    offerToDeleteSavedHistory()
+                                }
+
+                            Text("Writes what you copy to disk, so your history is still there the next time you launch MacClipboard. With this off, only what you copy in the current session is kept, and nothing new is written to disk.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        // Deliberately not disabled while saving is off. Switching saving off
+                        // deletes nothing on its own, so a store the user declined to purge is
+                        // exactly the case where this still has work to do at the next quit.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Clear history when MacClipboard quits", isOn: $preferences.clearHistoryOnQuit)
+
+                            Text("Saves your history as usual while you work, then deletes it when you quit, including a quit from a logout or an update. Favorites are kept, as they are by Clear History. A force quit or a power cut leaves the history on disk, because nothing gets to run at that point.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
+                        if let purgeMessage {
+                            Text(purgeMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
 
                         Toggle("Save images to disk", isOn: $preferences.saveImages)
                             .disabled(!preferences.persistenceEnabled)
@@ -294,10 +339,113 @@ struct SettingsView: View {
         .frame(width: 500, height: 480)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear { installation.refresh() }
+        .alert(
+            "Delete the history already saved?",
+            isPresented: $showPurgeOffer,
+            presenting: purgeSummary
+        ) { summary in
+            Button("Keep It", role: .cancel) {
+                purgeMessage = String(
+                    format: L10n.string(
+                        "%d saved items were kept. Clear History removes them whenever you want.",
+                        comment: "Shown after declining to delete the saved history"
+                    ),
+                    summary.clearableCount
+                )
+            }
+            Button("Delete", role: .destructive) {
+                deleteSavedHistory(summary)
+            }
+        } message: { summary in
+            Text(purgeExplanation(for: summary))
+        }
     }
 
     private var appVersion: String {
         BuildInfo.versionString
+    }
+
+    // MARK: - Deleting What Saving Off Leaves Behind
+
+    /// Offers to delete the saved history when the user switches saving off.
+    ///
+    /// `persistenceEnabled` only guards the writes and the load at launch, so switching it off
+    /// stops the history growing and removes nothing: every clip from before that moment stays on
+    /// disk, invisible in the popover, which is the opposite of what the toggle reads as. The
+    /// offer is what closes that gap, and it is an offer rather than an automatic delete because
+    /// someone may be turning saving off for a while and want their history back afterwards.
+    ///
+    /// Nothing is asked when there is nothing to delete: a store holding only favorites, or none
+    /// at all, has no question worth putting in front of anyone.
+    private func offerToDeleteSavedHistory() {
+        guard let clipboardMonitor else { return }
+
+        clipboardMonitor.summariseSavedHistory { summary in
+            guard summary.clearableCount > 0 else { return }
+            purgeSummary = summary
+            showPurgeOffer = true
+        }
+    }
+
+    /// What the alert says. Split out because it has to be exact rather than reassuring: it names
+    /// the count, says what survives, and does not promise the number on disk drops to zero.
+    private func purgeExplanation(for summary: PersistenceManager.SavedHistorySummary) -> String {
+        let bytes = ByteCountFormatter.string(fromByteCount: summary.byteCount, countStyle: .file)
+        var lines = [
+            String(
+                format: L10n.string(
+                    "Turning saving off stops new clips being written. It does not remove the %d items already saved, which stay on disk, using %@, until something deletes them.",
+                    comment: "Explains that disabling persistence leaves the existing store in place"
+                ),
+                summary.clearableCount,
+                bytes
+            )
+        ]
+
+        if summary.favoriteCount > 0 {
+            lines.append(String(
+                format: L10n.string(
+                    "Deleting removes those %d items and the images behind them. Your %d favorites are kept, as they are by every other clear.",
+                    comment: "Explains what the purge removes and that favorites survive"
+                ),
+                summary.clearableCount,
+                summary.favoriteCount
+            ))
+        } else {
+            lines.append(String(
+                format: L10n.string(
+                    "Deleting removes those %d items and the images behind them. Favorites are always kept; you have none.",
+                    comment: "Explains what the purge removes when there are no favorites"
+                ),
+                summary.clearableCount
+            ))
+        }
+
+        return lines.joined(separator: "\n\n")
+    }
+
+    /// Deletes the saved history through the same path as Clear History, so favorites are spared
+    /// by the one `AND` in `bulkDeleteNonFavorites` rather than by a second rule that could drift.
+    private func deleteSavedHistory(_ summary: PersistenceManager.SavedHistorySummary) {
+        guard let clipboardMonitor else { return }
+
+        clipboardMonitor.clearHistory()
+        purgeMessage = summary.favoriteCount > 0
+            ? String(
+                format: L10n.string(
+                    "Deleted %d saved items. %d favorites were kept.",
+                    comment: "Shown after deleting the saved history"
+                ),
+                summary.clearableCount,
+                summary.favoriteCount
+            )
+            : String(
+                format: L10n.string(
+                    "Deleted %d saved items.",
+                    comment: "Shown after deleting the saved history when there are no favorites"
+                ),
+                summary.clearableCount
+            )
     }
 
     private func formatStorageSize(_ mb: Int) -> String {

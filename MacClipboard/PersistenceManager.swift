@@ -817,6 +817,42 @@ class PersistenceManager: ObservableObject {
         }
     }
 
+    /// What is on disk right now, in the terms a clear is about to change.
+    ///
+    /// Exists so the app can say what turning saving off would actually remove, rather than
+    /// offering to delete an unknown amount of the user's history. Counted with `count(for:)`
+    /// rather than by fetching, so a store of images costs nothing to describe.
+    struct SavedHistorySummary: Equatable {
+        /// Rows a clear would delete: everything that is not a favorite.
+        let clearableCount: Int
+        /// Rows a clear would keep, because nothing the app decides on its own removes a favorite.
+        let favoriteCount: Int
+        /// Bytes the store directory occupies today. Reported as what the history uses, never as
+        /// what a clear would free: SQLite keeps its allocated pages, and only the external image
+        /// files come back immediately.
+        let byteCount: Int64
+    }
+
+    func savedHistorySummary() -> SavedHistorySummary {
+        let counts: (clearable: Int, favorites: Int) = (try? performOnContext {
+            let clearable: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+            clearable.predicate = Self.excludesFavorites
+            let favorites: NSFetchRequest<PersistedClipboardItem> = PersistedClipboardItem.fetchRequest()
+            favorites.predicate = NSPredicate(format: "isFavorite == YES")
+
+            return (
+                try backgroundContext.count(for: clearable),
+                try backgroundContext.count(for: favorites)
+            )
+        }) ?? (0, 0)
+
+        return SavedHistorySummary(
+            clearableCount: counts.clearable,
+            favoriteCount: counts.favorites,
+            byteCount: getStorageSize()
+        )
+    }
+
     /// Clears the history, keeping favorites. Starred items are the ones the user asked to hold
     /// on to, so Clear History leaves them: unstar or delete an item to remove it for good.
     func clearAllData() {

@@ -223,6 +223,132 @@ final class FavoriteProtectionTests: StoreBackedTestCase {
     }
 }
 
+/// The numbers the app puts in front of a user before deleting their history. A count that is
+/// wrong in either direction is worse than no count: too low and the confirmation understates what
+/// it takes, too high and it claims favorites it will not touch.
+final class SavedHistorySummaryTests: StoreBackedTestCase {
+
+    func testTheSummarySeparatesWhatAClearTakesFromWhatItKeeps() throws {
+        saveText("passing through")
+        saveText("also passing through")
+        saveImage()
+        saveText("pinned", isFavorite: true)
+        saveImage(isFavorite: true)
+
+        let summary = persistence.savedHistorySummary()
+
+        XCTAssertEqual(summary.clearableCount, 3, "the count offered for deletion should exclude favorites")
+        XCTAssertEqual(summary.favoriteCount, 2, "the count promised to survive should be the favorites")
+        XCTAssertGreaterThan(summary.byteCount, 0, "a store with five items should report a size")
+    }
+
+    func testAnEmptyStoreHasNothingToOfferDeleting() throws {
+        XCTAssertEqual(persistence.savedHistorySummary().clearableCount, 0)
+    }
+
+    func testAStoreOfOnlyFavoritesHasNothingToOfferDeleting() throws {
+        saveText("pinned", isFavorite: true)
+
+        // Zero is what stops the app asking a question it cannot act on: a clear would remove
+        // nothing here, so no confirmation is put in front of the user.
+        let summary = persistence.savedHistorySummary()
+        XCTAssertEqual(summary.clearableCount, 0)
+        XCTAssertEqual(summary.favoriteCount, 1)
+    }
+}
+
+/// "Clear history when MacClipboard quits", which is a promise about what is on disk after the
+/// process is gone. The delete therefore has to be finished before the call returns, not started.
+final class QuitTimeHistoryClearTests: StoreBackedTestCase {
+    private var preferences: UserPreferencesManager!
+    private var suiteName: String!
+
+    override func setUpWithError() throws {
+        try super.setUpWithError()
+        suiteName = "MacClipboardTests-\(UUID().uuidString)"
+        preferences = UserPreferencesManager(defaults: try XCTUnwrap(UserDefaults(suiteName: suiteName)))
+        preferences.capturePaused = true
+        preferences.imageStorageCompacted = true
+    }
+
+    override func tearDownWithError() throws {
+        preferences = nil
+        if let suiteName {
+            UserDefaults.standard.removePersistentDomain(forName: suiteName)
+        }
+        suiteName = nil
+        try super.tearDownWithError()
+    }
+
+    private func makeLoadedMonitor(itemCount: Int) throws -> ClipboardMonitor {
+        let monitor = ClipboardMonitor(userPreferences: preferences, persistenceManager: persistence)
+        try waitUntil("the monitor to load the persisted history") {
+            monitor.clipboardHistory.count == itemCount
+        }
+        return monitor
+    }
+
+    func testQuittingClearsTheSavedHistoryWhenAskedAndKeepsFavorites() throws {
+        let favorite = saveText("pinned", daysAgo: 2, isFavorite: true)
+        let ordinary = saveText("passing through", daysAgo: 1)
+        saveImage()
+        preferences.clearHistoryOnQuit = true
+
+        let monitor = try makeLoadedMonitor(itemCount: 3)
+        monitor.clearHistoryOnQuitIfRequested()
+
+        // Asserted with no wait at all, which is the point: at quit there is no later. A clear
+        // dispatched to another queue would leave every one of these rows on disk.
+        XCTAssertEqual(storedIDs(), [favorite.id], "quitting should have taken everything but the favorite")
+        XCTAssertFalse(storedIDs().contains(ordinary.id))
+        XCTAssertEqual(
+            monitor.clipboardHistory.map(\.id),
+            [favorite.id],
+            "memory should be left in step with the store"
+        )
+    }
+
+    func testQuittingLeavesTheHistoryAloneByDefault() throws {
+        let favorite = saveText("pinned", daysAgo: 2, isFavorite: true)
+        let ordinary = saveText("passing through", daysAgo: 1)
+
+        XCTAssertFalse(preferences.clearHistoryOnQuit, "clearing on quit should be something a user opts into")
+
+        let monitor = try makeLoadedMonitor(itemCount: 2)
+        monitor.clearHistoryOnQuitIfRequested()
+
+        XCTAssertEqual(storedIDs(), [favorite.id, ordinary.id], "quitting deleted a history nobody asked it to")
+    }
+
+    /// Switching saving off stops the writes and deletes nothing, so the clear still has to run
+    /// for anyone who declined the purge offered at that moment.
+    func testQuittingStillClearsWhenSavingIsAlreadyOff() throws {
+        let ordinary = saveText("saved before persistence was switched off")
+        preferences.clearHistoryOnQuit = true
+        preferences.persistenceEnabled = false
+
+        // Nothing is loaded into memory with persistence off, so the monitor starts empty and the
+        // store is the only thing the clear can be judged on.
+        let monitor = ClipboardMonitor(userPreferences: preferences, persistenceManager: persistence)
+        XCTAssertTrue(storedIDs().contains(ordinary.id), "the store should still hold what was saved earlier")
+
+        monitor.clearHistoryOnQuitIfRequested()
+
+        XCTAssertTrue(storedIDs().isEmpty, "turning saving off must not exempt the store from the quit clear")
+    }
+
+    /// Reset is not where anyone looks to start keeping their history again, and turning this off
+    /// there would leave a history the user expected gone sitting on disk after the next quit.
+    func testResetToDefaultsLeavesTheQuitClearOn() throws {
+        preferences.clearHistoryOnQuit = true
+
+        preferences.resetToDefaults()
+
+        XCTAssertTrue(preferences.clearHistoryOnQuit)
+        XCTAssertTrue(preferences.persistenceEnabled, "Reset should still restore the settings it does own")
+    }
+}
+
 /// Records the persistence calls a monitor makes, in order, and does the real work as well, so a
 /// test can assert both what ended up in the store and how it got there.
 private final class RecordingPersistenceManager: PersistenceManager {

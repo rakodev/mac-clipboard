@@ -328,6 +328,40 @@ persistence runs at all, so a machine with it switched off would fail an unrelat
 `imageStorageCompacted` is *written* during ordinary use: a test sharing the standard domain would
 change what the developer's own copy does at its next launch.
 
+## Switching Saving Off Deletes Nothing, So the App Has to Offer
+
+`persistenceEnabled` guards `saveItemToPersistence` and `loadPersistedHistory` only. Switching it
+off stops new writes and stops loading at launch; every clip from before that moment stays on disk,
+invisible in the popover, which is the opposite of what the toggle reads as. So Settings offers to
+delete it at the moment the toggle goes off (`SettingsView.offerToDeleteSavedHistory`), and
+`clearHistoryOnQuit` answers the separate question, "keep history while I work, keep nothing
+afterwards".
+
+Four things hold it together:
+
+- **The quit clear is synchronous.** `ClipboardMonitor.clearHistoryOnQuitIfRequested` calls
+  `clearAllData()` on the caller's thread, not `clearHistory()`, which hops to a utility queue.
+  The process is exiting, so a dispatched delete would be abandoned halfway and the preference
+  would quietly do nothing. `performOnContext` is `performAndWait`, so the rows and the external
+  image files are gone before it returns. `AppDelegate.applicationWillTerminate` is the only
+  caller, via `MenuBarController`, and it runs *before* `cleanup()`; SIGTERM reaches it because
+  `installTerminationSignalHandler` turns that into `NSApp.terminate`. Never move this into
+  `cleanup()`, which `deinit` also calls: a controller being deallocated is not a quit.
+- **Both paths go through `clearAllData`**, so favorites are spared by the one `AND` in
+  `bulkDeleteNonFavorites` rather than by a second rule that could drift from it.
+- **The offer is an offer, and it is skipped when there is nothing to take.**
+  `PersistenceManager.savedHistorySummary()` counts the clearable rows and the favorites with
+  `count(for:)` and reads the store size; `clearableCount == 0` means no alert, because a store of
+  only favorites has no question worth asking. Someone may also be switching saving off for an
+  afternoon and want their history back afterwards.
+- **The copy states the two things it cannot do.** The size is described as what the history uses,
+  never as what a delete frees: SQLite keeps its allocated pages and only the external image files
+  come back at once. And the quit clear covers an orderly quit only, so the toggle's help text says
+  a force quit or a power cut leaves the history on disk.
+
+`clearHistoryOnQuit` is deliberately *not* disabled while saving is off: a store the user declined
+to purge is exactly the case where it still has work to do.
+
 ## Skipping a Clip and Masking a Clip Are Different Decisions
 
 Two policies, deliberately not merged, both in `ClipboardMonitor.swift`:
@@ -429,11 +463,15 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `excludedBundleIdentifiers`: [String] (default: empty), apps whose clips are never recorded
 - `capturePaused`: Bool (default: false), capture switched off by the user until they switch it
   back on; written only by `ClipboardMonitor.setCapturePaused`
+- `clearHistoryOnQuit`: Bool (default: false), the saved history is deleted on an orderly quit
 
-`resetToDefaults()` covers every preference except `excludedBundleIdentifiers` and `capturePaused`.
-Emptying that list starts recording clips from whatever the user excluded with nothing on screen to
-show it changed, and the entries are removable individually in front of them; resuming capture from
-Reset is the same trap, and the pause is one click away from being lifted deliberately.
+`resetToDefaults()` covers every preference except `excludedBundleIdentifiers`, `capturePaused` and
+`clearHistoryOnQuit`. Emptying that list starts recording clips from whatever the user excluded with
+nothing on screen to show it changed, and the entries are removable individually in front of them;
+resuming capture from Reset is the same trap, and the pause is one click away from being lifted
+deliberately; and turning the quit clear off would leave a history the user expected to be gone
+sitting on disk after the next quit. Every preference Reset *does* touch has the safe direction as
+its default.
 
 ## Filter Tabs
 
@@ -472,6 +510,12 @@ When modifying clipboard functionality:
 - [ ] Pausing changes the menu bar icon to the slashed clipboard, and copying adds nothing
 - [ ] The clip copied while paused is *not* captured on resume; the next copy after that is
 - [ ] A pause survives quitting and relaunching, and the icon and popover still say so
+- [ ] Switching "Save clipboard history" off offers to delete what is saved, with the right count,
+      and declining keeps every item
+- [ ] Accepting removes the non-favorites and leaves the favorites, in the popover and on disk
+- [ ] Switching it off with nothing but favorites saved asks nothing
+- [ ] With "Clear history when MacClipboard quits" on, quitting and relaunching comes back with
+      favorites only, and with it off the history is still there
 
 When modifying UI:
 - [ ] Filter tabs work correctly

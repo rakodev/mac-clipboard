@@ -393,6 +393,7 @@ class MenuBarController: NSObject, ObservableObject {
         
         // Create settings view with window reference for proper dismissal
         let settingsView = SettingsView(
+            clipboardMonitor: clipboardMonitor,
             onDismiss: { [weak self] in
                 self?.settingsWindow?.close()
                 self?.settingsWindow = nil
@@ -719,6 +720,15 @@ class MenuBarController: NSObject, ObservableObject {
         }
     }
     
+    /// Runs the quit-time history clear, if Settings asks for one.
+    ///
+    /// Kept out of `cleanup()`, which `deinit` also calls: a controller being torn down is not a
+    /// quit, and clearing the user's history from a deallocation would be the worst kind of
+    /// surprise. `AppDelegate.applicationWillTerminate` is the one caller.
+    func clearHistoryOnQuitIfRequested() {
+        clipboardMonitor.clearHistoryOnQuitIfRequested()
+    }
+
     func cleanup() {
         stopClickOutsideMonitoring()
         unregisterGlobalHotkey()

@@ -1078,6 +1078,40 @@ class ClipboardMonitor: ObservableObject {
         }
     }
 
+    /// Clears the history on the way out, if the user asked for that.
+    ///
+    /// Synchronous, and deliberately not `clearHistory()`: that hops to a utility queue, and the
+    /// process is about to exit, so the delete would be abandoned halfway and the setting would
+    /// quietly do nothing. `PersistenceManager.performOnContext` uses `performAndWait`, so the
+    /// rows and the external image files are gone before this returns. Favorites are spared, by
+    /// the same `clearAllData` every other clear goes through.
+    ///
+    /// Only covers an orderly quit: Quit, the hotkey-driven relaunch after an in-place upgrade,
+    /// a logout, and the SIGTERM the Homebrew cask sends, which
+    /// `AppDelegate.installTerminationSignalHandler` turns into one. A force quit or a power cut
+    /// kills the process with the history still on disk, and the Settings copy says so.
+    func clearHistoryOnQuitIfRequested() {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard userPreferences.clearHistoryOnQuit else { return }
+
+        Logging.info("💾 Clearing saved history on quit, as requested in Settings")
+        persistenceManager.clearAllData()
+        clipboardHistory.removeAll { !$0.isFavorite }
+    }
+
+    /// What clearing the saved history would remove, read off the store rather than off memory.
+    ///
+    /// `clipboardHistory` holds at most `maxClipboardItems`, while the store can hold everything
+    /// inside the retention window, so counting in memory would understate what is on disk in
+    /// exactly the case where the number matters. Runs on a utility queue and answers on the main
+    /// one, because it counts rows and stats the store directory.
+    func summariseSavedHistory(completion: @escaping (PersistenceManager.SavedHistorySummary) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let summary = self.persistenceManager.savedHistorySummary()
+            DispatchQueue.main.async { completion(summary) }
+        }
+    }
+
     func toggleFavorite(_ item: ClipboardItem) {
         DispatchQueue.main.async {
             if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {

@@ -42,6 +42,10 @@ image, and after PNG storage an orphan costs a fortieth of what it used to.
 Done means: either an approach that identifies referenced files without depending on Core Data
 internals, or a decision to leave orphans alone and remove this entry.
 
+Seen again on 2026-08-09 while verifying task 6: clearing a dev store of 348 items down to 3
+favorites took the external files from 35 to 5, where 2 images survived. Object deletion removed the
+30 it was responsible for, so the remainder is the pre-existing orphan set rather than a new leak.
+
 ## Product Tasks
 
 A batch of feature requests was triaged on 2026-08-09. The ordering below is by value per unit of
@@ -60,22 +64,8 @@ What was declined for now, with reasons, is in `FOLLOWUPS.md`: iCloud sync, sequ
 
 The numbers are stable identifiers, not positions: a completed task leaves a gap rather than
 renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or `FOLLOWUPS.md` keeps
-meaning the task it meant. Task 5 (capture exclusions) and task 4 (pausing capture) were both
-completed on 2026-08-09.
-
-### 6. Turning persistence off leaves the old store on disk, and there is no clear-on-quit option
-
-`persistenceEnabled` guards `saveItemToPersistence` and `loadPersistedHistory`, so switching it off
-stops new writes and stops loading at launch. It deletes nothing. A user who turns it off to stop
-storing their clipboard still has every clip from before that moment on disk, invisible in the UI,
-which is the opposite of what the setting promises. There is also no way to say "keep history while
-I work, keep nothing afterwards".
-
-Done means: turning persistence off offers to purge the existing store (confirmed, and honest about
-what it removes); a separate "Clear history when MacClipboard quits" preference that runs the same
-path the trash button uses, from `applicationWillTerminate` and from the existing SIGTERM handler;
-favourites spared, consistent with the guarantee in `CLAUDE.md`, and the toggle's help text saying
-so; and the copy admitting that a force quit or a power loss cannot be covered.
+meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture) and task 6
+(deleting the store persistence left behind) were all completed on 2026-08-09.
 
 ### 7. The global hotkey and the in-popover keys are not configurable
 

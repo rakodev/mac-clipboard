@@ -70,6 +70,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NotificationCenter.default.removeObserver(self)
         updateWatchTimer?.invalidate()
         updateWatchTimer = nil
+        // Before the teardown, while the monitor and its store are still up. Does nothing unless
+        // "Clear history when MacClipboard quits" is on, and it blocks here on purpose: the
+        // delete has to finish before the process does. SIGTERM reaches this too, because
+        // `installTerminationSignalHandler` turns it into `NSApp.terminate`.
+        menuBarController?.clearHistoryOnQuitIfRequested()
         menuBarController?.cleanup()
     }
 
