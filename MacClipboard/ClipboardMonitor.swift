@@ -234,6 +234,118 @@ enum ClipboardCapturePause {
     }
 }
 
+/// The formatting a text clip carries beside its plain text.
+///
+/// Two extra flavours, RTF and HTML, and only for text items. Both are needed because apps split
+/// cleanly down the middle: Word, Notes, Pages, Mail and TextEdit write RTF, while Chrome, Slack,
+/// VS Code and everything else built on a web view write HTML and no RTF at all. Measured on a
+/// Chrome copy: `public.html` at 12,993 bytes, plain text at 674, no `public.rtf`. Storing only one
+/// of the two leaves half of what a user copies arriving plain.
+///
+/// The plain text stays the item's content, which is what `contentEquals`, search, the preview and
+/// the editor all work over; the other flavours ride along and are written back on paste unless the
+/// user asks for plain text.
+///
+/// Nothing here decides *whether* a clip is captured. A clip whose formatting is refused is still
+/// recorded as text, so refusing formatting never loses the clip.
+enum ClipboardRichText {
+    /// The largest payload stored for one flavour.
+    ///
+    /// The same bound the plain text gets, and for the same reason: a clip is held in memory for
+    /// the length of the session. It applies per flavour, so oversized HTML does not cost a clip
+    /// the RTF that came with it. Unlike an image, neither is stored as an external binary, so they
+    /// cannot leave the orphans that priority task 3 is about, and they are not reachable by the
+    /// image eviction that storage pressure runs.
+    static let maxBytes = 1 * 1024 * 1024
+
+    /// The RTF worth storing for a clip, or nil.
+    ///
+    /// The shape check is what keeps the marker in the row honest: the row says an item keeps its
+    /// formatting, and it may only say so about bytes a reader can actually parse. A pasteboard can
+    /// carry anything under any type, and storing bytes nothing can read would put a promise on
+    /// screen that pasting cannot keep.
+    static func storableRTF(_ data: Data?) -> Data? {
+        storable(data, named: "rich text", shapedRight: isRTF)
+    }
+
+    /// The HTML worth storing for a clip, or nil. The same rules as `storableRTF`.
+    static func storableHTML(_ data: Data?) -> Data? {
+        storable(data, named: "HTML", shapedRight: looksLikeHTML)
+    }
+
+    private static func storable(_ data: Data?, named name: String, shapedRight: (Data) -> Bool) -> Data? {
+        guard let data, !data.isEmpty else { return nil }
+        guard data.count <= maxBytes else {
+            Logging.debug("⚠️ Dropped \(name) (\(data.count / 1024)KB) - exceeds \(maxBytes / 1024)KB limit; the clip is kept without it")
+            return nil
+        }
+        guard shapedRight(data) else { return nil }
+        return data
+    }
+
+    /// Whether `data` opens with the RTF signature. Cheap enough to run on every capture, unlike
+    /// parsing the document.
+    static func isRTF(_ data: Data) -> Bool {
+        let signature = Array("{\\rtf".utf8)
+        guard data.count >= signature.count else { return false }
+        return data.prefix(signature.count).elementsEqual(signature)
+    }
+
+    /// Whether `data` opens a tag somewhere near its start.
+    ///
+    /// HTML has no signature the way RTF does: what a browser writes is a fragment, and Chrome's
+    /// begins `<meta charset='utf-8'>` while another app's may begin `<!DOCTYPE`, `<html>` or a bare
+    /// `<span>`. So this looks for the one thing all of them have, a `<` followed by the start of a
+    /// tag name, and it scans bytes rather than decoding a string: the payload is up to 1 MB and
+    /// this runs on every capture. A zero byte after the `<` is tolerated so UTF-16 is recognised,
+    /// and prose containing `a < b` is not, because a space cannot start a tag.
+    static func looksLikeHTML(_ data: Data) -> Bool {
+        let head = Array(data.prefix(4096))
+        var index = 0
+        while index < head.count {
+            guard head[index] == UInt8(ascii: "<") else {
+                index += 1
+                continue
+            }
+            var next = index + 1
+            if next < head.count && head[next] == 0 { next += 1 }
+            guard next < head.count else { return false }
+            let byte = head[next]
+            let isLetter = (byte | 0x20) >= UInt8(ascii: "a") && (byte | 0x20) <= UInt8(ascii: "z")
+            if isLetter || byte == UInt8(ascii: "!") || byte == UInt8(ascii: "/") { return true }
+            index = next
+        }
+        return false
+    }
+
+    /// What a paste of a text clip puts on the pasteboard, richest flavour first.
+    ///
+    /// Every flavour the clip carries is written, rather than one being chosen here. The choice is
+    /// not the sender's to make: `NSPasteboard.availableType(from:)` answers with the first type in
+    /// the *receiving* app's own order of preference, so a rich text editor takes the RTF and a web
+    /// view takes the HTML from the same pasteboard. Writing one flavour would be deciding for both
+    /// of them. The ordering here is what an app writing both would use, and is otherwise cosmetic.
+    ///
+    /// Split out from `ClipboardMonitor.copyToClipboard` so a paste can be tested without a
+    /// pasteboard, which is shared machine state no test may write to.
+    static func flavours(text: String, rtfData: Data?, htmlData: Data?, asPlainText: Bool) -> [ClipboardTextFlavour] {
+        guard !asPlainText else { return [.plainText(text)] }
+
+        var flavours: [ClipboardTextFlavour] = []
+        if let rtfData, isRTF(rtfData) { flavours.append(.rtf(rtfData)) }
+        if let htmlData, looksLikeHTML(htmlData) { flavours.append(.html(htmlData)) }
+        flavours.append(.plainText(text))
+        return flavours
+    }
+}
+
+/// One representation of a text clip on the pasteboard.
+enum ClipboardTextFlavour: Equatable {
+    case rtf(Data)
+    case html(Data)
+    case plainText(String)
+}
+
 struct ClipboardHistoryInsertionResult {
     let history: [ClipboardItem]
     let removedItemIDs: Set<UUID>
@@ -252,7 +364,19 @@ struct ClipboardHistoryMerger {
 
         if let matchIndex = itemsToCheck.firstIndex(where: { $0.contentEquals(item) }),
            let actualIndex = history.firstIndex(where: { $0.id == itemsToCheck[matchIndex].id }) {
-            if actualIndex == 0 {
+            // Already at the top, so there is nothing to move and nothing to write: re-copying the
+            // clip that is already the most recent one must not add a second row.
+            //
+            // Formatting is the exception, and it is the only part of a text clip that can differ
+            // while `contentEquals` still calls the two the same clip. Copying a sentence out of
+            // Word and then the same sentence out of Terminal would otherwise leave the item
+            // pasting as rich text, which is not what the user last copied. Falling through
+            // replaces the row instead, which is what a match anywhere else in the history does.
+            // Both flavours are compared: the same words copied from Chrome and then from Word are
+            // the same clip with different formatting, and either one changing has to get through.
+            if actualIndex == 0
+                && history[0].rtfData == item.rtfData
+                && history[0].htmlData == item.htmlData {
                 return ClipboardHistoryInsertionResult(history: history, removedItemIDs: [], shouldPersistInsertedItem: false)
             }
 
@@ -264,6 +388,11 @@ struct ClipboardHistoryMerger {
             itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
             itemToInsert.note = existingItem.note
             itemToInsert.associatedText = itemToInsert.associatedText ?? existingItem.associatedText
+            // `rtfData` and `htmlData` are deliberately *not* inherited, unlike everything above
+            // them. The others are decisions the user made about this clip and a re-copy must not
+            // undo them; formatting is a property of the copy itself. Falling back to the old item's
+            // flavours would paste styling the user's most recent copy did not have, and would keep
+            // the row's formatting marker up after they deliberately re-copied the same text plain.
 
             removedItemIDs.insert(existingItem.id)
             updatedHistory.remove(at: actualIndex)
@@ -770,6 +899,10 @@ class ClipboardMonitor: ObservableObject {
 
         let textContent = pasteboard.string(forType: .string)
         let hasText = (textContent?.isEmpty == false)
+        // Read once, and only when there is text to hang them on: `data(forType:)` copies the bytes,
+        // and an item that is not text never carries formatting (see `ClipboardItem.init`).
+        let rtfData = hasText ? ClipboardRichText.storableRTF(pasteboard.data(forType: .rtf)) : nil
+        let htmlData = hasText ? ClipboardRichText.storableHTML(pasteboard.data(forType: .html)) : nil
         let imagePayload = readImageFromPasteboard(pasteboard)
         let imageContent = imagePayload?.image
         let hasImage = imageContent != nil
@@ -795,7 +928,9 @@ class ClipboardMonitor: ObservableObject {
                             timestamp: Date(),
                             isSensitive: sensitivity.isSensitive,
                             isAutoSensitive: sensitivity.isAutoSensitive,
-                            isPasswordLike: sensitivity.isPasswordLike
+                            isPasswordLike: sensitivity.isPasswordLike,
+                            rtfData: rtfData,
+                            htmlData: htmlData
                         )
                     }
                 }
@@ -845,7 +980,9 @@ class ClipboardMonitor: ObservableObject {
                 timestamp: Date(),
                 isSensitive: sensitivity.isSensitive,
                 isAutoSensitive: sensitivity.isAutoSensitive,
-                isPasswordLike: sensitivity.isPasswordLike
+                isPasswordLike: sensitivity.isPasswordLike,
+                rtfData: rtfData,
+                htmlData: htmlData
             )
         }
 
@@ -1003,7 +1140,12 @@ class ClipboardMonitor: ObservableObject {
         }
     }
     
-    func copyToClipboard(_ item: ClipboardItem) {
+    /// Puts `item` on the pasteboard.
+    ///
+    /// `asPlainText` drops the formatting a text clip was copied with, which is the ⇧⏎ action in
+    /// the popover. It is a property of this paste rather than of the item: the RTF stays stored,
+    /// so the same clip can be pasted with its formatting next time.
+    func copyToClipboard(_ item: ClipboardItem, asPlainText: Bool = false) {
         // Pause monitoring to prevent duplicate entries
         isPausing = true
 
@@ -1013,7 +1155,24 @@ class ClipboardMonitor: ObservableObject {
         switch item.type {
         case .text:
             if let text = item.content as? String {
-                pasteboard.setString(text, forType: .string)
+                // Every flavour the clip carries, richest first. Which one is used is the receiving
+                // app's choice, not ours: see `ClipboardRichText.flavours`.
+                let flavours = ClipboardRichText.flavours(
+                    text: text,
+                    rtfData: item.rtfData,
+                    htmlData: item.htmlData,
+                    asPlainText: asPlainText
+                )
+                for flavour in flavours {
+                    switch flavour {
+                    case .rtf(let data):
+                        pasteboard.setData(data, forType: .rtf)
+                    case .html(let data):
+                        pasteboard.setData(data, forType: .html)
+                    case .plainText(let string):
+                        pasteboard.setString(string, forType: .string)
+                    }
+                }
             }
         case .image:
             // Handle lazy-loaded images
@@ -1247,9 +1406,11 @@ struct ClipboardItem: Identifiable, Equatable {
     var isManuallyUnsensitive: Bool  // True if user explicitly un-marked as sensitive (prevents re-apply)
     var note: String?
     var associatedText: String?  // Optional text representation when clipboard item is image + text
+    var rtfData: Data?   // The source app's RTF for a text item, written back on paste. See ClipboardRichText.
+    var htmlData: Data?  // The source app's HTML, for the apps that write that instead of RTF.
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, associatedText: String? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, associatedText: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -1262,12 +1423,24 @@ struct ClipboardItem: Identifiable, Equatable {
         self.isManuallyUnsensitive = isManuallyUnsensitive
         self.note = note
         self.associatedText = associatedText
+        // Formatting belongs to text. An image or a file carrying RTF or HTML would be a marker in
+        // the row that no paste could honour, since neither writes a text flavour.
+        self.rtfData = (type == .text) ? rtfData : nil
+        self.htmlData = (type == .text) ? htmlData : nil
         self.isImageLoaded = (type != .image) || isImageLoaded  // Non-images are always "loaded"
     }
 
     /// Returns true if this is an image that needs to be loaded from disk
     var needsImageLoad: Bool {
         return type == .image && !isImageLoaded
+    }
+
+    /// Whether pasting this item can reproduce the formatting it was copied with.
+    ///
+    /// What the row marker and the plain-text action are both driven by, so the marker cannot
+    /// appear on an item that would paste as plain text anyway.
+    var carriesFormatting: Bool {
+        return type == .text && (rtfData != nil || htmlData != nil)
     }
     
     var previewText: String {
@@ -1313,6 +1486,11 @@ struct ClipboardItem: Identifiable, Equatable {
         
         switch type {
         case .text:
+            // Plain text alone, deliberately: `rtfData` is not part of what makes two clips the
+            // same clip. Copying the same sentence out of Word and then out of Terminal is one
+            // entry that has stopped carrying formatting, not two entries, and dropping the
+            // comparison here is also what keeps the RTF out of the byte comparison this runs on
+            // every capture.
             guard let text1 = content as? String,
                   let text2 = other.content as? String else { return false }
             // Quick rejection: different lengths = different content
@@ -1349,6 +1527,8 @@ struct ClipboardItem: Identifiable, Equatable {
                lhs.isManuallyUnsensitive == rhs.isManuallyUnsensitive &&
                lhs.note == rhs.note &&
                lhs.associatedText == rhs.associatedText &&
+               lhs.rtfData == rhs.rtfData &&
+               lhs.htmlData == rhs.htmlData &&
                lhs.isImageLoaded == rhs.isImageLoaded
     }
 }

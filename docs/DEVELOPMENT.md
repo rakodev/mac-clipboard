@@ -123,8 +123,68 @@ Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
 ### Content Support
 
 * **Text**: `NSPasteboard.string(forType: .string)`
+* **Formatted text**: `NSPasteboard.data(forType: .rtf)` and `.html`, stored beside the plain text
 * **Images**: `NSImage` pasteboard objects
 * **Files**: `NSURL` pasteboard objects
+
+### Rich Text
+
+`ClipboardRichText` (in `ClipboardMonitor.swift`) is the whole policy, deliberately as value-level
+code: `NSPasteboard` is shared machine state, so a test that wrote to it would put its fixtures on
+the developer's own clipboard and race the running dev build's polling. The pasteboard-facing half
+is a checklist item in `CLAUDE.md` instead.
+
+Decisions worth keeping, and why:
+
+* **Two flavours, RTF and HTML, because apps split down the middle.** Word, Notes, Pages, Mail and
+  TextEdit write RTF; Chrome, Slack, VS Code and everything else on a web view write HTML and no
+  RTF at all. Measured on a real Chrome copy: `public.html` 12,993 bytes, `public.utf8-plain-text`
+  674 bytes, no `public.rtf`. Shipping RTF alone left browser copies pasting plain, which is where
+  most people copy formatted text from.
+* **The receiving app picks, not us.** Every stored flavour is written on paste.
+  `NSPasteboard.availableType(from:)` returns the first type in the *receiver's* preference order,
+  so a rich text editor takes the RTF and a web view takes the HTML from the same pasteboard.
+  Choosing one at write time would be answering a question that is not ours.
+* **The cap is per flavour.** 1 MB each, matching the plain-text cap because a clip is held in
+  memory for the session. A page with enormous HTML still keeps the RTF that came with it, and the
+  clip is captured either way.
+* **A shape check, not a parse.** `{\rtf` at the front for RTF. HTML has no signature, since what a
+  browser writes is a fragment that may begin `<meta`, `<!DOCTYPE`, `<html>` or a bare `<span>`, so
+  `looksLikeHTML` scans the first 4 KB for a `<` that starts a tag name, tolerating the zero bytes
+  of UTF-16 and rejecting prose like `a < b`. Both are byte scans: parsing would cost an
+  `NSAttributedString` round trip on every copy, and the bytes are handed back raw on paste anyway.
+* **Inline Binary, not external binary storage.** Both are capped, and external files are what leave
+  the orphans described in `docs/BACKLOG.md`. The consequence to weigh if the cap is ever raised:
+  they live in the SQLite file, so they count towards `getStorageSize()` but are not reachable by
+  `evictImagesUntilWithin`, which only drops images.
+* **RTFD is not a third flavour.** It is the only other pasteboard type that carries formatting in
+  practice, and it is not a cheap addition like HTML was: it is a flat attachment bundle, so it
+  usually carries the images inline and blows past the cap, and a copy that has images in it is
+  captured as an image item anyway. The two flavours above cover formatting without attachments,
+  which is what "keep the formatting" means for text.
+* **⇧⏎ for the plain-text paste.** It sits next to ⏎ because it is the same action with one thing
+  taken away, and it is a property of that paste rather than of the item, so the RTF stays stored
+  and the next paste can keep it. ⌘⇧V, the usual "paste and match style", is the app's own default
+  global hotkey and could not be taken for this.
+* **The marker is shown on masked items too.** Whether a clip carries formatting says nothing about
+  what it contains, so hiding the marker would cost information for no privacy.
+
+Testing it by hand needs a source app for each half: Word, Notes, Pages, Mail or TextEdit for RTF,
+and Chrome, Slack or VS Code for HTML. To drive it without one, write the flavours from a script:
+
+```swift
+let attributed = NSAttributedString(string: "styled", attributes: [.font: NSFont.boldSystemFont(ofSize: 18)])
+let rtf = attributed.rtf(from: NSRange(location: 0, length: attributed.length), documentAttributes: [:])!
+let pasteboard = NSPasteboard.general
+pasteboard.clearContents()
+pasteboard.setData(rtf, forType: .rtf)                                    // an RTF app
+pasteboard.setData(Data("<p><b>styled</b></p>".utf8), forType: .html)     // or a browser: HTML alone
+pasteboard.setString(attributed.string, forType: .string)
+```
+
+Then read `NSPasteboard.general.types` after a paste from the popover: the flavours the clip carries
+are present after ⏎ and absent after ⇧⏎. Do both halves separately, since writing HTML *without*
+RTF is exactly the case that RTF-only support got wrong.
 
 ### Sensitive Content Detection
 

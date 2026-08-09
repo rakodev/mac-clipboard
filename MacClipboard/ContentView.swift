@@ -267,6 +267,9 @@ struct ContentView: View {
                                 clipboardMonitor.copyToClipboard(selectedItem)
                                 menuBarController.hidePopoverAndActivatePreviousApp()
                             },
+                            onCopyPlain: {
+                                pasteItem(selectedItem, asPlainText: true)
+                            },
                             onToggleFavorite: {
                                 clipboardMonitor.toggleFavorite(selectedItem)
                                 if var updatedItem = self.selectedItem {
@@ -1127,15 +1130,15 @@ struct ContentView: View {
         }
     }
     
-    private func pasteSelectedItem() {
+    private func pasteSelectedItem(asPlainText: Bool = false) {
         guard let item = selectedItem else { return }
-        pasteItem(item)
+        pasteItem(item, asPlainText: asPlainText)
     }
-    
-    private func pasteItem(_ item: ClipboardItem) {
+
+    private func pasteItem(_ item: ClipboardItem, asPlainText: Bool = false) {
         // Copy item to clipboard
-        clipboardMonitor.copyToClipboard(item)
-        
+        clipboardMonitor.copyToClipboard(item, asPlainText: asPlainText)
+
         // Hide popover & activate previous app
         menuBarController.hidePopoverAndActivatePreviousApp()
         // Ask controller to schedule paste once previous app regains focus
@@ -1186,7 +1189,13 @@ struct ContentView: View {
             if isSearchFocused {
                 isSearchFocused = false
             }
-            pasteSelectedItem()
+            // ⇧⏎ pastes the same item without the formatting it was copied with. Deliberately next
+            // to the paste key rather than somewhere mnemonic: it is the same action with one thing
+            // taken away. Harmless on an item that carries no formatting, which is why it is not
+            // conditional on one; ⌘⇧V, the usual "paste and match style", is the app's default
+            // global hotkey and cannot be taken for this.
+            let asPlainText = keyEvent.modifierFlags.contains(.shift) && userPreferences.shortcutsEnabled
+            pasteSelectedItem(asPlainText: asPlainText)
             return true
         case 44: // / key (slash)
             if keyEvent.modifierFlags.contains(.command) {
@@ -1472,6 +1481,9 @@ struct ClipboardCompactPreviewView: View {
     @FocusState.Binding var isNoteFocused: Bool
     @Binding var showImageModal: Bool
     let onCopy: () -> Void
+    /// Pastes the item without the formatting it was copied with. Only offered for an item that
+    /// has any, so it never appears as a choice with no second half.
+    let onCopyPlain: () -> Void
     let onToggleFavorite: () -> Void
     let onToggleSensitive: () -> Void
     let onToggleReveal: () -> Void
@@ -1582,9 +1594,39 @@ struct ClipboardCompactPreviewView: View {
             case .file:
                 fileMetadata
             }
-            Spacer()
+
+            Spacer(minLength: 4)
+
+            // Pinned to the trailing edge, ahead of the counts, and never compressed. Packed in
+            // beside them it was squeezed as the numbers grew: a 5,510 character clip rendered the
+            // separators at zero width, wrapped the badge onto two lines and shrank the button
+            // below its own label, so the action appeared on some items and not others. The counts
+            // are what may truncate here; the action is not.
+            if item.carriesFormatting {
+                formattingActions
+                    .fixedSize()
+                    .layoutPriority(1)
+            }
         }
         .padding(.top, 2)
+    }
+
+    /// The formatting marker and the paste that drops it, which only exist together: the marker
+    /// says a paste keeps the styling, and the button beside it is how to get the other outcome.
+    private var formattingActions: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "textformat")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .accessibilityLabel("Keeps its formatting")
+                .help("Pasting this item keeps the formatting it was copied with")
+
+            Button("Plain ⇧⏎", action: onCopyPlain)
+                .buttonStyle(.borderless)
+                .font(.system(size: 10))
+                .accessibilityLabel("Paste without formatting")
+                .help("Paste without formatting (⇧⏎)")
+        }
     }
 
     @ViewBuilder private var textMetadata: some View {
@@ -1593,13 +1635,16 @@ struct ClipboardCompactPreviewView: View {
         Text("\(charCount) chars")
             .font(.system(size: 10))
             .foregroundColor(.secondary)
+            .lineLimit(1)
         if lineCount > 1 {
             Text("•")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary.opacity(0.6))
+                .fixedSize()
             Text("\(lineCount) lines")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
+                .lineLimit(1)
         }
     }
 
@@ -2026,6 +2071,13 @@ struct ClipboardItemRow: View {
                     if item.note != nil && !(item.note?.isEmpty ?? true) {
                         Image(systemName: "note.text")
                             .font(.system(size: 8))
+                    }
+                    // Shown whether or not the item is masked: formatting is a property of how the
+                    // clip was copied, not of its content, so it gives nothing away.
+                    if item.carriesFormatting {
+                        Image(systemName: "textformat")
+                            .font(.system(size: 8))
+                            .accessibilityLabel("Keeps its formatting")
                     }
                     // Show Auto/PWD badges only when item is masked
                     if item.isAutoSensitive && shouldMask {
@@ -2636,6 +2688,7 @@ private struct ShortcutReferenceView: View {
 
                 ShortcutReferenceSection(title: "Actions", shortcuts: [
                     ("Enter", "Paste selected item"),
+                    ("⇧⏎", "Paste without formatting"),
                     ("⌘E", "Edit a copy of a text item"),
                     ("⌘D", "Toggle favorite"),
                     ("⌘H", "Toggle sensitive"),

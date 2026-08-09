@@ -262,6 +262,11 @@ class PersistenceManager: ObservableObject {
                     if let text = item.content as? String {
                         persistedItem.textContent = text
                     }
+                    // Deliberately not external binary storage, unlike `imageData`: both flavours
+                    // are capped at 1 MB by `ClipboardRichText`, and an external file is what
+                    // leaves the orphans described in `docs/BACKLOG.md`.
+                    persistedItem.rtfData = item.rtfData
+                    persistedItem.htmlData = item.htmlData
 
                 case .image:
                     // Preserve text representation for mixed clipboard payloads (image + text)
@@ -398,6 +403,11 @@ class PersistenceManager: ObservableObject {
             isManuallyUnsensitive: persistedItem.isManuallyUnsensitive,
             note: persistedItem.note,
             associatedText: contentType == .image ? persistedItem.textContent : nil,
+            // Re-checked on the way out as well as on the way in: a row written by a build that
+            // stored something else under these attributes must not put a formatting marker on a
+            // clip whose paste could not honour it.
+            rtfData: contentType == .text ? ClipboardRichText.storableRTF(persistedItem.rtfData) : nil,
+            htmlData: contentType == .text ? ClipboardRichText.storableHTML(persistedItem.htmlData) : nil,
             isImageLoaded: isImageLoaded
         )
     }

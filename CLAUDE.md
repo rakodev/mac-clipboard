@@ -221,6 +221,43 @@ pasteboard plus copies the user made deliberately. Five things this depends on:
   item cannot be edited at all until it is revealed. Content is never trimmed (whitespace in a clip
   is content, unlike in a note), and favorite and note are not inherited.
 
+## A Text Clip Keeps Its Formatting, and the Plain Text Stays Its Content
+
+`ClipboardRichText` holds the whole rule. A text clip stores the pasteboard's RTF *and* HTML beside
+its plain text (`rtfData` and `htmlData`, inline Binary attributes), and every flavour it has is
+written back on paste, unless the user asks for plain text with ⇧⏎. Both are needed because apps
+split down the middle: Word, Notes, Pages, Mail and TextEdit write RTF, while Chrome, Slack, VS Code
+and everything else built on a web view write HTML and no RTF at all. Measured on a Chrome copy:
+`public.html` at 12,993 bytes, plain text at 674, no `public.rtf`. Storing one flavour would leave
+half of what a user copies arriving plain.
+
+Which flavour a paste *uses* is not decided here. `NSPasteboard.availableType(from:)` answers with
+the first type in the **receiving** app's own order of preference, so a rich text editor takes the
+RTF and a web view takes the HTML off the same pasteboard. Writing one would be choosing for both.
+
+The plain text stays the item's *content*, so `contentEquals`, search, the preview and the editor
+all keep working over it and formatting never becomes a second thing to keep in step. Four rules
+any change here has to keep:
+
+- **Formatting is not identity, except at the top of the history.** `contentEquals` compares plain
+  text alone, so the same sentence copied from Word and then from Terminal is one entry. That makes
+  the flavours the only part of a text clip that can differ while the two still compare equal, so
+  `ClipboardHistoryMerger`'s "already at position 0, nothing to write" short-circuit compares both
+  of them too. Without that, an item keeps pasting with formatting the user has since replaced.
+- **Neither flavour is inherited on a re-copy**, unlike favorite, note and the sensitivity flags:
+  those are decisions the user made about the clip, formatting is a property of the copy itself.
+- **Only bytes shaped like the flavour they claim are stored, and the check runs again on load.**
+  RTF is a signature; HTML has none, so `looksLikeHTML` scans for a `<` that starts a tag. The row
+  promises the item keeps its formatting, and a pasteboard can carry anything under any type.
+- **Refusing formatting never loses the clip, and the cap is per flavour.** Over 1 MB, or the wrong
+  shape, means that flavour is dropped, not the clip, and oversized HTML does not take the RTF with
+  it.
+
+Both are inline rather than external binary storage: they are capped, and external files are what
+leave the orphans in `docs/BACKLOG.md`. The preview and the editor stay plain text (see above), so
+an edit saves a plain-text item, and `FavoritesExport` writes plain text only. Design notes,
+including why RTFD is not a third flavour, are in `docs/DEVELOPMENT.md`.
+
 ## Managed Objects Never Leave Their Context
 
 `PersistenceManager.performOnContext` runs on the background context's queue, and what it returns
@@ -253,6 +290,7 @@ Key singletons:
 - `displayText`: String (preview)
 - `imageData`: Binary (external storage)
 - `fileURLs`: Transformable (secure-archived array)
+- `rtfData`, `htmlData`: Binary, inline (the source app's formatting for a text item; see below)
 - `isFavorite`, `isSensitive`: Boolean
 - `note`: String (user-added)
 - `createdAt`, `updatedAt`: Date
@@ -449,6 +487,7 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 |----------|--------|
 | `Cmd+Shift+V` | Global: Open clipboard (from any app). Default; rebindable in Settings |
 | `Enter` | Paste selected item |
+| `Shift+Enter` | Paste selected item without its formatting |
 | `Cmd+E` | Edit a copy of a text item |
 | `0-9` | Quick paste by position |
 | `↑/↓` | Navigate items |
@@ -520,6 +559,16 @@ When modifying clipboard functionality:
 - [ ] Export Favorites produces a zip whose JSON and images open
 - [ ] Copied images are stored as PNG (check bytes in `_EXTERNAL_DATA` start with the PNG header)
 - [ ] Images age out on `imagePersistenceDays` while older text survives on `persistenceDays`
+- [ ] Text copied from Word, Notes, Pages, Mail or TextEdit (RTF) pastes back with its formatting,
+      and the row shows the text-format marker
+- [ ] Text copied from Chrome, Slack or another web view (HTML, no RTF) does the same, and pasting
+      it into a rich text editor as well as back into a browser both keep the styling
+- [ ] ⇧⏎, and the Plain button in the preview, paste the same item as plain text, and the item still
+      pastes formatted the next time
+- [ ] Text copied from Terminal or a code editor shows no marker and pastes as it always did
+- [ ] Re-copying a formatted clip as plain text (from another app) stops it pasting formatted, the
+      reverse starts it again, and copying the same words from a browser after an RTF app swaps
+      which flavour is kept, none of it adding a second row
 - [ ] Search filters by content and notes
 - [ ] Sensitive mode hides/reveals correctly
 - [ ] With both privacy guards off (the default), a password copied from a password manager is
@@ -605,6 +654,7 @@ the only check that needs both the signature and the ticket to be there.
 | Add keyboard shortcut | `ContentView.swift` (local), `MenuBarController.swift` (global) |
 | Change the global hotkey model | `GlobalHotkey.swift`, `UserPreferences.swift`, `SettingsView.swift` (`GlobalHotkeyRecorder`) |
 | Change clipboard polling | `ClipboardMonitor.swift` |
+| Change what a clip keeps beside its text | `ClipboardMonitor.swift` (`ClipboardRichText`), `ClipboardData.xcdatamodeld`, `PersistenceManager.swift` |
 | Modify settings | `SettingsView.swift`, `UserPreferences.swift` |
 | Update data model | `ClipboardData.xcdatamodeld`, `PersistenceManager.swift`, `ClipboardMonitor.swift` |
 | Change UI layout | `ContentView.swift` |

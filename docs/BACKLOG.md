@@ -47,29 +47,8 @@ What was declined for now, with reasons, is in `FOLLOWUPS.md`: iCloud sync, sequ
 The numbers are stable identifiers, not positions: a completed task leaves a gap rather than
 renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or `FOLLOWUPS.md` keeps
 meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
-(deleting the store persistence left behind) and task 7 (a configurable global hotkey) were all
-completed on 2026-08-09.
-
-### 8. Formatting is lost: only plain text is captured and pasted
-
-`getClipboardContent` reads `pasteboard.string(forType: .string)` and `copyToClipboard` writes
-`.string` back. Copy a styled paragraph out of a browser, Word or Notes, paste it from MacClipboard,
-and it arrives as plain text. For anyone whose clipboard is mostly prose rather than code this is
-the most visible difference between MacClipboard and the paid alternatives.
-
-Keep it to one extra flavour: store the pasteboard's RTF representation beside the plain text, and
-write both back on paste. Skip HTML in v1; it doubles the storage and the failure modes for a
-smaller share of real copies. Bound it the same way text is bounded (skip over 1 MB), and keep
-`contentEquals` comparing the plain-text form so deduplication and the merger keep working.
-
-Not in scope: rendering rich text in the preview or the editor. `ClipboardTextView` is an
-`NSTextView` deliberately configured as plain text, and `CLAUDE.md` explains why a clip must not
-pick up smart quotes or substitutions. Editing a rich item saves a plain-text copy, which is
-consistent with editing already producing a new item rather than mutating the original.
-
-Done means: an RTF attribute on `PersistedClipboardItem` with a lightweight migration; both flavours
-written on copy; a "Paste as plain text" action with its own key; a marker in the row so a user can
-see which items carry formatting; and the size cap and dedupe behaviour covered by tests.
+(deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
+(keeping the formatting a clip was copied with) were all completed on 2026-08-09.
 
 ### 9. Multiple selected items cannot be pasted together
 

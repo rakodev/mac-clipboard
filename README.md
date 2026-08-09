@@ -121,6 +121,7 @@ without quitting it:
 | `Cmd+Click` | Select multiple items for deletion |
 | `0-9` | Quick paste item by number |
 | `Enter` | Paste selected item |
+| `Shift+Enter` | Paste selected item without its formatting |
 | `↑` `↓` | Navigate between items |
 | `Escape` | Close clipboard window / unfocus fields |
 
@@ -137,6 +138,12 @@ While editing a copy:
 
 * **Preview**: Click any item to see full content in the preview panel
 * **Paste**: Click, press Enter, or use number keys (0-9) for quick paste
+* **Formatting**: A clip copied from Word, Notes, Pages, Mail, TextEdit, a browser, Slack or any
+  other app that offers styled text keeps its bold, italics, colours and links, and pasting it puts
+  them back. Those items are marked with a text icon in the list and in the preview. To paste one as
+  plain text instead, press `Shift+Enter` or click **Plain ⇧⏎**. The formatting stays stored either
+  way, so the next paste of the same item can keep it. Text from a terminal or a code editor has no
+  formatting to keep and behaves exactly as it always did
 * **Favorite**: Click the star icon or press `Cmd+D` to save important items
 * **Sensitive**: Press `Cmd+H` to hide content - useful when showing clipboard in public. Press `Cmd+V` or click the eye icon to temporarily reveal (auto-hides when you switch items or close)
 * **Edit a copy**: Click the preview text (the caret lands where you clicked), press `Cmd+E`, or click the pencil icon. Saving adds a new item and leaves the original untouched. An edit of a hidden item stays hidden. Drag over the preview text to select it without opening the editor.
@@ -148,6 +155,8 @@ While editing a copy:
 ### Content Types Supported
 
 * **Text**: Code snippets, URLs, notes, messages
+* **Formatted text**: The styling a clip was copied with, kept beside the plain text and written
+  back when you paste it
 * **Images**: Screenshots, copied images from web/apps
 * **Files**: File paths and multiple file selections
 

@@ -55,6 +55,34 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
     problem. Worth revisiting if a public API appears, or if it is worth reading
     `com.apple.symbolichotkeys` to at least catch collisions with macOS itself.
 
+- [x] Consider storing the HTML flavour beside the RTF one.
+  - Done on 2026-08-09, as part of backlog task 8 rather than after it. The entry had said "skip
+    HTML in v1"; the first real Chrome copy tested against the shipped behaviour showed why that
+    could not stand, since Chrome writes `public.html` and no `public.rtf` at all, so every browser
+    copy stayed plain. See `BACKLOG_ARCHIVE.md`.
+
+- [ ] Consider RTFD as a third flavour, for a copy with images inline.
+  - The only remaining pasteboard type that carries formatting in practice. `ClipboardRichText` is
+    shaped for another flavour now, so the code cost is small.
+  - Why later: it is a flat attachment bundle, so it usually carries the images themselves and goes
+    straight past the 1 MB cap, and a copy containing images is captured as an image item anyway.
+    It would need its own size story rather than reusing the one text has.
+
+- [ ] Decide whether the preview should render formatting rather than describe it.
+  - Today a formatted item is marked in the row and reads "Formatted" in the preview, and the
+    preview text itself is plain. The paid alternatives render it.
+  - Why later: `ClipboardTextView` is one `NSTextView` in two modes, and `CLAUDE.md` records why the
+    editor half must stay plain (a clip is data; a curly quote would change what gets pasted). Making
+    the preview render while the editor does not means two views again, and the click-to-caret
+    behaviour that connects them is exactly what a single view bought.
+
+- [ ] Consider whether an exported favorite should keep its formatting.
+  - `FavoritesExport` writes `favorites.json` plus `images/`, and a formatted favorite exports as
+    plain text, so the export is now lossy in a way it was not before backlog task 8 (there was
+    nothing to lose). The recovery story is unaffected: the words come back.
+  - Why later: it is a format change to a file the export already promises to keep readable, and it
+    would sit better alongside the import that `FOLLOWUPS.md` already says does not exist.
+
 - [ ] Explore richer search ranking and tokenization.
   - Why later: current search is simple and understandable; improve only after measuring pain with larger histories.
 

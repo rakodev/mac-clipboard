@@ -5,6 +5,7 @@
         <attribute name="createdAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="displayText" optional="YES" attributeType="String"/>
         <attribute name="fileURLs" optional="YES" attributeType="Transformable" valueTransformerName="NSSecureUnarchiveFromDataTransformer"/>
+        <attribute name="htmlData" optional="YES" attributeType="Binary"/>
         <attribute name="id" optional="NO" attributeType="UUID" usesScalarValueType="NO"/>
         <attribute name="imageData" optional="YES" attributeType="Binary" allowsExternalBinaryDataStorage="YES"/>
         <attribute name="isFavorite" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
@@ -14,6 +15,7 @@
         <attribute name="isSensitive" optional="YES" attributeType="Boolean" defaultValueString="NO" usesScalarValueType="YES"/>
         <attribute name="lastUsedAt" optional="YES" attributeType="Date" usesScalarValueType="NO"/>
         <attribute name="note" optional="YES" attributeType="String"/>
+        <attribute name="rtfData" optional="YES" attributeType="Binary"/>
         <attribute name="textContent" optional="YES" attributeType="String"/>
         <attribute name="updatedAt" optional="NO" attributeType="Date" usesScalarValueType="NO"/>
     </entity>
