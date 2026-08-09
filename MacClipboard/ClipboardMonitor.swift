@@ -177,6 +177,41 @@ struct ClipboardSensitivityPolicy {
     }
 }
 
+/// Whether a pasteboard change is recorded at all.
+///
+/// Deliberately separate from `ClipboardSensitivityPolicy`, which decides how an item that *is*
+/// recorded gets displayed. A skip here means the clip never reaches memory or disk, so there is
+/// nothing to reveal with Cmd+V and nothing to delete later; that is the whole point of it. Masking
+/// and skipping are independent: a user can mask confidential clips, drop them, both, or neither.
+struct ClipboardCapturePolicy {
+    enum Decision: Equatable {
+        case capture
+        /// The source app marked the clip confidential (`org.nspasteboard.ConcealedType` or
+        /// `org.nspasteboard.TransientType`) and the user asked for those to be dropped.
+        case skipConcealed
+        case skipExcludedApp(bundleIdentifier: String)
+    }
+
+    static func decision(
+        hasSensitivePasteboardType: Bool,
+        skipConcealedClips: Bool,
+        sourceBundleIdentifier: String?,
+        excludedBundleIdentifiers: Set<String>
+    ) -> Decision {
+        // The source app's own marker is checked first: it is a statement of intent by the app that
+        // owns the secret, not a guess about which app the clip came from.
+        if skipConcealedClips && hasSensitivePasteboardType {
+            return .skipConcealed
+        }
+
+        if let sourceBundleIdentifier, excludedBundleIdentifiers.contains(sourceBundleIdentifier) {
+            return .skipExcludedApp(bundleIdentifier: sourceBundleIdentifier)
+        }
+
+        return .capture
+    }
+}
+
 struct ClipboardHistoryInsertionResult {
     let history: [ClipboardItem]
     let removedItemIDs: Set<UUID>
@@ -450,7 +485,16 @@ class ClipboardMonitor: ObservableObject {
             changeCount = pasteboard.changeCount
             pendingChangeCount = nil
             pendingCaptureAttempts = 0
-            
+
+            // Decided before the pasteboard is read, and never queued for a retry: a skipped clip
+            // is meant to leave no trace at all. `changeCount` has already moved, so a skip is
+            // final rather than reconsidered on the next tick.
+            let decision = captureDecision(for: pasteboard)
+            guard decision == .capture else {
+                logSkippedCapture(decision)
+                return
+            }
+
             // Get clipboard content
             if let content = getClipboardContent() {
                 addToHistory(content)
@@ -458,6 +502,32 @@ class ClipboardMonitor: ObservableObject {
                 pendingChangeCount = changeCount
                 schedulePendingCaptureRetry()
             }
+        }
+    }
+
+    /// The capture guard's inputs, gathered at the moment a change is noticed.
+    ///
+    /// `frontmostApplication` is read here and nowhere else on this path. With 0.8 s polling it is
+    /// a good guess at the source of the clip rather than a fact, which is the known limit stated in
+    /// the Settings copy; the concealed-type check beside it is exact, because the source app sets
+    /// that marker itself.
+    private func captureDecision(for pasteboard: NSPasteboard) -> ClipboardCapturePolicy.Decision {
+        ClipboardCapturePolicy.decision(
+            hasSensitivePasteboardType: SensitiveContentDetector.hasSensitivePasteboardType(pasteboard),
+            skipConcealedClips: userPreferences.skipConcealedClips,
+            sourceBundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+            excludedBundleIdentifiers: userPreferences.excludedBundleIdentifierSet
+        )
+    }
+
+    private func logSkippedCapture(_ decision: ClipboardCapturePolicy.Decision) {
+        switch decision {
+        case .capture:
+            break
+        case .skipConcealed:
+            Logging.debug("🔒 Skipped a clip the source app marked confidential")
+        case .skipExcludedApp(let bundleIdentifier):
+            Logging.debug("🚫 Skipped a clip from excluded app \(bundleIdentifier)")
         }
     }
 
@@ -487,6 +557,19 @@ class ClipboardMonitor: ObservableObject {
         let pasteboard = NSPasteboard.general
         // Clipboard changed again; pending capture is obsolete.
         guard pasteboard.changeCount == expectedChangeCount, expectedChangeCount == changeCount else {
+            pendingChangeCount = nil
+            pendingCaptureAttempts = 0
+            return
+        }
+
+        // The excluded-app check is deliberately not repeated here: it was made when the change was
+        // detected, and by now the user may well have switched apps, so re-reading the frontmost app
+        // would answer a different question. The concealed type is worth another look, because an
+        // app that writes its clip in stages (which is why this retry path exists) can declare that
+        // type after the change count has already moved.
+        if userPreferences.skipConcealedClips,
+           SensitiveContentDetector.hasSensitivePasteboardType(pasteboard) {
+            Logging.debug("🔒 Skipped a clip the source app marked confidential")
             pendingChangeCount = nil
             pendingCaptureAttempts = 0
             return

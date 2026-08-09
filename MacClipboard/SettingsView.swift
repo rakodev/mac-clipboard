@@ -180,9 +180,19 @@ struct SettingsView: View {
                         Text("Privacy")
                             .font(.headline)
 
+                        Toggle("Never save clips marked confidential by the source app", isOn: $preferences.skipConcealedClips)
+
+                        Text("Password managers mark what you copy as confidential to say it should not be recorded. With this on, those clips are not added to history and never written to disk from now on. They are gone rather than hidden, so a password you meant to keep for a minute is not there either. Clips already in your history stay until you delete them.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+
+                        ExcludedAppsSection(preferences: preferences)
+
+                        Divider()
+
                         Toggle("Auto-hide sensitive content", isOn: $preferences.autoDetectSensitiveData)
 
-                        Text("Automatically detect and hide API keys, tokens, and other sensitive data with known formats.")
+                        Text("Automatically detect and hide API keys, tokens, and other sensitive data with known formats. Hidden items are still saved, and Cmd+V reveals them.")
                             .font(.caption)
                             .foregroundColor(.secondary)
 
@@ -336,6 +346,153 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+}
+
+/// Apps whose clips are never recorded.
+///
+/// The list holds bundle identifiers, because that is what a capture is matched against. Names and
+/// icons are resolved for display only, so an app the user has since uninstalled still reads as
+/// excluded instead of dropping off the list without explanation.
+struct ExcludedAppsSection: View {
+    @ObservedObject var preferences: UserPreferencesManager
+    @State private var message: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Never save clips from these apps")
+                Spacer()
+                Button("Add App…") {
+                    chooseApp()
+                }
+                .controlSize(.small)
+            }
+
+            if preferences.excludedBundleIdentifiers.isEmpty {
+                Text("No apps are excluded.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(preferences.excludedBundleIdentifiers, id: \.self) { bundleIdentifier in
+                        ExcludedAppRow(bundleIdentifier: bundleIdentifier) {
+                            preferences.removeExcludedApp(bundleIdentifier)
+                            message = nil
+                        }
+                    }
+                }
+            }
+
+            // The honest version of the limit rather than a claim the polling cannot support.
+            Text("Copy while one of these apps is in front and the clip is not saved. MacClipboard checks the clipboard every 0.8 seconds, so the app in front when a change is noticed is a good guess at where the clip came from, not a certainty: copy and switch apps within the same moment and the clip is saved. The setting above does not depend on this guess, because the source app marks those clips itself.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            if let message {
+                Text(message)
+                    .font(.caption)
+                    .foregroundColor(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private func chooseApp() {
+        let panel = NSOpenPanel()
+        panel.title = L10n.string("Exclude an App", comment: "Open panel title for picking an app to exclude from capture")
+        panel.message = L10n.string(
+            "Choose an app whose clips should never be saved.",
+            comment: "Open panel message for picking an app to exclude from capture"
+        )
+        panel.prompt = L10n.string("Exclude", comment: "Open panel confirm button for excluding an app")
+        panel.allowedContentTypes = [.application]
+        panel.allowsMultipleSelection = false
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let name = FileManager.default.displayName(atPath: url.path)
+
+        guard let bundleIdentifier = Bundle(url: url)?.bundleIdentifier, !bundleIdentifier.isEmpty else {
+            message = String(
+                format: L10n.string(
+                    "%@ has no bundle identifier, so its clips cannot be told apart from another app's.",
+                    comment: "Shown when a chosen app cannot be excluded"
+                ),
+                name
+            )
+            return
+        }
+
+        if preferences.excludedBundleIdentifiers.contains(bundleIdentifier) {
+            message = String(
+                format: L10n.string("%@ is already excluded.", comment: "Shown when an app is picked twice"),
+                name
+            )
+            return
+        }
+
+        preferences.addExcludedApp(bundleIdentifier)
+        message = nil
+    }
+}
+
+/// One row of the excluded apps list. Resolving the name and icon here keeps the stored preference
+/// to the identifier that is actually matched at capture time.
+struct ExcludedAppRow: View {
+    let bundleIdentifier: String
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if let icon {
+                Image(nsImage: icon)
+                    .resizable()
+                    .frame(width: 16, height: 16)
+            } else {
+                Image(systemName: "questionmark.app.dashed")
+                    .frame(width: 16, height: 16)
+                    .foregroundColor(.secondary)
+            }
+
+            Text(displayName)
+                .font(.caption)
+
+            if applicationURL == nil {
+                Text("not installed")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+
+            Spacer()
+
+            Button {
+                onRemove()
+            } label: {
+                Image(systemName: "minus.circle")
+            }
+            .buttonStyle(.borderless)
+            .help(Text("Stop excluding this app"))
+            .accessibilityLabel(Text("Stop excluding \(displayName)"))
+        }
+        .help(bundleIdentifier)
+    }
+
+    private var applicationURL: URL? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier)
+    }
+
+    private var displayName: String {
+        guard let applicationURL else { return bundleIdentifier }
+        return FileManager.default.displayName(atPath: applicationURL.path)
+    }
+
+    private var icon: NSImage? {
+        guard let applicationURL else { return nil }
+        return NSWorkspace.shared.icon(forFile: applicationURL.path)
     }
 }
 

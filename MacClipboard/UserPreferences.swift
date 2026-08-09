@@ -21,6 +21,8 @@ class UserPreferencesManager: ObservableObject {
         static let shortcutsEnabled = "shortcutsEnabled"
         static let autoDetectSensitiveData = "autoDetectSensitiveData"
         static let autoHidePasswordLikeStrings = "autoHidePasswordLikeStrings"
+        static let skipConcealedClips = "skipConcealedClips"
+        static let excludedBundleIdentifiers = "excludedBundleIdentifiers"
     }
     
     // Constants
@@ -188,6 +190,45 @@ class UserPreferencesManager: ObservableObject {
         }
     }
 
+    /// Whether clips the source app marked confidential are dropped instead of recorded.
+    ///
+    /// This is a capture guard, not a display rule: `autoDetectSensitiveData` decides whether an
+    /// item that *was* recorded is masked behind Cmd+V, while this decides whether it is recorded
+    /// at all. Password managers set `org.nspasteboard.ConcealedType` to say "do not record this",
+    /// so honouring it has no false positives, but it also means a clip you might have wanted in
+    /// history is gone rather than hidden. Off by default for that reason; the Settings copy says
+    /// what turning it on costs.
+    @Published var skipConcealedClips: Bool {
+        didSet {
+            defaults.set(skipConcealedClips, forKey: Keys.skipConcealedClips)
+        }
+    }
+
+    /// Bundle identifiers whose clips are never recorded.
+    ///
+    /// Stored as an array so the order shown in Settings stays stable, and matched through
+    /// `excludedBundleIdentifierSet` because the lookup runs on every pasteboard change. Only the
+    /// identifier is stored: it is what a capture is matched against, and an app the user has since
+    /// uninstalled should still read as excluded rather than quietly dropping off the list.
+    @Published var excludedBundleIdentifiers: [String] {
+        didSet {
+            defaults.set(excludedBundleIdentifiers, forKey: Keys.excludedBundleIdentifiers)
+            excludedBundleIdentifierSet = Set(excludedBundleIdentifiers)
+        }
+    }
+
+    /// Lookup form of `excludedBundleIdentifiers`, kept in step by its `didSet`.
+    private(set) var excludedBundleIdentifierSet: Set<String> = []
+
+    func addExcludedApp(_ bundleIdentifier: String) {
+        guard !bundleIdentifier.isEmpty, !excludedBundleIdentifiers.contains(bundleIdentifier) else { return }
+        excludedBundleIdentifiers.append(bundleIdentifier)
+    }
+
+    func removeExcludedApp(_ bundleIdentifier: String) {
+        excludedBundleIdentifiers.removeAll { $0 == bundleIdentifier }
+    }
+
     private init() {
         // Load saved preferences or set defaults
         let savedMaxItems = defaults.object(forKey: Keys.maxClipboardItems) as? Int ?? Self.defaultClipboardItems
@@ -212,6 +253,14 @@ class UserPreferencesManager: ObservableObject {
 
         // Auto-hide password-like strings - disabled by default (can have false positives)
         self.autoHidePasswordLikeStrings = defaults.object(forKey: Keys.autoHidePasswordLikeStrings) as? Bool ?? false
+
+        // Dropping confidential clips - disabled by default, because it loses a clip rather than
+        // hiding it. Turning it on is a deliberate choice made in Settings.
+        self.skipConcealedClips = defaults.object(forKey: Keys.skipConcealedClips) as? Bool ?? false
+
+        let savedExclusions = defaults.array(forKey: Keys.excludedBundleIdentifiers) as? [String] ?? []
+        self.excludedBundleIdentifiers = savedExclusions
+        self.excludedBundleIdentifierSet = Set(savedExclusions)
     }
     
     func resetToDefaults() {
@@ -227,6 +276,11 @@ class UserPreferencesManager: ObservableObject {
         shortcutsEnabled = true
         autoDetectSensitiveData = false
         autoHidePasswordLikeStrings = false
+        skipConcealedClips = false
+        // `excludedBundleIdentifiers` is deliberately left alone. Every other preference here is
+        // recoverable by setting it again, but emptying this list starts recording clips from a
+        // bank, a terminal or a customer's admin tool with nothing to show that it changed, and a
+        // user who wanted the list gone can remove the entries in front of them.
     }
 }
 

@@ -289,6 +289,39 @@ rather than remember to be careful:
 `docs/BACKLOG.md` tracks the missing test seam: nothing may construct `PersistenceManager` or
 `ClipboardMonitor` in a test, because both reach the user's real store.
 
+## Skipping a Clip and Masking a Clip Are Different Decisions
+
+Two policies, deliberately not merged, both in `ClipboardMonitor.swift`:
+
+- `ClipboardCapturePolicy` decides whether a pasteboard change is **recorded at all**. A skip means
+  the clip never reaches memory or disk, so there is nothing to reveal with Cmd+V and nothing to
+  delete. Driven by `skipConcealedClips` and `excludedBundleIdentifiers`.
+- `ClipboardSensitivityPolicy` decides how an item that **was** recorded is displayed. Driven by
+  `autoDetectSensitiveData` and `autoHidePasswordLikeStrings`.
+
+Both default to off, which is the state to keep in mind when reading the capture path: on a default
+install nothing is skipped and nothing is masked. A user can pick any combination of the four.
+
+The guard runs in `checkClipboard`, before the pasteboard is read, and its result is never queued
+for a retry. Three things it depends on:
+
+- **`changeCount` has already moved when a skip is decided**, so a skip is final rather than
+  reconsidered every 0.8 s.
+- **`attemptPendingCapture` re-checks the concealed type but not the app.** The retry path exists
+  because some apps write a clip in stages, so the concealed type can appear after the change count
+  moved. The frontmost app cannot be re-read the same way: by then the user may have switched apps,
+  which answers a different question. The app verdict is made once, when the change is noticed.
+- **The frontmost app is a guess, and the Settings copy says so.** With 0.8 s polling,
+  `NSWorkspace.shared.frontmostApplication` at detection time is a good guess at the source of a
+  clip, not a fact. Do not try to improve it with heuristics over
+  `NSWorkspace.didActivateApplicationNotification` history; the honest sentence is "clips copied
+  from these apps are not saved", with the concealed-type rule as the exact mechanism, since there
+  the source app marks the clip itself.
+
+`excludedBundleIdentifiers` stores identifiers only. Names and icons are resolved at display time in
+`ExcludedAppRow`, so an app the user has since uninstalled still reads as excluded (marked "not
+installed") instead of dropping off the list.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
@@ -322,6 +355,14 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `hotKeyEnabled`: Bool (default: true)
 - `shortcutsEnabled`: Bool (default: true)
 - `autoStartEnabled`: Bool (default: true)
+- `autoDetectSensitiveData`: Bool (default: false), masks recognisable secrets
+- `autoHidePasswordLikeStrings`: Bool (default: false), masks high-entropy strings
+- `skipConcealedClips`: Bool (default: false), drops clips the source app marked confidential
+- `excludedBundleIdentifiers`: [String] (default: empty), apps whose clips are never recorded
+
+`resetToDefaults()` covers every preference except `excludedBundleIdentifiers`. Emptying that list
+starts recording clips from whatever the user excluded with nothing on screen to show it changed,
+and the entries are removable individually in front of them.
 
 ## Filter Tabs
 
@@ -351,6 +392,12 @@ When modifying clipboard functionality:
 - [ ] Images age out on `imagePersistenceDays` while older text survives on `persistenceDays`
 - [ ] Search filters by content and notes
 - [ ] Sensitive mode hides/reveals correctly
+- [ ] With both privacy guards off (the default), a password copied from a password manager is
+      captured exactly as before
+- [ ] With "Never save clips marked confidential" on, that copy adds no row to history and no row to
+      the store, and the next ordinary copy is still captured
+- [ ] With an app excluded, copying while it is in front adds nothing; copying from another app still
+      works, and removing the exclusion restores capture without a relaunch
 
 When modifying UI:
 - [ ] Filter tabs work correctly

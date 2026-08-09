@@ -164,6 +164,27 @@ Access settings via the gear icon or right-click menu.
 * **Keep items for**: 1 - 365 days (default: 60 days)
 * **Favorites**: Kept indefinitely, regardless of retention settings
 
+### Privacy
+
+Two settings decide what is never recorded in the first place. Both are off by default, so nothing
+changes until you turn them on:
+
+* **Never save clips marked confidential by the source app** (default: off): password managers mark
+  what you copy as confidential. With this on, those clips are not added to history and never
+  written to disk. They are gone rather than hidden, so a password you wanted for a minute is not
+  there either.
+* **Never save clips from these apps** (default: empty): pick apps, by bundle, whose clips are not
+  saved. MacClipboard checks the clipboard every 0.8 seconds, so the app in front when a change is
+  noticed is a good guess at the source of the clip, not a certainty: copy and switch apps within
+  the same moment and the clip is saved.
+
+Two further settings hide items that *are* saved, revealed with `Cmd+V`:
+
+* **Auto-hide sensitive content** (default: off): API keys, tokens, and other formats that are
+  recognisable
+* **Auto-hide password-like strings** (default: off): 8-64 characters of mixed case, digits, and
+  symbols. May have false positives.
+
 ### Global Hotkey
 
 * Enable/disable `Cmd+Shift+V` global shortcut
@@ -203,6 +224,8 @@ defaults delete com.macclipboard.app 2>/dev/null || true
 * **Local storage only**: History stored in `~/Library/Application Support/MacClipboard`
 * **Explicit update checks only**: The optional "Check for Updates" action contacts the GitHub Releases API; no clipboard content is sent
 * **Configurable retention**: Set how long items are kept (or disable persistence entirely)
+* **Exclusions**: Clips marked confidential by the source app, and clips from apps you name, can be
+  dropped before they are recorded at all (see [Privacy settings](#privacy))
 * **Secure by design**: Only accesses clipboard when content changes
 * **Minimal permissions**: Only needs accessibility for hotkey and auto-paste
 
