@@ -49,6 +49,7 @@ class MenuBarController: NSObject, ObservableObject {
     private var hotKeyRef: EventHotKeyRef?
     private var hotKeyEventHandlerRef: EventHandlerRef?
     private var hotKeyPreferenceCancellable: AnyCancellable?
+    private var capturePauseCancellable: AnyCancellable?
     private let updateService: UpdateService
     private var previousApplication: NSRunningApplication?
     private var clickOutsideMonitor: Any?
@@ -77,6 +78,7 @@ class MenuBarController: NSObject, ObservableObject {
         setupStatusItem()
         setupPopover()
         setupGlobalHotkeyPreferenceObserver()
+        setupCapturePauseObserver()
         updateGlobalHotkeyRegistration()
         
         // Listen for app activation to ensure button remains responsive
@@ -106,11 +108,45 @@ class MenuBarController: NSObject, ObservableObject {
             if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: statusItemLabel) {
                 image.isTemplate = true
                 image.size = NSSize(width: 17, height: 17)
-                return image
+                return clipboardMonitor.isCapturePaused ? Self.slashed(image) : image
             }
         }
 
         return nil
+    }
+
+    /// The clipboard with a line struck through it, for a paused capture.
+    ///
+    /// Composed rather than picked from SF Symbols, which has no slashed clipboard in any weight.
+    /// Swapping to a generic `pause` glyph instead would cost the user the one thing the menu bar
+    /// icon is for, which is knowing at a glance which icon is MacClipboard. The slash runs
+    /// lower-left to upper-right like every `.slash` symbol Apple ships, and a gap is knocked out
+    /// of the glyph underneath it so it stays readable at 17pt.
+    private static func slashed(_ base: NSImage) -> NSImage {
+        let slashedImage = NSImage(size: base.size, flipped: false) { rect in
+            base.draw(in: rect)
+
+            let inset = rect.width * 0.10
+            let slash = NSBezierPath()
+            slash.move(to: NSPoint(x: rect.minX + inset, y: rect.minY + inset))
+            slash.line(to: NSPoint(x: rect.maxX - inset, y: rect.maxY - inset))
+            slash.lineCapStyle = .round
+            NSColor.black.setStroke()
+
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            slash.lineWidth = max(2.4, rect.width * 0.20)
+            slash.stroke()
+
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            slash.lineWidth = max(1.2, rect.width * 0.10)
+            slash.stroke()
+
+            return true
+        }
+
+        // Template, like the symbol it is drawn from, so it still follows the menu bar's tint.
+        slashedImage.isTemplate = true
+        return slashedImage
     }
 
     /// "MacClipboard", or "MacClipboard (Dev)" for a dev build.
@@ -118,6 +154,14 @@ class MenuBarController: NSObject, ObservableObject {
         let name = L10n.string("MacClipboard", comment: "Menu bar button accessibility label")
         guard BuildInfo.isDevBuild else { return name }
         return "\(name) (\(BuildInfo.channelName))"
+    }
+
+    /// What the icon says about itself, in the tooltip and to VoiceOver. The icon shows the pause
+    /// but only the label can say what it means.
+    private var statusItemStateLabel: String {
+        guard clipboardMonitor.isCapturePaused else { return statusItemLabel }
+        let format = L10n.string("%@ (capture paused)", comment: "Menu bar button accessibility label while capture is paused")
+        return String(format: format, statusItemLabel)
     }
 
     private func configureStatusButton(_ button: NSStatusBarButton) {
@@ -129,8 +173,8 @@ class MenuBarController: NSObject, ObservableObject {
             button.title = BuildInfo.isDevBuild ? "📋*" : "📋"
         }
 
-        button.toolTip = "\(statusItemLabel) \(BuildInfo.versionString)"
-        button.setAccessibilityLabel(statusItemLabel)
+        button.toolTip = "\(statusItemStateLabel) \(BuildInfo.versionString)"
+        button.setAccessibilityLabel(statusItemStateLabel)
         button.imagePosition = .imageOnly
         button.appearsDisabled = false
         button.target = nil
@@ -230,9 +274,21 @@ class MenuBarController: NSObject, ObservableObject {
         let showClipboardItem = NSMenuItem(title: L10n.string("Show Clipboard", comment: "Menu item title"), action: #selector(showPopover), keyEquivalent: "")
         showClipboardItem.target = self
         menu.addItem(showClipboardItem)
-        
+
+        // The title says what the item does, rather than a checkmark next to "Pause" that has to
+        // be read twice to work out which way round it is.
+        let pauseTitle = clipboardMonitor.isCapturePaused
+            ? L10n.string("Resume Capture", comment: "Menu item title, switch clipboard capture back on")
+            : L10n.string("Pause Capture", comment: "Menu item title, switch clipboard capture off")
+        let pauseItem = NSMenuItem(title: pauseTitle, action: #selector(toggleCapturePaused), keyEquivalent: "")
+        pauseItem.target = self
+        pauseItem.toolTip = clipboardMonitor.isCapturePaused
+            ? L10n.string("Start saving new copies again", comment: "Menu item tooltip, resume capture")
+            : L10n.string("Stop saving new copies until you resume. Your history is kept.", comment: "Menu item tooltip, pause capture")
+        menu.addItem(pauseItem)
+
         menu.addItem(NSMenuItem.separator())
-        
+
         let settingsItem = NSMenuItem(title: L10n.string("Settings...", comment: "Menu item title"), action: #selector(showSettings), keyEquivalent: ",")
         settingsItem.target = self
         menu.addItem(settingsItem)
@@ -433,6 +489,10 @@ class MenuBarController: NSObject, ObservableObject {
     @objc private func clearHistory() {
         clipboardMonitor.clearHistory()
     }
+
+    @objc private func toggleCapturePaused() {
+        clipboardMonitor.toggleCapturePaused()
+    }
     
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
@@ -517,6 +577,19 @@ class MenuBarController: NSObject, ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.012) {
             keyUpEvent.post(tap: .cghidEventTap)
         }
+    }
+
+    /// Keeps the menu bar icon in step with the pause, whichever control flipped it. The icon is
+    /// the only part of this the user can see while working in another app, so it is not allowed
+    /// to lag behind the state.
+    private func setupCapturePauseObserver() {
+        capturePauseCancellable = clipboardMonitor.$isCapturePaused
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let button = self.statusItem?.button else { return }
+                self.configureStatusButton(button)
+            }
     }
 
     private func setupGlobalHotkeyPreferenceObserver() {
@@ -655,6 +728,7 @@ class MenuBarController: NSObject, ObservableObject {
         }
         updateService.cancel()
         hotKeyPreferenceCancellable = nil
+        capturePauseCancellable = nil
         NotificationCenter.default.removeObserver(self)
         statusItem = nil
         popover = nil

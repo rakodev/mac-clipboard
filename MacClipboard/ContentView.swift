@@ -172,11 +172,14 @@ struct ContentView: View {
         // Hotkey conflict banner height (when shown)
         let hotkeyWarningHeight: CGFloat = menuBarController.isGlobalHotkeyUnavailable ? 58 : 0
 
+        // Paused banner height (when shown)
+        let capturePausedHeight: CGFloat = clipboardMonitor.isCapturePaused ? 52 : 0
+
         // The editor replaces the list and the preview, so give it as much room as the popover is
         // allowed to take. 259pt of preview pane is not somewhere anyone can edit text. The banners
         // are added on top rather than taken out of it, so the editor is the same size either way.
         if isEditing {
-            return min(maxAllowedHeight, 460 + permissionHeight + hotkeyWarningHeight)
+            return min(maxAllowedHeight, 460 + permissionHeight + hotkeyWarningHeight + capturePausedHeight)
         }
 
         let baseHeight: CGFloat = 78  // header + search + filter picker + minimal padding
@@ -193,7 +196,7 @@ struct ContentView: View {
         let editStatusHeight: CGFloat = editStatus == nil ? 0 : 22
 
         // Calculate total height (no additional preview height since it's now horizontal)
-        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + editStatusHeight + listHeight
+        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + capturePausedHeight + editStatusHeight + listHeight
 
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
@@ -212,6 +215,9 @@ struct ContentView: View {
             }
             if menuBarController.isGlobalHotkeyUnavailable {
                 hotkeyConflictBanner
+            }
+            if clipboardMonitor.isCapturePaused {
+                capturePausedBanner
             }
             if !isEditing {
                 searchBarView
@@ -237,7 +243,10 @@ struct ContentView: View {
             } else if showShortcuts {
                 ShortcutReferenceView()
             } else if filteredItems.isEmpty {
-                ClipboardEmptyStateView(selectedFilter: selectedFilter)
+                ClipboardEmptyStateView(
+                    selectedFilter: selectedFilter,
+                    isCapturePaused: clipboardMonitor.isCapturePaused
+                )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 if let selectedItem = selectedItem {
@@ -610,6 +619,33 @@ struct ContentView: View {
         .overlay(Divider(), alignment: .bottom)
     }
 
+    /// Says the history stopped growing on purpose.
+    ///
+    /// Without it a paused app is indistinguishable from a broken one: nothing new appears, and
+    /// the list a user is looking at is the same list either way. Deliberately not styled as a
+    /// warning, because this is a state the user asked for.
+    private var capturePausedBanner: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "pause.circle.fill")
+                .foregroundColor(.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Clipboard capture is paused")
+                    .font(.caption).bold()
+                Text("New copies are not being saved. Everything already in your history is still here.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("Resume") {
+                clipboardMonitor.toggleCapturePaused()
+            }
+            .buttonStyle(.borderless)
+        }
+        .padding(8)
+        .background(Color.secondary.opacity(0.12))
+        .overlay(Divider(), alignment: .bottom)
+    }
+
     private var headerView: some View {
         HStack {
             ProjectTitleLink()
@@ -621,6 +657,18 @@ struct ContentView: View {
             }
 
             Spacer()
+
+            Button(action: {
+                clipboardMonitor.toggleCapturePaused()
+            }) {
+                Image(systemName: clipboardMonitor.isCapturePaused ? "play.circle" : "pause.circle")
+                    .foregroundColor(clipboardMonitor.isCapturePaused ? .accentColor : .secondary)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .accessibilityLabel(clipboardMonitor.isCapturePaused ? "Resume Capture" : "Pause Capture")
+            .help(clipboardMonitor.isCapturePaused
+                  ? "Resume capture and start saving new copies again"
+                  : "Pause capture: new copies are not saved until you resume. Your history is kept.")
 
             Button(action: {
                 showShortcuts.toggle()
@@ -2476,6 +2524,10 @@ extension Character {
 
 private struct ClipboardEmptyStateView: View {
     let selectedFilter: FilterTab
+    /// "Copy something to get started" is wrong advice while capture is off: copying something
+    /// would change nothing. The banner above says the same thing, but this is the part of the
+    /// popover a user with no history is actually reading.
+    let isCapturePaused: Bool
 
     var body: some View {
         VStack(spacing: 16) {
@@ -2502,6 +2554,10 @@ private struct ClipboardEmptyStateView: View {
     }
 
     private var iconName: String {
+        if isCapturePaused, selectedFilter == .all {
+            return "pause.circle"
+        }
+
         switch selectedFilter {
         case .all:
             return "doc.on.clipboard"
@@ -2515,6 +2571,10 @@ private struct ClipboardEmptyStateView: View {
     }
 
     private var titleKey: LocalizedStringKey {
+        if isCapturePaused, selectedFilter == .all {
+            return "Capture is paused"
+        }
+
         switch selectedFilter {
         case .all:
             return "No clipboard history"
@@ -2528,6 +2588,10 @@ private struct ClipboardEmptyStateView: View {
     }
 
     private var subtitleKey: LocalizedStringKey {
+        if isCapturePaused, selectedFilter == .all {
+            return "Resume capture to start saving copies again"
+        }
+
         switch selectedFilter {
         case .all:
             return "Copy something to get started"

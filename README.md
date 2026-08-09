@@ -18,6 +18,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * ⌨️ **Global hotkey** - Press `Cmd+Shift+V` to open clipboard history from anywhere
 * ⭐ **Favorites** - Save important items that persist indefinitely
 * 🔒 **Sensitive mode** - Hide content from shoulder surfing with `Cmd+H` (reveal with `Cmd+V` or eye icon)
+* ⏸️ **Pause capture** - Stop saving new copies before a screen share or a customer's account, without quitting; the menu bar icon shows a struck-through clipboard while it is off
 * 📝 **Notes** - Add descriptions to items for easier searching (e.g., "work password", "API key")
 * 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
 * 👀 **Smart preview** - Click any item to see full content before pasting
@@ -89,6 +90,20 @@ After installation, the menu bar icon appears. Press `Cmd+Shift+V` or click it t
 * **Menu bar icon**: Left-click the clipboard icon in your menu bar
 * **Global hotkey**: Press `Cmd+Shift+V` from any application
 * **Right-click menu**: Right-click the icon for quick actions
+
+### Pausing Capture
+
+Before a screen share, a demo, or an hour in someone else's account, stop MacClipboard recording
+without quitting it:
+
+* **Right-click the menu bar icon** and choose **Pause Capture**, or click the pause button in the
+  clipboard window
+* The menu bar icon becomes a clipboard with a line through it, so the pause is visible while you
+  work in other apps, and it stays paused until you resume, including after a restart
+* Nothing you copy while paused is saved, and resuming does not pick up whatever is on the
+  clipboard at that moment: only your next copy is saved
+* Your existing history, favorites and notes are untouched, and pasting from MacClipboard still
+  works normally
 
 ### Keyboard Shortcuts
 
@@ -166,6 +181,9 @@ Access settings via the gear icon or right-click menu.
 
 ### Privacy
 
+Capture can also be switched off outright, from the right-click menu or the clipboard window; see
+[Pausing Capture](#pausing-capture).
+
 Two settings decide what is never recorded in the first place. Both are off by default, so nothing
 changes until you turn them on:
 
@@ -226,6 +244,8 @@ defaults delete com.macclipboard.app 2>/dev/null || true
 * **Configurable retention**: Set how long items are kept (or disable persistence entirely)
 * **Exclusions**: Clips marked confidential by the source app, and clips from apps you name, can be
   dropped before they are recorded at all (see [Privacy settings](#privacy))
+* **Pause**: Recording can be switched off entirely, from the menu bar, for as long as you want
+  (see [Pausing Capture](#pausing-capture))
 * **Secure by design**: Only accesses clipboard when content changes
 * **Minimal permissions**: Only needs accessibility for hotkey and auto-paste
 

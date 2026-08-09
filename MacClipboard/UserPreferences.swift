@@ -23,6 +23,7 @@ class UserPreferencesManager: ObservableObject {
         static let autoHidePasswordLikeStrings = "autoHidePasswordLikeStrings"
         static let skipConcealedClips = "skipConcealedClips"
         static let excludedBundleIdentifiers = "excludedBundleIdentifiers"
+        static let capturePaused = "capturePaused"
     }
     
     // Constants
@@ -220,6 +221,19 @@ class UserPreferencesManager: ObservableObject {
     /// Lookup form of `excludedBundleIdentifiers`, kept in step by its `didSet`.
     private(set) var excludedBundleIdentifierSet: Set<String> = []
 
+    /// Whether the user has switched capture off for now.
+    ///
+    /// Written through `ClipboardMonitor.setCapturePaused`, which is the only thing that may
+    /// change it: resuming has to resynchronise the pasteboard's change count before polling
+    /// starts again, and a second writer would skip that step. Stored rather than kept in memory
+    /// so a pause survives a relaunch, which is the point of it for anyone who pauses before a
+    /// screen share and then reboots.
+    @Published var capturePaused: Bool {
+        didSet {
+            defaults.set(capturePaused, forKey: Keys.capturePaused)
+        }
+    }
+
     func addExcludedApp(_ bundleIdentifier: String) {
         guard !bundleIdentifier.isEmpty, !excludedBundleIdentifiers.contains(bundleIdentifier) else { return }
         excludedBundleIdentifiers.append(bundleIdentifier)
@@ -261,6 +275,10 @@ class UserPreferencesManager: ObservableObject {
         let savedExclusions = defaults.array(forKey: Keys.excludedBundleIdentifiers) as? [String] ?? []
         self.excludedBundleIdentifiers = savedExclusions
         self.excludedBundleIdentifierSet = Set(savedExclusions)
+
+        // Capture runs unless the user switched it off, and a pause is remembered until they
+        // switch it back on.
+        self.capturePaused = defaults.object(forKey: Keys.capturePaused) as? Bool ?? false
     }
     
     func resetToDefaults() {
@@ -281,6 +299,11 @@ class UserPreferencesManager: ObservableObject {
         // recoverable by setting it again, but emptying this list starts recording clips from a
         // bank, a terminal or a customer's admin tool with nothing to show that it changed, and a
         // user who wanted the list gone can remove the entries in front of them.
+        //
+        // `capturePaused` is left alone for the same reason: someone who paused before a screen
+        // share and then opened Settings would otherwise be recording again, and Reset is not
+        // where anyone looks for that. Resuming is one click on the menu bar icon, which is
+        // showing the paused clipboard the whole time.
     }
 }
 

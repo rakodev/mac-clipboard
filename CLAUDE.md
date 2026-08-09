@@ -43,6 +43,19 @@ make clean            # Clean build artifacts
 ./scripts/clean-dev-artifacts.sh --fix    # Remove them
 ```
 
+### Finish Every Change With `./run.sh`
+
+`xcodebuild build` and `xcodebuild test` prove the code compiles and the logic holds, and they
+change nothing about the app anyone is actually using: the product goes into DerivedData, while the
+dev copy in `~/Applications/MacClipboard-Dev.app` keeps running whatever binary was last installed
+there. So a feature can be finished, built and tested, and still be invisible in the popover the
+person reviewing it has open, which reads as the work not having been done.
+
+`./run.sh` is what closes that gap. It quits the running dev copy, builds, re-signs with the
+persistent dev certificate, installs, and relaunches. Run it after implementing anything, before
+reporting the work as done, and say that the running dev build now carries the change. Only the dev
+copy is touched: an installed release build has its own bundle id and keeps running.
+
 ## Project Structure
 
 ```
@@ -322,6 +335,35 @@ for a retry. Three things it depends on:
 `ExcludedAppRow`, so an app the user has since uninstalled still reads as excluded (marked "not
 installed") instead of dropping off the list.
 
+## Pausing Capture Has to Be Visible, and Has to Forget What It Missed
+
+The third reason a clip is not recorded, and the only one that is not a judgement about the clip:
+while capture is paused nothing is read from the pasteboard at all, so neither policy above ever
+runs. `ClipboardMonitor.setCapturePaused` is the single writer of `UserPreferencesManager
+.capturePaused`, on the main thread, and the state is stored so a pause survives a relaunch: someone
+who paused before a screen share and then rebooted has not silently started recording again.
+
+Three things it depends on:
+
+- **Resuming adopts the pasteboard's current change count, before the timer restarts**
+  (`ClipboardCapturePause.changeCountOnResume`). `changeCount` still holds the last clip that was
+  captured, so without this the first tick after resuming sees a different count and records the
+  very clip the user paused in order not to record, which is the whole feature undone in 0.8 s.
+  The pending-capture retry is dropped on both edges for the same reason.
+- **The state is readable from outside the popover.** The menu bar icon becomes a clipboard with a
+  line struck through it, composed in `MenuBarController.slashed(_:)` because SF Symbols has no
+  slashed clipboard; swapping to a generic `pause` glyph would cost the user the one thing that
+  icon is for, which is knowing which icon is MacClipboard. `MenuBarController` observes
+  `$isCapturePaused` so the icon can never lag behind the state, and the tooltip and the
+  accessibility label say "capture paused" because the glyph alone cannot.
+- **The popover says it is paused rather than looking like an empty history.** A banner
+  (`capturePausedBanner`) carries a Resume button, and with no history at all the empty state says
+  "Capture is paused" instead of telling the user to copy something, which would do nothing.
+
+`resetToDefaults()` deliberately leaves `capturePaused` alone, for the same reason it leaves
+`excludedBundleIdentifiers` alone: Reset is not where anyone looks to start recording again, and
+resuming is one click on an icon that is showing the pause the whole time.
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |
@@ -359,10 +401,13 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `autoHidePasswordLikeStrings`: Bool (default: false), masks high-entropy strings
 - `skipConcealedClips`: Bool (default: false), drops clips the source app marked confidential
 - `excludedBundleIdentifiers`: [String] (default: empty), apps whose clips are never recorded
+- `capturePaused`: Bool (default: false), capture switched off by the user until they switch it
+  back on; written only by `ClipboardMonitor.setCapturePaused`
 
-`resetToDefaults()` covers every preference except `excludedBundleIdentifiers`. Emptying that list
-starts recording clips from whatever the user excluded with nothing on screen to show it changed,
-and the entries are removable individually in front of them.
+`resetToDefaults()` covers every preference except `excludedBundleIdentifiers` and `capturePaused`.
+Emptying that list starts recording clips from whatever the user excluded with nothing on screen to
+show it changed, and the entries are removable individually in front of them; resuming capture from
+Reset is the same trap, and the pause is one click away from being lifted deliberately.
 
 ## Filter Tabs
 
@@ -398,6 +443,9 @@ When modifying clipboard functionality:
       the store, and the next ordinary copy is still captured
 - [ ] With an app excluded, copying while it is in front adds nothing; copying from another app still
       works, and removing the exclusion restores capture without a relaunch
+- [ ] Pausing changes the menu bar icon to the slashed clipboard, and copying adds nothing
+- [ ] The clip copied while paused is *not* captured on resume; the next copy after that is
+- [ ] A pause survives quitting and relaunching, and the icon and popover still say so
 
 When modifying UI:
 - [ ] Filter tabs work correctly

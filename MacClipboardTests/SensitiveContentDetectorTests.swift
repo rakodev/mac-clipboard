@@ -210,6 +210,49 @@ final class SensitiveContentDetectorTests: XCTestCase {
         )
     }
 
+    // MARK: - Pausing capture
+
+    /// The trap the pause exists to avoid. `changeCount` still holds the last clip capture saw, so
+    /// resuming without adopting the pasteboard's current count would make the very next tick
+    /// record the clip the user paused in order not to record.
+    func testResumingSkipsWhateverWasCopiedWhilePaused() {
+        let lastCaptured = 5
+        // Two copies made while capture was off.
+        let whilePaused = 7
+
+        let resumed = ClipboardCapturePause.changeCountOnResume(pasteboardChangeCount: whilePaused)
+
+        XCTAssertFalse(
+            ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: whilePaused, lastSeenChangeCount: resumed)
+        )
+        XCTAssertTrue(
+            ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: whilePaused, lastSeenChangeCount: lastCaptured),
+            "Without the resync on resume, the clip copied while paused reads as new"
+        )
+    }
+
+    /// Resuming suppresses exactly one thing: what is already on the pasteboard. The next copy is
+    /// captured as normal, or the pause would never really end.
+    func testTheFirstCopyAfterResumingIsCaptured() {
+        let resumed = ClipboardCapturePause.changeCountOnResume(pasteboardChangeCount: 7)
+
+        XCTAssertTrue(
+            ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: 8, lastSeenChangeCount: resumed)
+        )
+    }
+
+    /// Pausing and resuming with nothing copied in between leaves capture exactly where it was.
+    func testResumingWithNothingCopiedInBetweenLosesNothing() {
+        let lastCaptured = 5
+
+        let resumed = ClipboardCapturePause.changeCountOnResume(pasteboardChangeCount: lastCaptured)
+
+        XCTAssertEqual(resumed, lastCaptured)
+        XCTAssertFalse(
+            ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: lastCaptured, lastSeenChangeCount: resumed)
+        )
+    }
+
     /// Both guards off is the default install, and it must not change what is captured.
     func testNothingIsSkippedByDefault() {
         XCTAssertEqual(

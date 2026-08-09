@@ -212,6 +212,28 @@ struct ClipboardCapturePolicy {
     }
 }
 
+/// Capture switched off by the user, until they switch it back on.
+///
+/// A third thing that stops a clip being recorded, and unlike `ClipboardCapturePolicy` it is not a
+/// judgement about the clip: nothing is read from the pasteboard at all while capture is paused,
+/// so there is nothing to decide about. The one rule with teeth is on the way back.
+enum ClipboardCapturePause {
+    /// The change count capture adopts the moment it resumes.
+    ///
+    /// Skipping this is the whole trap: `changeCount` still holds whatever was last captured, so
+    /// the first tick after resuming would see a different count, read the pasteboard, and record
+    /// the very clip the user paused in order not to record. Adopting the current count means
+    /// resuming starts from what is on the pasteboard now, and only the *next* copy is captured.
+    static func changeCountOnResume(pasteboardChangeCount: Int) -> Int {
+        pasteboardChangeCount
+    }
+
+    /// Whether the pasteboard holds a change capture has not seen yet.
+    static func hasUnseenClip(pasteboardChangeCount: Int, lastSeenChangeCount: Int) -> Bool {
+        pasteboardChangeCount != lastSeenChangeCount
+    }
+}
+
 struct ClipboardHistoryInsertionResult {
     let history: [ClipboardItem]
     let removedItemIDs: Set<UUID>
@@ -314,6 +336,10 @@ enum ClipboardTextEditOutcome: Equatable {
 
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
+
+    /// Mirrors `UserPreferencesManager.capturePaused` so the menu bar icon and the popover can
+    /// observe it. Changed only through `setCapturePaused`.
+    @Published private(set) var isCapturePaused: Bool
     private var changeCount: Int = 0
     private var timer: Timer?
     private var isPausing = false
@@ -330,10 +356,13 @@ class ClipboardMonitor: ObservableObject {
          persistenceManager: PersistenceManager = PersistenceManager.shared) {
         self.userPreferences = userPreferences
         self.persistenceManager = persistenceManager
-        
-        // Load persisted history first
+        self.isCapturePaused = userPreferences.capturePaused
+
+        // Load persisted history first. A pause survives a relaunch, so a paused app comes back
+        // paused: the timer is never started, and the popover and the menu bar icon say so.
         self.loadPersistedHistory { [weak self] in
-            self?.startMonitoring()
+            guard let self, !self.isCapturePaused else { return }
+            self.startMonitoring()
         }
 
         startMaintenanceTimer()
@@ -371,6 +400,10 @@ class ClipboardMonitor: ObservableObject {
     }
     
     private func startMonitoring() {
+        // Idempotent: resuming and the initial history load can both reach this, and two timers
+        // would poll the pasteboard twice a tick for ever.
+        stopMonitoring()
+
         // Check clipboard every 0.8 seconds (balanced between responsiveness and CPU usage)
         let monitoringTimer = Timer(timeInterval: 0.8, repeats: true) { [weak self] _ in
             self?.checkClipboard()
@@ -475,16 +508,20 @@ class ClipboardMonitor: ObservableObject {
     }
     
     private func checkClipboard() {
+        // Capture the user switched off. The timer is stopped as well, so this mainly guards the
+        // calls that do not come from it: `refreshClipboardNow` on every popover open, and the
+        // initial check when monitoring starts.
+        guard !isCapturePaused else { return }
+
         // Skip monitoring if we're currently pasting
         guard !isPausing else { return }
 
         let pasteboard = NSPasteboard.general
-        
+
         // Check if clipboard content changed
-        if pasteboard.changeCount != changeCount {
+        if ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: pasteboard.changeCount, lastSeenChangeCount: changeCount) {
             changeCount = pasteboard.changeCount
-            pendingChangeCount = nil
-            pendingCaptureAttempts = 0
+            cancelPendingCapture()
 
             // Decided before the pasteboard is read, and never queued for a retry: a skipped clip
             // is meant to leave no trace at all. `changeCount` has already moved, so a skip is
@@ -531,6 +568,11 @@ class ClipboardMonitor: ObservableObject {
         }
     }
 
+    private func cancelPendingCapture() {
+        pendingChangeCount = nil
+        pendingCaptureAttempts = 0
+    }
+
     private func schedulePendingCaptureRetry() {
         guard !pendingCaptureRetryScheduled else { return }
         guard let pending = pendingChangeCount, pending == changeCount else { return }
@@ -549,6 +591,13 @@ class ClipboardMonitor: ObservableObject {
     }
 
     private func attemptPendingCapture(expectedChangeCount: Int) {
+        // A pause drops the clip that was mid-flight rather than holding it until capture is back
+        // on: it was still on the pasteboard when the user said stop recording.
+        guard !isCapturePaused else {
+            cancelPendingCapture()
+            return
+        }
+
         guard !isPausing else {
             schedulePendingCaptureRetry()
             return
@@ -557,8 +606,7 @@ class ClipboardMonitor: ObservableObject {
         let pasteboard = NSPasteboard.general
         // Clipboard changed again; pending capture is obsolete.
         guard pasteboard.changeCount == expectedChangeCount, expectedChangeCount == changeCount else {
-            pendingChangeCount = nil
-            pendingCaptureAttempts = 0
+            cancelPendingCapture()
             return
         }
 
@@ -570,8 +618,7 @@ class ClipboardMonitor: ObservableObject {
         if userPreferences.skipConcealedClips,
            SensitiveContentDetector.hasSensitivePasteboardType(pasteboard) {
             Logging.debug("🔒 Skipped a clip the source app marked confidential")
-            pendingChangeCount = nil
-            pendingCaptureAttempts = 0
+            cancelPendingCapture()
             return
         }
 
@@ -579,8 +626,7 @@ class ClipboardMonitor: ObservableObject {
 
         if let content = getClipboardContent() {
             addToHistory(content)
-            pendingChangeCount = nil
-            pendingCaptureAttempts = 0
+            cancelPendingCapture()
             return
         }
 
@@ -589,6 +635,43 @@ class ClipboardMonitor: ObservableObject {
 
     func refreshClipboardNow() {
         checkClipboard()
+    }
+
+    // MARK: - Pausing Capture
+
+    func toggleCapturePaused() {
+        setCapturePaused(!isCapturePaused)
+    }
+
+    /// Switches capture off or back on, and remembers it.
+    ///
+    /// The single writer of `UserPreferencesManager.capturePaused`, because resuming has to
+    /// resynchronise `changeCount` before polling starts again and a second writer would skip it.
+    /// Main thread only: it owns the timer and publishes the state the menu bar icon draws from.
+    func setCapturePaused(_ paused: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard paused != isCapturePaused else { return }
+
+        isCapturePaused = paused
+        userPreferences.capturePaused = paused
+
+        if paused {
+            stopMonitoring()
+            // Anything the deferred-capture path was still holding on to belongs to the moment
+            // before the pause, and it is not worth recording a clip the user asked to stop
+            // recording just because an app wrote it in stages.
+            cancelPendingCapture()
+            Logging.info("⏸️ Clipboard capture paused")
+        } else {
+            // Before the timer, never after: the first tick would otherwise see a change count
+            // that moved while capture was off and record the clip the pause existed to keep out.
+            changeCount = ClipboardCapturePause.changeCountOnResume(
+                pasteboardChangeCount: NSPasteboard.general.changeCount
+            )
+            cancelPendingCapture()
+            startMonitoring()
+            Logging.info("▶️ Clipboard capture resumed")
+        }
     }
 
     private struct PasteboardImagePayload {

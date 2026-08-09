@@ -69,28 +69,8 @@ What was declined for now, with reasons, is in `FOLLOWUPS.md`: iCloud sync, sequ
 
 The numbers are stable identifiers, not positions: a completed task leaves a gap rather than
 renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or `FOLLOWUPS.md` keeps
-meaning the task it meant. Task 5 (capture exclusions) was completed on 2026-08-09.
-
-### 4. No way to pause capture without quitting the app
-
-`ClipboardMonitor.isPausing` exists but is private and only suppresses capture for 0.5 s around an
-auto-paste. There is no user-facing control, so the only way to stop recording before typing a
-password into a field, screen sharing, or working in a customer's account is to quit the app, which
-also gives up the global hotkey and the history that is in memory.
-
-Design notes that matter more than the toggle itself:
-
-- On resume, set `changeCount = NSPasteboard.general.changeCount` before restarting the timer.
-  Without it, the first tick after resuming sees a changed count and captures the clip the user
-  copied while paused, which defeats the whole feature.
-- The paused state must be obvious from outside the popover, so the menu bar icon changes (a
-  slashed clipboard), not just a checkmark buried in a menu.
-- Persist the state across relaunch, and pair that with the icon above and a line in the popover's
-  empty state. A pause that silently lifts at the next login is worse than one the user can see.
-
-Done means: a toggle in the menu bar menu and the popover, a distinct icon while paused, capture
-stopped at the top of `checkClipboard`, `changeCount` resynced on resume, the state surviving a
-relaunch, and the popover saying it is paused rather than looking like an empty history.
+meaning the task it meant. Task 5 (capture exclusions) and task 4 (pausing capture) were both
+completed on 2026-08-09.
 
 ### 6. Turning persistence off leaves the old store on disk, and there is no clear-on-quit option
 
