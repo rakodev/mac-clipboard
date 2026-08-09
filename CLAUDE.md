@@ -567,6 +567,14 @@ pass `--entitlements`: `codesign --force` replaces the signature wholesale, so o
 an app with no entitlements at all. Releases up to 0.1.13 did exactly that. The build now fails
 if the entitlements are missing, or if debug-only `get-task-allow` is present.
 
+The DMG is a second thing to sign, and its own three steps run in one order only: **sign, notarize,
+staple**. `codesign` rewrites the image, so signing an image that has already been stapled drops the
+ticket, with nothing to say so beyond `stapler validate` starting to fail. Releases up to 0.1.22
+shipped a container with a ticket and no signature at all, which Gatekeeper rejected as "no usable
+signature" while the app inside assessed correctly. `spctl -a -t open --context
+context:primary-signature` on the finished image is the guard, and it fails the build, because it is
+the only check that needs both the signature and the ticket to be there.
+
 ## Important Files for Common Tasks
 
 | Task | Files to Modify |

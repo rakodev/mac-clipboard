@@ -151,7 +151,7 @@ The password detection excludes common false positives:
 |---------|----------|
 | URLs | `https://example.com/path` |
 | Emails | `user@example.com` |
-| File paths | `/Users/max/file.txt`, `C:\Users\` |
+| File paths | `/Users/username/file.txt`, `C:\Users\` |
 | UUIDs | `550e8400-e29b-41d4-a716-446655440000` |
 | IP addresses | `192.168.1.1:8080`, `fe80::1` |
 | MAC addresses | `00:1A:2B:3C:4D:5E` |

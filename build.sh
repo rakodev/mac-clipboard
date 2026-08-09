@@ -23,7 +23,16 @@ ZIP_PATH="./build/MacClipboard.zip"
 DMG_PATH="./build/MacClipboard-Installer.dmg"
 
 # Signing Configuration
-DEVELOPER_ID="Developer ID Application: Ramazan KORKMAZ (K542B2Z65M)"
+#
+# The Developer ID identity is looked up in the keychain rather than written down here, because
+# the common name of that certificate is the holder's legal name and this repository is public.
+# Set MACCLIPBOARD_DEVELOPER_ID to skip the lookup.
+#
+# TEAM_ID stays literal, and must: it is pinned into the app's designated requirement below, and
+# every user's Accessibility grant is keyed on that requirement, so it cannot be derived from
+# whatever certificate happens to be installed. It is an opaque account identifier rather than a
+# name, and anyone can already read it out of the shipped app with `codesign -dv`.
+DEVELOPER_ID="${MACCLIPBOARD_DEVELOPER_ID:-}"
 TEAM_ID="K542B2Z65M"
 KEYCHAIN_PROFILE="MacClipboard-Notarize"
 
@@ -266,12 +275,37 @@ if ! command -v xcodebuild &> /dev/null; then
     exit 1
 fi
 
-# Check if Developer ID certificate exists
-if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
-    echo -e "${RED}❌ Error: Developer ID Application certificate not found${NC}"
-    echo "Please create one in Xcode: Settings → Accounts → Manage Certificates → + → Developer ID Application"
+# Resolve the Developer ID certificate, restricted to this project's team.
+#
+# The team restriction is not tidiness: the designated requirement pinned further down names
+# TEAM_ID, so signing with an identity from any other team would produce an app that no existing
+# install recognises as an upgrade, and every user would lose their Accessibility grant. Better to
+# refuse than to sign with whichever certificate sorted first.
+if [ -z "${DEVELOPER_ID}" ]; then
+    DEVELOPER_ID=$(security find-identity -v -p codesigning \
+        | grep "Developer ID Application" \
+        | grep -F "(${TEAM_ID})" \
+        | head -1 \
+        | sed -E 's/^[[:space:]]*[0-9]+\)[[:space:]]+[0-9A-Fa-f]+[[:space:]]+"(.*)"[[:space:]]*$/\1/')
+fi
+
+if [ -z "${DEVELOPER_ID}" ]; then
+    echo -e "${RED}❌ Error: no Developer ID Application certificate for team ${TEAM_ID}${NC}"
+    echo "Create one in Xcode: Settings → Accounts → Manage Certificates → + → Developer ID Application"
+    echo "Or set MACCLIPBOARD_DEVELOPER_ID to the identity to sign with."
     exit 1
 fi
+
+if [[ "${DEVELOPER_ID}" != *"(${TEAM_ID})"* ]]; then
+    echo -e "${RED}❌ Error: the signing identity does not belong to team ${TEAM_ID}${NC}"
+    echo "Signing with another team breaks the pinned designated requirement, and with it every"
+    echo "user's Accessibility grant. Unset MACCLIPBOARD_DEVELOPER_ID to use the keychain lookup."
+    exit 1
+fi
+
+# Reported without the certificate's common name, which is a person's name: build output gets
+# pasted into issues on a public repository.
+echo -e "${GREEN}✅ Signing identity found for team ${TEAM_ID}${NC}"
 
 # Check if notarization credentials are stored
 if ! xcrun notarytool history --keychain-profile "${KEYCHAIN_PROFILE}" &> /dev/null; then
@@ -447,6 +481,27 @@ if command -v create-dmg &> /dev/null; then
     if [ -f "${DMG_PATH}" ]; then
         echo -e "${GREEN}✅ DMG created successfully${NC}"
 
+        # Sign the disk image itself. Up to 0.1.22 the image went from create-dmg straight to
+        # notarytool, so every shipped DMG carried a valid notarization ticket and no signature of
+        # its own, and the Gatekeeper assessment below answered "rejected: no usable signature".
+        # The app inside was always correct, and the app is what users run, so this is a gap
+        # against Apple's guidance for the container rather than a broken download.
+        #
+        # Sign, then notarize, then staple, and never reorder those three: codesign rewrites the
+        # image, which silently drops a ticket that was already stapled to it.
+        #
+        # --identifier keeps the signing identifier off the output file name, which is where
+        # codesign takes it from otherwise. Nothing pins the container's identifier the way the
+        # app's designated requirement is pinned, but renaming the DMG should not quietly change
+        # what was signed.
+        echo -e "${YELLOW}🔏 Signing DMG...${NC}"
+        codesign --force --sign "${DEVELOPER_ID}" \
+            --timestamp \
+            --identifier "com.macclipboard.installer" \
+            "${DMG_PATH}"
+        codesign --verify --verbose=2 "${DMG_PATH}"
+        echo -e "${GREEN}✅ DMG signature verified${NC}"
+
         # Notarize and staple DMG if notarization is enabled
         if [ "$SKIP_NOTARIZATION" = false ]; then
             echo -e "${YELLOW}📤 Notarizing DMG...${NC}"
@@ -455,6 +510,17 @@ if command -v create-dmg &> /dev/null; then
                 --wait
             xcrun stapler staple "${DMG_PATH}"
             echo -e "${GREEN}✅ DMG notarized${NC}"
+
+            # What Gatekeeper itself does when the user opens the download: assess the container
+            # against its own signature. It needs the signature and the ticket together, so it is
+            # the one check that fails if either the signing above or the stapling regresses.
+            echo -e "${YELLOW}🔍 Verifying DMG Gatekeeper assessment...${NC}"
+            if ! spctl -a -t open --context context:primary-signature -vv "${DMG_PATH}"; then
+                echo -e "${RED}❌ The DMG was rejected by Gatekeeper${NC}"
+                echo -e "${RED}   Expected accepted, with source=Notarized Developer ID${NC}"
+                exit 1
+            fi
+            echo -e "${GREEN}✅ DMG assessment verified${NC}"
         fi
     else
         echo -e "${RED}❌ DMG creation failed${NC}"

@@ -6,27 +6,9 @@ Move completed items to `BACKLOG_ARCHIVE.md` with the completion date and a shor
 
 ## Priority Tasks
 
-Task 1 (the missing test seam for the store) was completed on 2026-08-09; see
-`BACKLOG_ARCHIVE.md`. The numbers here are stable identifiers, as in the product section below, so
-it leaves a gap rather than renumbering the entries under it.
-
-### 2. The DMG is notarized and stapled but never code signed
-
-`build.sh` hands the disk image straight from `create-dmg` to `notarytool` and `stapler`, with no
-`codesign` step, so the container carries a valid notarization ticket and no signature of its own:
-
-```
-xcrun stapler validate build/MacClipboard-Installer.dmg   # The validate action worked!
-spctl -a -t open --context context:primary-signature -vv  # rejected: no usable signature
-```
-
-Pre-existing, not a regression: v0.1.15's DMG behaves the same. The app inside is correct
-(`accepted`, `source=Notarized Developer ID`, hardened runtime, ticket stapled), which is what
-users actually run, and the stapled ticket is what Gatekeeper checks when the image is opened. So
-this is a gap against Apple's guidance rather than a broken download.
-
-Done means: `codesign --sign "$DEVELOPER_ID"` on the DMG before submitting it, and the `spctl`
-assessment above passing, added to the release pre-flight so it cannot regress silently.
+Task 1 (the missing test seam for the store) and task 2 (the unsigned DMG) were both completed on
+2026-08-09; see `BACKLOG_ARCHIVE.md`. The numbers here are stable identifiers, as in the product
+section below, so a completed task leaves a gap rather than renumbering the entries under it.
 
 ### 3. Orphaned external image files from before object deletion
 

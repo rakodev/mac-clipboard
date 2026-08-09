@@ -23,10 +23,14 @@ Verify it's installed:
 security find-identity -v -p codesigning | grep "Developer ID Application"
 ```
 
-You should see:
+You should see a line naming your certificate, in this shape:
 ```
-"Developer ID Application: Ramazan KORKMAZ (K542B2Z65M)"
+"Developer ID Application: YOUR NAME (K542B2Z65M)"
 ```
+
+`build.sh` looks that identity up in the keychain at build time and checks it belongs to team
+`K542B2Z65M`, so the name is never written into this repository, which is public. Set
+`MACCLIPBOARD_DEVELOPER_ID` to override the lookup.
 
 ### 2. Create App-Specific Password for Notarization
 
@@ -74,6 +78,7 @@ This will:
 3. Notarize it with Apple
 4. Staple the notarization ticket
 5. Create a ZIP and optional DMG for distribution
+6. Sign, notarize and staple the DMG as well, then assess it the way Gatekeeper does
 
 ### Output Files
 
@@ -308,3 +313,16 @@ spctl -a -vvv -t install /tmp/macclipboard-check/MacClipboard.app
 ```
 
 Should show: `source=Notarized Developer ID`
+
+The disk image is signed, notarized and stapled in its own right, which is a separate assessment
+from the app inside it:
+
+```bash
+spctl -a -t open --context context:primary-signature -vv build/MacClipboard-Installer.dmg
+xcrun stapler validate build/MacClipboard-Installer.dmg
+```
+
+Should show `accepted` with `source=Notarized Developer ID`, and a ticket that validates. `build.sh`
+fails the build if the first one is rejected. Signing an image rewrites it and drops a ticket
+already stapled to it, so the order in the script is sign, notarize, staple, and it cannot be
+rearranged.

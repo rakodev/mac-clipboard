@@ -49,6 +49,15 @@ shipping. Build with `./build.sh --keep-export` so a loose bundle is available t
       certificate leaf[subject.OU] = K542B2Z65M`). Changing it invalidates every user's
       Accessibility grant.
 - [ ] `spctl -a -vvv /Applications/MacClipboard.app` reports `source=Notarized Developer ID`.
+- [ ] `codesign -dvvv build/MacClipboard-Installer.dmg` names the Developer ID authority and prints
+      a `Timestamp`. The disk image carries a signature of its own, not only the app inside it.
+- [ ] `spctl -a -t open --context context:primary-signature -vv build/MacClipboard-Installer.dmg`
+      reports `accepted` with `source=Notarized Developer ID`. This is what Gatekeeper does when
+      the user opens the download. `build.sh` fails the build on a rejection, so a passing build is
+      already evidence; run it by hand on the published artifact after downloading it.
+- [ ] `xcrun stapler validate build/MacClipboard-Installer.dmg` still says the validate action
+      worked. Signing an image drops a ticket already stapled to it, so this is what catches the
+      sign and staple steps being reordered.
 
 ## Clipboard and Persistence
 
