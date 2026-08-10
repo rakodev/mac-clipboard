@@ -189,11 +189,15 @@ struct ContentView: View {
 
     @ObservedObject private var permissionManager: PermissionManager
     @ObservedObject private var userPreferences = UserPreferencesManager.shared
-    
+    /// The same state the menu bar icon badge is drawn from, so the dot and this banner can never
+    /// disagree about whether there is an update.
+    @ObservedObject private var updateChecker: UpdateChecker
+
     init(clipboardMonitor: ClipboardMonitor, menuBarController: MenuBarController) {
         self.clipboardMonitor = clipboardMonitor
         self.menuBarController = menuBarController
         self.permissionManager = menuBarController.permissionManager
+        self.updateChecker = menuBarController.updateChecker
     }
     
     private var filteredItems: [ClipboardItem] {
@@ -241,11 +245,17 @@ struct ContentView: View {
         // Paused banner height (when shown)
         let capturePausedHeight: CGFloat = clipboardMonitor.isCapturePaused ? 52 : 0
 
+        // Update banner height (when shown)
+        let updateBannerHeight: CGFloat = updateChecker.availableUpdate == nil ? 0 : 52
+
         // The editor replaces the list and the preview, so give it as much room as the popover is
         // allowed to take. 259pt of preview pane is not somewhere anyone can edit text. The banners
         // are added on top rather than taken out of it, so the editor is the same size either way.
         if isEditing {
-            return min(maxAllowedHeight, 460 + permissionHeight + hotkeyWarningHeight + capturePausedHeight)
+            return min(
+                maxAllowedHeight,
+                460 + permissionHeight + hotkeyWarningHeight + capturePausedHeight + updateBannerHeight
+            )
         }
 
         let baseHeight: CGFloat = 78  // header + search + filter picker + minimal padding
@@ -262,7 +272,8 @@ struct ContentView: View {
         let actionStatusHeight: CGFloat = actionStatus == nil ? 0 : 22
 
         // Calculate total height (no additional preview height since it's now horizontal)
-        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + capturePausedHeight + actionStatusHeight + listHeight
+        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + capturePausedHeight
+            + updateBannerHeight + actionStatusHeight + listHeight
 
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
@@ -284,6 +295,9 @@ struct ContentView: View {
             }
             if clipboardMonitor.isCapturePaused {
                 capturePausedBanner
+            }
+            if let update = updateChecker.availableUpdate {
+                updateAvailableBanner(update)
             }
             if !isEditing {
                 searchBarView
@@ -713,6 +727,48 @@ struct ContentView: View {
         }
         .padding(8)
         .background(Color.secondary.opacity(0.12))
+        .overlay(Divider(), alignment: .bottom)
+    }
+
+    /// Says a newer release exists, without standing in the way of the clipboard.
+    ///
+    /// This is the surface that carries the detail, because it is the only one the user is already
+    /// looking at when they see it: the icon badge can only say "something", and Settings is
+    /// somewhere you have to go. Styled like the pause banner rather than as a warning, because
+    /// running last week's version is not a problem, and it keeps its Skip button so the popover
+    /// cannot become a thing that nags every time it opens.
+    private func updateAvailableBanner(_ update: AvailableUpdate) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: "arrow.down.circle.fill")
+                .foregroundColor(.accentColor)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("MacClipboard v\(update.version) is available")
+                    .font(.caption).bold()
+                Text(UpdateChecker.isHomebrewManaged
+                     ? "You are on v\(BuildInfo.shortVersion). Installed with Homebrew, so upgrade with brew."
+                     : "You are on v\(BuildInfo.shortVersion). Your clipboard history is kept when you update.")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            // Does the thing, rather than opening an alert that then offers to do the thing. The
+            // banner is already the non-blocking surface; putting a modal behind its button would
+            // undo the point of it.
+            Button(UpdateChecker.isHomebrewManaged ? "Copy Command" : "Update") {
+                if updateChecker.performPrimaryAction(for: update) == .copiedHomebrewCommand {
+                    showActionStatus(.copiedUpgradeCommand)
+                }
+            }
+            .buttonStyle(.borderless)
+            Button("Skip") {
+                updateChecker.skipAvailableUpdate()
+            }
+            .buttonStyle(.borderless)
+            .foregroundColor(.secondary)
+            .help(Text("Stop showing v\(update.version). A newer release will still appear here."))
+        }
+        .padding(8)
+        .background(Color.accentColor.opacity(0.10))
         .overlay(Divider(), alignment: .bottom)
     }
 
@@ -2043,6 +2099,10 @@ enum ClipboardActionStatus: Equatable {
     case savedNew
     case alreadyInHistory
     case merged(count: Int, skipped: Int)
+    /// The Homebrew upgrade command was put on the pasteboard from the update banner. It belongs
+    /// here rather than in an alert because it *is* a clipboard action: the row is about to appear
+    /// at the top of the history like any other copy.
+    case copiedUpgradeCommand
 
     var icon: String {
         switch self {
@@ -2052,6 +2112,8 @@ enum ClipboardActionStatus: Equatable {
             return "arrow.up.circle"
         case .merged:
             return "arrow.triangle.merge"
+        case .copiedUpgradeCommand:
+            return "terminal"
         }
     }
 
@@ -2068,6 +2130,8 @@ enum ClipboardActionStatus: Equatable {
                 return "Merged \(count) items top to bottom. The originals are unchanged."
             }
             return "Merged \(count) items top to bottom. \(skipped) with no text were skipped."
+        case .copiedUpgradeCommand:
+            return "Copied. Paste it into Terminal to upgrade."
         }
     }
 }

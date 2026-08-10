@@ -27,6 +27,10 @@ class UserPreferencesManager: ObservableObject {
         static let excludedBundleIdentifiers = "excludedBundleIdentifiers"
         static let capturePaused = "capturePaused"
         static let clearHistoryOnQuit = "clearHistoryOnQuit"
+        static let automaticUpdateChecksEnabled = "automaticUpdateChecksEnabled"
+        static let lastUpdateCheckDate = "lastUpdateCheckDate"
+        static let lastSeenLatestVersion = "lastSeenLatestVersion"
+        static let skippedUpdateVersion = "skippedUpdateVersion"
     }
     
     // Constants
@@ -275,6 +279,39 @@ class UserPreferencesManager: ObservableObject {
         }
     }
 
+    /// Whether the app looks for a new release on its own, once a day.
+    ///
+    /// On by default, and switchable off, because this is the only thing MacClipboard does over the
+    /// network without being asked. An app whose pitch is that your clipboard never leaves the
+    /// machine does not get to make an unprompted request and not offer a way to stop it. Nothing
+    /// about the clipboard is sent either way: the request is a GET of the latest release tag.
+    /// Switching it off leaves the manual check in Settings and in the menu.
+    @Published var automaticUpdateChecksEnabled: Bool {
+        didSet {
+            defaults.set(automaticUpdateChecksEnabled, forKey: Keys.automaticUpdateChecksEnabled)
+        }
+    }
+
+    /// When a check last completed, used to decide whether the next one is due. Only a check that
+    /// got an answer writes this; see `UpdateChecker.check`.
+    var lastUpdateCheckDate: Date? {
+        get { defaults.object(forKey: Keys.lastUpdateCheckDate) as? Date }
+        set { defaults.set(newValue, forKey: Keys.lastUpdateCheckDate) }
+    }
+
+    /// The newest release version the last check saw. Stored so the badge is right the moment the
+    /// app launches, rather than only after the first check of the session comes back.
+    var lastSeenLatestVersion: String? {
+        get { defaults.string(forKey: Keys.lastSeenLatestVersion) }
+        set { defaults.set(newValue, forKey: Keys.lastSeenLatestVersion) }
+    }
+
+    /// A version the user asked not to be told about again. Anything newer still surfaces.
+    var skippedUpdateVersion: String? {
+        get { defaults.string(forKey: Keys.skippedUpdateVersion) }
+        set { defaults.set(newValue, forKey: Keys.skippedUpdateVersion) }
+    }
+
     func addExcludedApp(_ bundleIdentifier: String) {
         guard !bundleIdentifier.isEmpty, !excludedBundleIdentifiers.contains(bundleIdentifier) else { return }
         excludedBundleIdentifiers.append(bundleIdentifier)
@@ -332,6 +369,10 @@ class UserPreferencesManager: ObservableObject {
 
         // History outlives a quit unless the user asked otherwise.
         self.clearHistoryOnQuit = defaults.object(forKey: Keys.clearHistoryOnQuit) as? Bool ?? false
+
+        // Looking for a release once a day is on by default: an update nobody hears about is the
+        // problem this solves. It is switchable off because it is the one unprompted network call.
+        self.automaticUpdateChecksEnabled = defaults.object(forKey: Keys.automaticUpdateChecksEnabled) as? Bool ?? true
     }
     
     func resetToDefaults() {
@@ -352,6 +393,12 @@ class UserPreferencesManager: ObservableObject {
         autoDetectSensitiveData = false
         autoHidePasswordLikeStrings = false
         skipConcealedClips = false
+        automaticUpdateChecksEnabled = true
+        // Unlike the three exemptions below, forgetting a skipped version is safe to reset: all it
+        // does is bring a banner back, in front of the user, with Skip still on it. The cached
+        // `lastSeenLatestVersion` and `lastUpdateCheckDate` are left alone because they are a cache
+        // of what the server said, not a preference, and clearing them would only cost a request.
+        skippedUpdateVersion = nil
         // `excludedBundleIdentifiers` is deliberately left alone. Every other preference here is
         // recoverable by setting it again, but emptying this list starts recording clips from a
         // bank, a terminal or a customer's admin tool with nothing to show that it changed, and a

@@ -4,6 +4,9 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @ObservedObject private var preferences = UserPreferencesManager.shared
+    /// Falls back to the shared checker so the SwiftUI preview, which builds this view with no app
+    /// around it, still has something to read.
+    @ObservedObject private var updateChecker: UpdateChecker
     @StateObject private var installation = InstallationHealth()
     @State private var exportState: ExportState = .idle
     @State private var purgeSummary: PersistenceManager.SavedHistorySummary?
@@ -58,6 +61,7 @@ struct SettingsView: View {
         self.menuBarController = menuBarController
         self.onDismiss = onDismiss
         self.onCheckForUpdates = onCheckForUpdates
+        self.updateChecker = menuBarController?.updateChecker ?? .shared
     }
 
     var body: some View {
@@ -70,6 +74,17 @@ struct SettingsView: View {
                             .font(.headline)
 
                         Toggle("Launch at login", isOn: $preferences.autoStartEnabled)
+
+                        // The one thing MacClipboard does over the network without being asked, so
+                        // it says exactly what it sends and can be switched off. The manual check in
+                        // the footer keeps working either way.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Toggle("Check for updates automatically", isOn: $preferences.automaticUpdateChecksEnabled)
+
+                            Text("Asks GitHub once a day for the latest release number and shows a banner if there is a newer one. Nothing is downloaded or installed on its own, and nothing about your clipboard is sent.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                     }
 
                     Divider()
@@ -339,11 +354,7 @@ struct SettingsView: View {
                 Text("·")
                     .foregroundColor(.secondary)
 
-                Button("Check for Updates") {
-                    onCheckForUpdates()
-                }
-                .buttonStyle(.link)
-                .font(.caption)
+                updateStatusControl
 
                 Spacer()
 
@@ -387,6 +398,44 @@ struct SettingsView: View {
 
     private var appVersion: String {
         BuildInfo.versionString
+    }
+
+    /// The third passive surface, and the only one that can say when the app last looked.
+    ///
+    /// A bare "Check for Updates" button makes the answer something the user has to ask for, which
+    /// is the problem this whole feature exists to fix. So when a release is known about, this row
+    /// states it; otherwise it says the app is current as of the last check, and the tooltip carries
+    /// the timestamp so the claim is falsifiable.
+    @ViewBuilder
+    private var updateStatusControl: some View {
+        if updateChecker.isChecking {
+            Text("Checking...")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else if let update = updateChecker.availableUpdate {
+            Button("Update to v\(update.version)") {
+                menuBarController?.showAvailableUpdate()
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .help(Text("A newer release is available. Opens the details."))
+        } else {
+            Button("Check for Updates") {
+                onCheckForUpdates()
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+            .help(Text(lastUpdateCheckDescription))
+        }
+    }
+
+    private var lastUpdateCheckDescription: String {
+        guard let last = preferences.lastUpdateCheckDate else {
+            return L10n.string("No update check has run yet.", comment: "Update check tooltip when none has run")
+        }
+
+        let format = L10n.string("Last checked %@.", comment: "Update check tooltip naming when the last check ran")
+        return String(format: format, last.formatted(date: .abbreviated, time: .shortened))
     }
 
     // MARK: - Deleting What Saving Off Leaves Behind

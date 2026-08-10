@@ -396,7 +396,38 @@ Clipboard history persisted to `~/Library/Application Support/MacClipboard` usin
 
 Clipboard content is local-only. The app does not upload clipboard history, notes, images, or file paths. Persistent clipboard data lives in the app support directory and follows the user's retention settings.
 
-The only retained network path is the explicit update check. When the user chooses "Check for Updates", `UpdateService` requests the latest release metadata from the GitHub Releases API and opens the release page only if the user chooses to download an available update. No clipboard data is included in that request.
+The only network path is the update check, and it is a GET of the latest release tag from the GitHub Releases API. No clipboard data, no identifier and no version telemetry is included: the request carries an `Accept` header and nothing else, and the running version is compared locally against the tag that comes back.
+
+From 0.1.25 that check also runs on its own, once a day, which makes it the one thing the app does over the network without being asked. Three things keep that honest, and none of them is optional:
+
+* `automaticUpdateChecksEnabled` (Settings > General, default on) switches it off, and the Settings copy states exactly what the request contains. An app whose pitch is that your clipboard never leaves the machine does not get to make an unprompted request with no way to stop it.
+* Nothing is ever downloaded or installed automatically. A check only sets `UpdateChecker.availableUpdate`, which three passive surfaces read; the user chooses whether to act.
+* Dev builds never check automatically. They are routinely ahead of the latest release, so a nag would be wrong as often as it was right.
+
+Switching the preference off leaves the manual check working, in Settings and in the menu, so no build ever loses the ability to answer "am I current".
+
+### Telling the User About a Release Without Getting in the Way
+
+`UpdateService` performs a check; `UpdateChecker` decides when to run one and remembers the answer. That split is what lets the notification be passive: the checker publishes `availableUpdate`, and every surface is a reader of it, so the badge, the banner and the Settings row cannot disagree about whether there is an update.
+
+The three surfaces are deliberately unequal in how much they say, because they are seen in different places:
+
+| Surface | Where | Says |
+|---------|-------|------|
+| Menu bar icon badge | Visible from any app | Only "there is something", as a template dot that takes the menu bar tint |
+| Popover banner | Where the user already is | The version, the running version, and the action, with Skip |
+| Settings footer row | Somewhere you go on purpose | The version, or when the app last looked |
+
+A modal `NSAlert` appears in exactly one case: the user pressed "Check for Updates" themselves and is owed an answer, including "you are up to date". A check that ran on its own never opens one. That is the whole design constraint, and it is the reason `UpdateChecker.check(userInitiated:completion:)` takes the flag but does not itself show anything.
+
+Details worth keeping:
+
+* **The badge is restored from disk before the network is touched.** `start()` calls `refreshFromStoredState()` first, so the dot is correct at launch rather than ten seconds into it. `lastSeenLatestVersion` exists for that and nothing else.
+* **Only a completed check writes `lastUpdateCheckDate`.** A failure leaving it alone is what makes the next hourly poll retry, which is what anyone offline or behind a rate limit wants.
+* **The poll is hourly and asks `UpdateCheckSchedule.isDue`, rather than being a single 24 hour timer.** A Mac sleeps; a day-long timer measures uptime, not elapsed time. A stored date in the future (a clock moved backwards) counts as due, so a bad clock cannot wedge checks until the date comes round again.
+* **Skip means "not this one".** `UpdateAvailabilityPolicy` hides a skipped version and anything older, and surfaces anything newer. "Stop telling me" is the preference, and it is a different question.
+* **`ReleaseVersion` parses prereleases.** The naive `split(".").compactMap { Int($0) }` read `0.1.25-beta.1` as `[0, 1]`, i.e. *older* than `0.1.24`, so a beta would have suppressed the update instead of offering it. Nothing has shipped through that hole, because `/releases/latest` excludes prereleases; the parse is what stops it opening the first time someone tags one.
+* **A Homebrew install is offered the command, not the download.** `UpdateChecker.isHomebrewManaged` looks for a Caskroom receipt under both `/opt/homebrew` and `/usr/local`. Downloading a DMG over a cask-managed copy leaves `brew` believing the old version is installed, and the next `brew upgrade` walks the app backwards. The command goes on the pasteboard, where `ClipboardMonitor` captures it like any other copy, which is correct: the user did copy it.
 
 ### UI Framework
 

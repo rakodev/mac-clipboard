@@ -50,10 +50,13 @@ class MenuBarController: NSObject, ObservableObject {
     private var hotKeyEventHandlerRef: EventHandlerRef?
     private var hotKeyPreferenceCancellable: AnyCancellable?
     private var capturePauseCancellable: AnyCancellable?
+    private var availableUpdateCancellable: AnyCancellable?
     /// True while the Settings recorder is waiting for a key press, which is the one time the
     /// hotkey has to be out of the way. See `setGlobalHotkeyRecording`.
     private var isRecordingGlobalHotkey = false
-    private let updateService: UpdateService
+    /// What the app knows about a newer release. Not private: `ContentView` shows the banner from
+    /// the same state the icon badge is drawn from, so the two cannot disagree.
+    let updateChecker: UpdateChecker
     private var previousApplication: NSRunningApplication?
     private var clickOutsideMonitor: Any?
     private var settingsWindow: NSWindow?
@@ -74,15 +77,17 @@ class MenuBarController: NSObject, ObservableObject {
     
     private lazy var hotKeyID: EventHotKeyID = EventHotKeyID(signature: fourCharCode("ClpM"), id: 1)
     
-    init(clipboardMonitor: ClipboardMonitor, updateService: UpdateService = .shared) {
+    init(clipboardMonitor: ClipboardMonitor, updateChecker: UpdateChecker = .shared) {
         self.clipboardMonitor = clipboardMonitor
-        self.updateService = updateService
+        self.updateChecker = updateChecker
         super.init()
         setupStatusItem()
         setupPopover()
         setupGlobalHotkeyPreferenceObserver()
         setupCapturePauseObserver()
+        setupAvailableUpdateObserver()
         updateGlobalHotkeyRegistration()
+        updateChecker.start()
         
         // Listen for app activation to ensure button remains responsive
         NotificationCenter.default.addObserver(
@@ -111,11 +116,59 @@ class MenuBarController: NSObject, ObservableObject {
             if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: statusItemLabel) {
                 image.isTemplate = true
                 image.size = NSSize(width: 17, height: 17)
-                return clipboardMonitor.isCapturePaused ? Self.slashed(image) : image
+
+                // Pause first, then the badge: the slash is drawn through the clipboard glyph, and
+                // knocking it out after the dot was added would cut a notch through the dot too.
+                var composed = clipboardMonitor.isCapturePaused ? Self.slashed(image) : image
+                if updateChecker.availableUpdate != nil {
+                    composed = Self.badged(composed)
+                }
+                return composed
             }
         }
 
         return nil
+    }
+
+    /// The icon with a dot in its top-right corner, for a release the user has not looked at yet.
+    ///
+    /// This is the only surface that reaches someone working in another app, and it has to say
+    /// "there is something here" without saying it loudly: an update is not urgent, and a menu bar
+    /// is not somewhere to put a red badge for a minor version. So it stays a template image and
+    /// takes the menu bar's own tint, like the glyph it sits on, rather than being coloured.
+    ///
+    /// The canvas is widened rather than the glyph inset, so the clipboard does not visibly shrink
+    /// when an update appears.
+    private static func badged(_ base: NSImage) -> NSImage {
+        let dotDiameter = max(4.0, base.size.width * 0.30)
+        // Only the width grows. A taller image would be centred by the status item and the glyph
+        // would sit low against the menu bar's baseline.
+        let canvas = NSSize(width: base.size.width + dotDiameter * 0.5, height: base.size.height)
+
+        let badgedImage = NSImage(size: canvas, flipped: false) { _ in
+            base.draw(in: NSRect(origin: .zero, size: base.size))
+
+            let dot = NSRect(
+                x: canvas.width - dotDiameter,
+                y: canvas.height - dotDiameter,
+                width: dotDiameter,
+                height: dotDiameter
+            )
+
+            // Knock a ring out from under the dot so it reads as separate from the glyph rather
+            // than as a lump on its corner, the same trick the slash uses.
+            NSGraphicsContext.current?.compositingOperation = .destinationOut
+            NSBezierPath(ovalIn: dot.insetBy(dx: -dotDiameter * 0.22, dy: -dotDiameter * 0.22)).fill()
+
+            NSGraphicsContext.current?.compositingOperation = .sourceOver
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: dot).fill()
+
+            return true
+        }
+
+        badgedImage.isTemplate = true
+        return badgedImage
     }
 
     /// The clipboard with a line struck through it, for a paused capture.
@@ -161,10 +214,26 @@ class MenuBarController: NSObject, ObservableObject {
 
     /// What the icon says about itself, in the tooltip and to VoiceOver. The icon shows the pause
     /// but only the label can say what it means.
+    /// Both states can be true at once, and the icon shows both marks, so the label lists whatever
+    /// applies rather than picking one. Without this the badge is a dot with no explanation, which
+    /// tells a VoiceOver user nothing at all.
     private var statusItemStateLabel: String {
-        guard clipboardMonitor.isCapturePaused else { return statusItemLabel }
-        let format = L10n.string("%@ (capture paused)", comment: "Menu bar button accessibility label while capture is paused")
-        return String(format: format, statusItemLabel)
+        var states: [String] = []
+
+        if clipboardMonitor.isCapturePaused {
+            states.append(L10n.string("capture paused", comment: "Menu bar button state, capture is switched off"))
+        }
+
+        if let update = updateChecker.availableUpdate {
+            let format = L10n.string("update to v%@ available", comment: "Menu bar button state, a newer release exists")
+            states.append(String(format: format, update.version))
+        }
+
+        guard !states.isEmpty else { return statusItemLabel }
+
+        let format = L10n.string("%1$@ (%2$@)", comment: "Menu bar button accessibility label with its current states")
+        let separator = L10n.string(", ", comment: "Separator between menu bar button states")
+        return String(format: format, statusItemLabel, states.joined(separator: separator))
     }
 
     private func configureStatusButton(_ button: NSStatusBarButton) {
@@ -302,7 +371,26 @@ class MenuBarController: NSObject, ObservableObject {
         aboutItem.target = self
         menu.addItem(aboutItem)
 
-        let updateItem = NSMenuItem(title: L10n.string("Check for Updates...", comment: "Menu item title"), action: #selector(checkForUpdates), keyEquivalent: "")
+        // When a release is already known about, the item says so and goes straight to it. Making
+        // the user re-run a check that has already happened, to be told what the badge and the
+        // banner are both showing, is a round trip for nothing.
+        let updateItem: NSMenuItem
+        if let update = updateChecker.availableUpdate {
+            let format = L10n.string("Update to v%@...", comment: "Menu item title when a newer release is available")
+            updateItem = NSMenuItem(
+                title: String(format: format, update.version),
+                action: #selector(showAvailableUpdate),
+                keyEquivalent: ""
+            )
+            let tooltipFormat = L10n.string("You are running v%@", comment: "Menu item tooltip naming the running version")
+            updateItem.toolTip = String(format: tooltipFormat, BuildInfo.shortVersion)
+        } else {
+            updateItem = NSMenuItem(
+                title: L10n.string("Check for Updates...", comment: "Menu item title"),
+                action: #selector(checkForUpdates),
+                keyEquivalent: ""
+            )
+        }
         updateItem.target = self
         menu.addItem(updateItem)
 
@@ -334,44 +422,99 @@ class MenuBarController: NSObject, ObservableObject {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// The user asked, so this one reports back whatever it finds, including "nothing".
+    ///
+    /// A check that runs on its own never gets here: it updates `UpdateChecker.availableUpdate` and
+    /// the three passive surfaces follow. An alert is what someone who pressed a button is owed,
+    /// and it is the only path that shows one.
     @objc func checkForUpdates() {
-        let currentVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
+        updateChecker.check(userInitiated: true) { [weak self] result in
+            guard let self else { return }
 
-        updateService.checkForUpdates(currentVersion: currentVersion) { [weak self] result in
-            DispatchQueue.main.async {
-                guard let self else { return }
+            switch result {
+            case .success(.updateAvailable(_, let latestVersion, let downloadURL)):
+                self.presentAvailableUpdate(version: latestVersion, releaseURL: downloadURL)
 
-                switch result {
-                case .success(.updateAvailable(let currentVersion, let latestVersion, let downloadURL)):
-                    let alert = NSAlert()
-                    alert.messageText = L10n.string("Update Available", comment: "Update available alert title")
-                    let updateFormat = L10n.string("A new version (v%@) is available. You are currently running v%@.", comment: "Update available alert message")
-                    alert.informativeText = String(format: updateFormat, latestVersion, currentVersion)
-                    alert.alertStyle = .informational
-                    alert.addButton(withTitle: L10n.string("Download", comment: "Update alert download button title"))
-                    alert.addButton(withTitle: L10n.string("Later", comment: "Update alert dismiss button title"))
+            case .success(.upToDate(let currentVersion)):
+                let messageFormat = L10n.string("MacClipboard v%@ is the latest version.", comment: "No update available alert message")
+                self.showUpdateAlert(
+                    title: L10n.string("You're Up to Date", comment: "No update available alert title"),
+                    message: String(format: messageFormat, currentVersion)
+                )
 
-                    NSApp.activate(ignoringOtherApps: true)
-                    let response = alert.runModal()
+            case .failure(.cancelled):
+                return
 
-                    if response == .alertFirstButtonReturn {
-                        NSWorkspace.shared.open(downloadURL)
-                    }
-
-                case .success(.upToDate(let currentVersion)):
-                    let messageFormat = L10n.string("MacClipboard v%@ is the latest version.", comment: "No update available alert message")
-                    self.showUpdateAlert(
-                        title: L10n.string("You're Up to Date", comment: "No update available alert title"),
-                        message: String(format: messageFormat, currentVersion)
-                    )
-
-                case .failure(.cancelled):
-                    return
-
-                case .failure(let error):
-                    self.showUpdateAlert(title: "Update Check Failed", message: error.localizedDescription)
-                }
+            case .failure(let error):
+                self.showUpdateAlert(
+                    title: L10n.string("Update Check Failed", comment: "Update check failure alert title"),
+                    message: error.localizedDescription
+                )
             }
+        }
+    }
+
+    /// Opens the release the app already knows about, without checking again.
+    @objc func showAvailableUpdate() {
+        guard let update = updateChecker.availableUpdate else {
+            checkForUpdates()
+            return
+        }
+
+        presentAvailableUpdate(version: update.version, releaseURL: update.releaseURL)
+    }
+
+    /// The one modal in the feature, and only ever after the user asked for it.
+    ///
+    /// A Homebrew install is offered the command instead of a download, because downloading the DMG
+    /// over a cask-managed copy leaves `brew` believing the old version is installed and the next
+    /// `brew upgrade` walks it backwards.
+    private func presentAvailableUpdate(version: String, releaseURL: URL) {
+        let alert = NSAlert()
+        alert.messageText = L10n.string("Update Available", comment: "Update available alert title")
+        alert.alertStyle = .informational
+
+        let isHomebrew = UpdateChecker.isHomebrewManaged
+        let updateFormat = isHomebrew
+            ? L10n.string(
+                "MacClipboard v%1$@ is available. You are running v%2$@, installed with Homebrew, so upgrade it with:\n\n%3$@",
+                comment: "Update available alert message for a Homebrew install"
+            )
+            : L10n.string(
+                "MacClipboard v%1$@ is available. You are running v%2$@.",
+                comment: "Update available alert message"
+            )
+        alert.informativeText = isHomebrew
+            ? String(format: updateFormat, version, BuildInfo.shortVersion, UpdateChecker.homebrewUpgradeCommand)
+            : String(format: updateFormat, version, BuildInfo.shortVersion)
+
+        alert.addButton(withTitle: isHomebrew
+            ? L10n.string("Copy Command", comment: "Update alert button, copy the Homebrew upgrade command")
+            : L10n.string("Download", comment: "Update alert download button title"))
+        alert.addButton(withTitle: L10n.string("Skip This Version", comment: "Update alert button, stop showing this version"))
+        alert.addButton(withTitle: L10n.string("Later", comment: "Update alert dismiss button title"))
+
+        NSApp.activate(ignoringOtherApps: true)
+        let response = alert.runModal()
+
+        switch response {
+        case .alertFirstButtonReturn:
+            let action = updateChecker.performPrimaryAction(
+                for: AvailableUpdate(version: version, releaseURL: releaseURL)
+            )
+            if action == .copiedHomebrewCommand {
+                showUpdateAlert(
+                    title: L10n.string("Command Copied", comment: "Confirmation alert title after copying the upgrade command"),
+                    message: L10n.string(
+                        "Paste it into Terminal to upgrade. MacClipboard restarts itself afterwards, and your history is kept.",
+                        comment: "Confirmation alert message after copying the Homebrew upgrade command"
+                    )
+                )
+            }
+        case .alertSecondButtonReturn:
+            updateChecker.skipAvailableUpdate()
+        default:
+            break
         }
     }
 
@@ -597,6 +740,19 @@ class MenuBarController: NSObject, ObservableObject {
             }
     }
 
+    /// Keeps the badge in step with what the checker knows, for the same reason the pause observer
+    /// above exists: a check completes ten seconds after launch, or a day into a session, and the
+    /// icon is the only surface visible at that moment.
+    private func setupAvailableUpdateObserver() {
+        availableUpdateCancellable = updateChecker.$availableUpdate
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in
+                guard let self, let button = self.statusItem?.button else { return }
+                self.configureStatusButton(button)
+            }
+    }
+
     /// Both halves of the preference re-register: whether there is a hotkey at all, and which one.
     ///
     /// `@Published` fires before the property has taken its new value, so the hop to the main
@@ -761,9 +917,10 @@ class MenuBarController: NSObject, ObservableObject {
             RemoveEventHandler(hotKeyEventHandlerRef)
             self.hotKeyEventHandlerRef = nil
         }
-        updateService.cancel()
+        updateChecker.stop()
         hotKeyPreferenceCancellable = nil
         capturePauseCancellable = nil
+        availableUpdateCancellable = nil
         NotificationCenter.default.removeObserver(self)
         statusItem = nil
         popover = nil

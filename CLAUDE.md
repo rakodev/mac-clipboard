@@ -70,6 +70,7 @@ MacClipboard/
 ├── UserPreferences.swift      # UserPreferencesManager singleton (UserDefaults)
 ├── PersistenceManager.swift   # Core Data stack, save/load items, image storage
 ├── PermissionManager.swift    # Accessibility permission handling
+├── UpdateService.swift        # Release check, ReleaseVersion, UpdateChecker (schedule + state)
 ├── AppInstallation.swift      # Install location, duplicate copies, signing identity
 ├── Logging.swift              # Debug/release logging utility
 └── ClipboardData.xcdatamodeld # Core Data model (PersistedClipboardItem entity)
@@ -183,6 +184,33 @@ So the app handles it itself, and the cask backs it up:
 - The cask's `uninstall quit:` runs before `signal:`, and its `postflight` ends the old process by
   its executable path and waits for it to exit before `open`. `postflight` comes from the *new*
   cask, so a cask fix reaches users who are still on the old app.
+
+## An Update Is Announced, Never Imposed
+
+`UpdateService` performs a check; `UpdateChecker` decides when to run one and remembers the answer.
+Everything the user sees is a reader of one published property, `UpdateChecker.availableUpdate`, so
+the three surfaces cannot disagree: the menu bar icon badge (a template dot, visible from any app),
+the popover banner (version, action, and Skip), and the Settings footer row.
+
+Four rules, and each one is a thing that was explicitly asked for:
+
+- **A background check never opens a window.** A modal `NSAlert` appears only when the user pressed
+  "Check for Updates" themselves, because then they are owed an answer including "you are up to
+  date". `check(userInitiated:completion:)` takes the flag but shows nothing itself; the caller
+  decides. Never add an alert to the automatic path.
+- **The automatic check is switchable off, and says what it sends.** It is the only thing the app
+  does over the network unasked, in an app that sells itself on the clipboard staying local, so
+  `automaticUpdateChecksEnabled` and the Settings copy next to it are load-bearing rather than
+  polite. Dev builds never check automatically; `run.sh` is how they update.
+- **Nothing is downloaded or installed automatically.** A check sets state; the user acts. A
+  Homebrew install is handed `brew upgrade --cask macclipboard` instead of a DMG, because a manual
+  download over a cask-managed copy makes the next `brew upgrade` walk the app backwards.
+- **The badge comes from disk before it comes from the network.** `start()` restores
+  `lastSeenLatestVersion` first, so the dot is right at launch rather than ten seconds into it.
+
+Version comparison goes through `ReleaseVersion`, which understands prereleases: the old
+`compactMap { Int($0) }` read `0.1.25-beta.1` as `[0, 1]` and called it older than `0.1.24`. Design
+notes, including the scheduling and skip rules, are in `docs/DEVELOPMENT.md`.
 
 ## Editing a Copy Never Touches the Original
 
@@ -558,9 +586,16 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
 - `capturePaused`: Bool (default: false), capture switched off by the user until they switch it
   back on; written only by `ClipboardMonitor.setCapturePaused`
 - `clearHistoryOnQuit`: Bool (default: false), the saved history is deleted on an orderly quit
+- `automaticUpdateChecksEnabled`: Bool (default: true), asks GitHub for the latest release tag once
+  a day; the only unprompted network call, and the reason it is switchable
+- `lastUpdateCheckDate`, `lastSeenLatestVersion`, `skippedUpdateVersion`: not toggles, the update
+  check's own state. The version is cached so the badge is right at launch; the skip hides one
+  version and nothing newer
 
 `resetToDefaults()` covers every preference except `excludedBundleIdentifiers`, `capturePaused` and
-`clearHistoryOnQuit`. Emptying that list starts recording clips from whatever the user excluded with
+`clearHistoryOnQuit`. It clears `skippedUpdateVersion` (all that does is bring a banner back, in
+front of the user, with Skip still on it) and leaves `lastUpdateCheckDate` and
+`lastSeenLatestVersion` alone, because those are a cache of what the server said, not preferences. Emptying that list starts recording clips from whatever the user excluded with
 nothing on screen to show it changed, and the entries are removable individually in front of them;
 resuming capture from Reset is the same trap, and the pause is one click away from being lifted
 deliberately; and turning the quit clear off would leave a history the user expected to be gone
@@ -620,6 +655,18 @@ When modifying clipboard functionality:
 - [ ] Switching it off with nothing but favorites saved asks nothing
 - [ ] With "Clear history when MacClipboard quits" on, quitting and relaunching comes back with
       favorites only, and with it off the history is still there
+
+When modifying the update check:
+- [ ] With a newer version cached, the menu bar icon shows a dot, the popover shows a banner naming
+      the version, and the Settings footer says "Update to vX.Y.Z"
+- [ ] None of the three interrupts anything: no alert appears at launch or while working
+- [ ] Skip clears all three at once, and a newer version brings them back
+- [ ] "Check for Updates" while already current says so in an alert, which is the one modal allowed
+- [ ] With automatic checks off, no request is made and the manual check still works
+- [ ] A paused capture plus an available update shows both the slash and the dot, and the
+      accessibility label names both
+- [ ] On a Homebrew install the action copies `brew upgrade --cask macclipboard` instead of opening
+      the release page
 
 When modifying the global hotkey: the checklist is in `docs/DEVELOPMENT.md`.
 
@@ -713,3 +760,4 @@ the only check that needs both the signature and the ticket to be there.
 | Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |
 | Change Copy Merged | `ClipboardMonitor.swift` (`ClipboardMergedCopy`, `copyMerged`), `ContentView.swift` (`ClipboardMergedCopyContent`, `copyMergedSelection`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
+| Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |
