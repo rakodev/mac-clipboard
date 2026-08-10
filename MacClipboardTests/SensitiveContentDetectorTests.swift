@@ -253,6 +253,72 @@ final class SensitiveContentDetectorTests: XCTestCase {
         )
     }
 
+    // MARK: - Polling
+
+    /// The ordinary case, and the one the log must stay quiet for: one copy, one tick, nothing lost.
+    func testOneWriteBetweenTicksMissesNothing() {
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(pasteboardChangeCount: 6, lastSeenChangeCount: 5),
+            0
+        )
+    }
+
+    /// The loss this exists to make visible. Two copies inside one tick leave the count two higher
+    /// while the pasteboard holds only the later clip, so the earlier one is gone with nothing else
+    /// anywhere to say it happened.
+    func testASecondCopyInsideOneTickIsCounted() {
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(pasteboardChangeCount: 7, lastSeenChangeCount: 5),
+            1
+        )
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(pasteboardChangeCount: 12, lastSeenChangeCount: 5),
+            6
+        )
+    }
+
+    /// A count that stood still is no change at all, and one that went backwards is a pasteboard
+    /// server restart. Neither is a clip the user lost, and reporting either as one would put noise
+    /// into the only number there is about how often this really happens.
+    func testAStalledOrRewoundCountIsNotALoss() {
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(pasteboardChangeCount: 5, lastSeenChangeCount: 5),
+            0
+        )
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(pasteboardChangeCount: 2, lastSeenChangeCount: 90),
+            0
+        )
+    }
+
+    /// Copies made while capture was paused were dropped on purpose, so resuming must not then report
+    /// them as clips the polling lost.
+    func testCopiesMadeWhilePausedAreNotReportedAsLost() {
+        let whilePaused = 9
+        let resumed = ClipboardCapturePause.changeCountOnResume(pasteboardChangeCount: whilePaused)
+
+        XCTAssertEqual(
+            ClipboardPolling.missedWriteCount(
+                pasteboardChangeCount: whilePaused,
+                lastSeenChangeCount: resumed
+            ),
+            0
+        )
+    }
+
+    /// The interval is the width of both windows a user can be bitten by: a second copy lost, and a
+    /// clip labelled with the app they switched to. Not a number to raise quietly.
+    func testThePollingIntervalStaysUnderAQuarterOfASecondPerWindow() {
+        XCTAssertGreaterThan(ClipboardPolling.interval, 0)
+        XCTAssertLessThanOrEqual(ClipboardPolling.interval, 0.25)
+    }
+
+    /// The Settings copy interpolates the interval so it cannot drift from the constant, which makes
+    /// how it formats a user-visible detail: a `Text` interpolation of a `Double` reads "0.250000".
+    func testTheIntervalReadsAsCopyRatherThanAFloatingPointLiteral() {
+        XCTAssertEqual(ClipboardPolling.intervalDescription, "0.25")
+    }
+
     /// Both guards off is the default install, and it must not change what is captured.
     func testNothingIsSkippedByDefault() {
         XCTAssertEqual(

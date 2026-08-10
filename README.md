@@ -246,7 +246,7 @@ changes until you turn them on:
   written to disk. They are gone rather than hidden, so a password you wanted for a minute is not
   there either.
 * **Never save clips from these apps** (default: empty): pick apps, by bundle, whose clips are not
-  saved. MacClipboard checks the clipboard every 0.8 seconds, so the app in front when a change is
+  saved. MacClipboard checks the clipboard every 0.25 seconds, so the app in front when a change is
   noticed is a good guess at the source of the clip, not a certainty: copy and switch apps within
   the same moment and the clip is saved.
 

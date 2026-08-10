@@ -234,6 +234,62 @@ enum ClipboardCapturePause {
     }
 }
 
+/// How often the pasteboard is asked whether anything changed.
+///
+/// One named place rather than a literal inside `startMonitoring`, and deliberately not a preference:
+/// a slider would ask the user to trade responsiveness against battery on numbers they cannot see,
+/// and a menu bar app pays for every pixel of UI.
+///
+/// The interval is the width of two windows the user can be bitten by, and both shrink with it:
+///
+/// - **A second copy inside one tick is lost.** `changeCount` moves once per write, so two copies
+///   between two reads leave it higher by two while the pasteboard holds only the later clip. There
+///   is no API that reads back a superseded clip, so the earlier one is gone.
+/// - **The recorded source app can be the wrong one.** `captureRead` names whichever app was in
+///   front when the tick noticed the change, so copying and then switching apps faster than a tick
+///   labels the clip with the app the user switched to.
+///
+/// Neither window ever closes: `NSPasteboard` has no change notification, so polling is the only
+/// mechanism there is. What makes a short tick affordable is that a tick that finds nothing costs one
+/// `changeCount` read, while reading the pasteboard's *contents* (which a Universal Clipboard item
+/// can make slow) still happens only once the count has moved.
+enum ClipboardPolling {
+    /// Seconds between reads of `NSPasteboard.changeCount`.
+    ///
+    /// 0.25 s, from the measurement in `docs/DEVELOPMENT.md` rather than by feel: it narrows both
+    /// windows above to under a third of the 0.8 s this replaced, and cost 0.02 more of a percentage
+    /// point of one core when the app sits idle (0.030% to 0.050%, measured over 300 s). It is also the
+    /// cadence `pendingCaptureRetryDelay` already polls a staged write at, so the app has one answer to
+    /// "soon" instead of two.
+    static let interval: TimeInterval = 0.25
+
+    /// The interval as it appears in user-facing copy, so a sentence in Settings cannot drift from the
+    /// constant it describes.
+    ///
+    /// Formatted rather than interpolated directly: a `Text` interpolation builds a
+    /// `LocalizedStringKey`, which sends a `Double` through `%lf` and would put "every 0.250000
+    /// seconds" in front of the user.
+    static var intervalDescription: String {
+        String(format: "%g", interval)
+    }
+
+    /// Clips this read can prove it will never see, given the change count then and now.
+    ///
+    /// The count moves once per write and the pasteboard keeps only the last one, so everything
+    /// between the two reads except that last write is unrecoverable. Zero for the ordinary single
+    /// write, and zero for a count that stood still or went backwards, which is a pasteboard server
+    /// restart rather than a loss.
+    ///
+    /// An upper bound on clips lost rather than a count of them. `clearContents()` is what increments
+    /// the count, so the ordinary staged write (clear, then declare types and fill them in later, the
+    /// case `attemptPendingCapture` exists for) still moves it exactly once, but an app that clears the
+    /// pasteboard twice for a single copy moves it twice and reads here as a clip lost. That is why
+    /// this drives a log and not a warning to the user.
+    static func missedWriteCount(pasteboardChangeCount: Int, lastSeenChangeCount: Int) -> Int {
+        max(0, pasteboardChangeCount - lastSeenChangeCount - 1)
+    }
+}
+
 /// The formatting a text clip carries beside its plain text.
 ///
 /// Two extra flavours, RTF and HTML, and only for text items. Both are needed because apps split
@@ -682,6 +738,12 @@ class ClipboardMonitor: ObservableObject {
     /// observe it. Changed only through `setCapturePaused`.
     @Published private(set) var isCapturePaused: Bool
     private var changeCount: Int = 0
+    /// Whether `changeCount` holds a count read from the pasteboard rather than its initial 0.
+    ///
+    /// Only the missed-write log needs it: at launch the pasteboard's count is however many writes the
+    /// machine has seen since it booted, so the first read would report thousands of missed clips
+    /// every launch and the number would stop being worth reading.
+    private var hasReadChangeCount = false
     private var timer: Timer?
     private var isPausing = false
     private var userPreferences: UserPreferencesManager
@@ -753,8 +815,9 @@ class ClipboardMonitor: ObservableObject {
         // would poll the pasteboard twice a tick for ever.
         stopMonitoring()
 
-        // Check clipboard every 0.8 seconds (balanced between responsiveness and CPU usage)
-        let monitoringTimer = Timer(timeInterval: 0.8, repeats: true) { [weak self] _ in
+        // `ClipboardPolling.interval` is the one place the cadence is written down; see there for why
+        // it is not a preference and what the width of a tick costs the user.
+        let monitoringTimer = Timer(timeInterval: ClipboardPolling.interval, repeats: true) { [weak self] _ in
             self?.checkClipboard()
         }
         RunLoop.main.add(monitoringTimer, forMode: .common)
@@ -869,7 +932,8 @@ class ClipboardMonitor: ObservableObject {
 
         // Check if clipboard content changed
         if ClipboardCapturePause.hasUnseenClip(pasteboardChangeCount: pasteboard.changeCount, lastSeenChangeCount: changeCount) {
-            changeCount = pasteboard.changeCount
+            logMissedWrites(pasteboardChangeCount: pasteboard.changeCount)
+            adoptChangeCount(pasteboard.changeCount)
             cancelPendingCapture()
 
             // Decided before the pasteboard is read, and never queued for a retry: a skipped clip
@@ -905,11 +969,11 @@ class ClipboardMonitor: ObservableObject {
 
     /// The capture guard's inputs, gathered at the moment a change is noticed.
     ///
-    /// `frontmostApplication` is read here and nowhere else on this path. With 0.8 s polling it is
-    /// a good guess at the source of the clip rather than a fact, which is the known limit stated in
-    /// the Settings copy and the reason `ClipboardSource` says not to sharpen it with activation
-    /// history; the concealed-type check beside it is exact, because the source app sets that
-    /// marker itself.
+    /// `frontmostApplication` is read here and nowhere else on this path. One tick of
+    /// `ClipboardPolling.interval` after the copy at worst, so it is a good guess at the source of the
+    /// clip rather than a fact, which is the known limit stated in the Settings copy and the reason
+    /// `ClipboardSource` says not to sharpen it with activation history; the concealed-type check
+    /// beside it is exact, because the source app sets that marker itself.
     private func captureRead(for pasteboard: NSPasteboard) -> CaptureRead {
         let frontmostBundleIdentifier = ClipboardSource.storableBundleIdentifier(
             NSWorkspace.shared.frontmostApplication?.bundleIdentifier
@@ -924,6 +988,39 @@ class ClipboardMonitor: ObservableObject {
             ),
             sourceBundleIdentifier: frontmostBundleIdentifier
         )
+    }
+
+    /// The one place `changeCount` is assigned, so every count the app adopts (a capture, a resume,
+    /// the app's own write) is also the baseline the next tick measures its delta against.
+    private func adoptChangeCount(_ count: Int) {
+        changeCount = count
+        hasReadChangeCount = true
+    }
+
+    /// Says so when a tick finds the pasteboard has been written more than once since the last read.
+    ///
+    /// The point is to turn "a fast second copy is lost" from an argument into a number: without this
+    /// the loss is invisible in use, because the clip that went missing left nothing behind. Debug
+    /// level on purpose, so it is a dev-build measurement and how often a user copies twice in a
+    /// quarter of a second is not written to the unified log, where it would outlive the process.
+    ///
+    /// It says "since the last read" rather than naming a tick, and the difference matters when
+    /// reading the number: App Nap can stretch a timer well past its interval, so a gap that produced
+    /// a jump is at least one tick and occasionally much more.
+    private func logMissedWrites(pasteboardChangeCount: Int) {
+        guard hasReadChangeCount else { return }
+
+        let missed = ClipboardPolling.missedWriteCount(
+            pasteboardChangeCount: pasteboardChangeCount,
+            lastSeenChangeCount: changeCount
+        )
+        guard missed > 0 else { return }
+
+        Logging.debug("""
+            ⏱️ changeCount \(changeCount) → \(pasteboardChangeCount) since the last read \
+            (tick \(ClipboardPolling.interval)s): \(missed) clip(s) written before the current one \
+            cannot be recovered
+            """)
     }
 
     private func logSkippedCapture(_ decision: ClipboardCapturePolicy.Decision) {
@@ -1036,9 +1133,9 @@ class ClipboardMonitor: ObservableObject {
         } else {
             // Before the timer, never after: the first tick would otherwise see a change count
             // that moved while capture was off and record the clip the pause existed to keep out.
-            changeCount = ClipboardCapturePause.changeCountOnResume(
+            adoptChangeCount(ClipboardCapturePause.changeCountOnResume(
                 pasteboardChangeCount: NSPasteboard.general.changeCount
-            )
+            ))
             cancelPendingCapture()
             startMonitoring()
             Logging.info("▶️ Clipboard capture resumed")
@@ -1450,7 +1547,7 @@ class ClipboardMonitor: ObservableObject {
         }
         
         // Update change count to match current state
-        changeCount = pasteboard.changeCount
+        adoptChangeCount(pasteboard.changeCount)
         
         // Move item to top of history
         DispatchQueue.main.async {

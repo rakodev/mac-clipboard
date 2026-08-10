@@ -64,7 +64,7 @@ MacClipboard/
 ├── Appearance.swift           # AppearancePreference: System/Light/Dark, and the one NSApp.appearance
 ├── BuildInfo.swift            # Build channel (Dev/Release), bundle id, version
 ├── GlobalHotkey.swift         # GlobalHotkeyShortcut: key code + modifiers, validation, labels
-├── ClipboardMonitor.swift     # Clipboard polling (0.8s interval), history management
+├── ClipboardMonitor.swift     # Clipboard polling (`ClipboardPolling.interval`), history management
 ├── MenuBarController.swift    # Status bar item, popover, global hotkey registration
 ├── ContentView.swift          # Main UI: filter tabs, search, item list, preview
 ├── SettingsView.swift         # Settings panel UI
@@ -329,7 +329,7 @@ remains the app's only unprompted network call. Design notes are in `docs/DEVELO
 
 `sourceBundleIdentifier` is the app that was in front when the change was noticed. The pasteboard
 carries no author, so `NSWorkspace.shared.frontmostApplication` at detection time is the only answer
-there is, and with 0.8 s polling it is a good guess rather than a fact. `ClipboardSource` holds the
+there is, and with polling it is a good guess rather than a fact. `ClipboardSource` holds the
 rule, the row shows the app's icon and the preview its name. Five things it depends on:
 
 - **One read answers both questions.** `captureRead(for:)` samples the frontmost app once and hands
@@ -365,8 +365,9 @@ rule, the row shows the app's icon and the preview its name. Five things it depe
   write there trips, since an edit, a merge, a split and text read from an image all have no source.
 
 Do not sharpen the guess with `NSWorkspace.didActivateApplicationNotification` history; that is a
-heuristic on a heuristic. The honest way to narrow the window is a shorter tick, which is task 15 in
-`docs/BACKLOG.md`. Design notes are in `docs/DEVELOPMENT.md`.
+heuristic on a heuristic. The only honest way to narrow the window is a shorter tick, and
+`ClipboardPolling.interval` is that tick, named in one place and measured (see below). Design notes
+are in `docs/DEVELOPMENT.md`.
 
 ## A Clip That Is a Colour Shows the Colour
 
@@ -607,12 +608,13 @@ The guard runs in `checkClipboard`, before the pasteboard is read, and its resul
 for a retry. Three things it depends on:
 
 - **`changeCount` has already moved when a skip is decided**, so a skip is final rather than
-  reconsidered every 0.8 s.
+  reconsidered on the next tick.
 - **`attemptPendingCapture` re-checks the concealed type but not the app.** The retry path exists
   because some apps write a clip in stages, so the concealed type can appear after the change count
   moved. The frontmost app cannot be re-read the same way: by then the user may have switched apps,
   which answers a different question. The app verdict is made once, when the change is noticed.
-- **The frontmost app is a guess, and the Settings copy says so.** With 0.8 s polling,
+- **The frontmost app is a guess, and the Settings copy says so.** One tick of
+  `ClipboardPolling.interval` after the copy at worst,
   `NSWorkspace.shared.frontmostApplication` at detection time is a good guess at the source of a
   clip, not a fact. Do not try to improve it with heuristics over
   `NSWorkspace.didActivateApplicationNotification` history; the honest sentence is "clips copied
@@ -636,8 +638,8 @@ Three things it depends on:
 - **Resuming adopts the pasteboard's current change count, before the timer restarts**
   (`ClipboardCapturePause.changeCountOnResume`). `changeCount` still holds the last clip that was
   captured, so without this the first tick after resuming sees a different count and records the
-  very clip the user paused in order not to record, which is the whole feature undone in 0.8 s.
-  The pending-capture retry is dropped on both edges for the same reason.
+  very clip the user paused in order not to record, which is the whole feature undone a quarter of a
+  second later. The pending-capture retry is dropped on both edges for the same reason.
 - **The state is readable from outside the popover.** The menu bar icon becomes a clipboard with a
   line struck through it, composed in `MenuBarController.slashed(_:)` because SF Symbols has no
   slashed clipboard; swapping to a generic `pause` glyph would cost the user the one thing that
@@ -792,6 +794,20 @@ When modifying clipboard functionality:
 - [ ] Switching it off with nothing but favorites saved asks nothing
 - [ ] With "Clear history when MacClipboard quits" on, quitting and relaunching comes back with
       favorites only, and with it off the history is still there
+
+When modifying the polling interval (`ClipboardPolling`), run from Xcode so `Logging.debug` reaches a
+console:
+- [ ] An ordinary copy is captured and prints no ⏱️ line, at launch as well as later: the launch tick
+      compares against nothing and must not report the machine's whole change count as lost clips
+- [ ] Two writes inside one tick (`printf 'a' | pbcopy; printf 'b' | pbcopy`) leave the second in
+      history and print one ⏱️ line saying one clip could not be recovered
+- [ ] Pausing, copying, then resuming captures nothing and prints no ⏱️ line, because the resume
+      adopted the pasteboard's count
+- [ ] Pasting from MacClipboard prints no ⏱️ line: the app's own write is adopted, not counted
+- [ ] Copying and immediately switching apps still names the app the clip was copied from, more often
+      than it did at the previous interval
+- [ ] The Settings copy under Never save clips from these apps names the new interval, since it
+      interpolates it
 
 When modifying the update check:
 - [ ] With a newer version cached, the menu bar icon shows a dot, the popover shows a banner naming

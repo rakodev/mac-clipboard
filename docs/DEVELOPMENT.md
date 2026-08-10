@@ -108,17 +108,95 @@ MacClipboard/
 
 ### Clipboard Monitoring
 
-Uses `NSPasteboard.general` with change count polling every 0.8 seconds for reliable clipboard tracking.
+`NSPasteboard` has no change notification, so polling `changeCount` is the only mechanism there is.
+`ClipboardPolling` (in `ClipboardMonitor.swift`) is the one place the cadence is written down, and
+`startMonitoring` reads it from there rather than holding a literal.
 
 ```swift
-// Polling loop checks for clipboard changes
-Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { _ in
-    let currentCount = NSPasteboard.general.changeCount
-    if currentCount != lastChangeCount {
-        // Process new clipboard content
-    }
+let monitoringTimer = Timer(timeInterval: ClipboardPolling.interval, repeats: true) { [weak self] _ in
+    self?.checkClipboard()   // reads changeCount; reads contents only once it has moved
 }
 ```
+
+**The interval is the width of two windows, and a user can be bitten by both.** A second copy made
+inside one tick is lost: `changeCount` moves once per write and the pasteboard keeps only the last
+clip, and there is no API that reads a superseded clip back. That is measured rather than assumed. On
+a private named pasteboard (never `NSPasteboard.general`, which would put fixtures on the developer's
+own clipboard and be captured by the running builds), one `clearContents()` plus a write moves the
+count by exactly 1, two writes move it by 2, and only the later string can be read afterwards. The
+second window is the source app: `captureRead` samples `frontmostApplication` when the tick notices
+the change, so copy-then-⌘-tab inside one tick labels the clip with the app the user switched to.
+
+**It is not a preference.** A slider would ask the user to trade responsiveness against battery on
+numbers they cannot see, and a menu bar app pays for every pixel of UI. It does appear in user-facing
+copy, because the excluded-apps sentence in Settings admits the source app is a guess and the interval
+is the size of that admission, so it interpolates `ClipboardPolling.intervalDescription` rather than
+the `TimeInterval`: a `Text` interpolation builds a `LocalizedStringKey`, which sends a `Double`
+through `%lf` and would tell the user the clipboard is checked "every 0.250000 seconds".
+
+**0.25 s came from measuring, not from feel.** Two numbers, because they answer different questions.
+
+The marginal cost of a tick that finds nothing is one `changeCount` read: **0.75 µs**, measured over
+200,000 reads. That is 0.9 µs of CPU per second at a 0.8 s tick and 3.0 µs at 0.25 s, i.e. 0.0003% of
+one core. The expensive half of the path is reading the pasteboard's *contents*, which a Universal
+Clipboard item can make slow, and `checkClipboard` still only does that once the count has moved. Keep
+that shape: it is what makes a short tick affordable at all.
+
+Process-level idle cost of the dev build, popover closed, nothing copied, 300 s window, CPU time from
+`ps -o time` and wakeups from `top -stats idlew`:
+
+| Interval | Ticks in the window | CPU used in 302 s idle | Share of one core |
+|----------|--------------------|------------------------|-------------------|
+| 0.8 s (before) | 377 | 0.09 s | 0.030% |
+| 0.25 s (now) | 1208 | 0.18 s | 0.050% |
+
+**So the whole change costs 0.02 of a percentage point of one core**, about 0.3 ms of CPU per second of
+wall clock. The two rows agree on a model, which is why they are worth trusting at this resolution:
+831 extra ticks bought 0.09 s, so a tick costs ~0.11 ms, and 0.11 ms times the tick count plus ~50 ms
+of other idle work per 300 s reproduces both rows. A tick therefore costs about 140 times the 0.75 µs
+read; the timer firing and the run-loop pass around it are the cost, not the pasteboard.
+
+Both process numbers include everything else the app does while idle (the status item, the observers,
+`UserDefaults` notifications), so they are a ceiling on the poll rather than the poll itself; the
+microbenchmark above is what isolates it. `ps` resolves CPU time to 10 ms, which on a 90 ms reading is
+±10%, so treat these as one significant figure. Idle wakeups came back unusable and are not quoted:
+`top`'s IDLEW counts only wakeups out of a deep idle state, and a machine being worked on is never in
+one, which is why both rows report single digits over five minutes. Measuring that properly needs
+`powermetrics`, which needs sudo. The scripts were throwaway; both are five lines and are described
+precisely enough above to write again.
+
+**Why not shorter, given the cost is this small.** The same model puts a 0.1 s tick at ~0.11% of one
+core, which is still small but is 3.6 times this one, and its extra 6 wakeups a second are the part of
+the bill this measurement cannot see: what a repeating timer really costs on battery is holding the CPU
+out of its deeper idle states, not the microseconds it spends awake. So the choice is the widest tick
+that closes the window enough, and 0.25 s closes it: two deliberate ⌘C presses need a selection change
+between them, which nobody does inside a quarter of a second. Below that the losses left are
+programmatic writers, such as a script looping `pbcopy`, and no interval wins those. 0.25 s is also what
+`pendingCaptureRetryDelay` already polls a staged write at, so the app has one answer to "soon" instead
+of two.
+
+**Why not adaptive, and no `tolerance`.** A tick that runs fast while the user is active and backs off
+otherwise buys nothing here: the cost it would avoid is 0.3 ms of CPU a second, and it would make the
+source-app guess depend on how recently the user typed, which is a second heuristic behind the first.
+`Timer.tolerance` is left unset for the same reason. Coalescing wakeups would widen the worst-case
+window past the interval it advertises, and the measurement gives nothing worth buying back.
+
+**The drop is now observable, which was the first half of the work.** `logMissedWrites` compares the
+delta against the last seen count and says so when the pasteboard was written more than once between
+two reads, because otherwise a lost clip leaves nothing behind: it is invisible in use and unmeasured
+in development. Two details it depends on. It is `Logging.debug`, so it is a dev-build number on
+stdout and how often a user copies twice in a quarter second is never written to the unified log,
+where it would outlive the process. And it is skipped until `changeCount` holds a real reading
+(`hasReadChangeCount`): at launch the count starts at 0 while the pasteboard's is however many writes
+the machine has seen since boot, so the first tick would otherwise report thousands of lost clips
+every launch and the number would stop being worth reading. `adoptChangeCount` is the single writer of
+`changeCount` for that reason, so a capture, a resume and the app's own write all leave a usable
+baseline behind.
+
+`ClipboardPolling.missedWriteCount` is an upper bound on clips lost rather than a count of them, and
+the log says "cannot be recovered" only about the writes it can prove happened. A staged writer that
+clears the pasteboard twice for one user copy would inflate it; the ordinary staged write does not,
+since `clearContents()` is what increments the count.
 
 ### Content Support
 
@@ -447,13 +525,14 @@ icon says "that is the thing I copied out of Slack" faster than the first line o
 
 **The pasteboard has no author, so this is a guess and the code says so everywhere.** `NSPasteboard`
 carries no metadata about which process wrote a clip. The only signal available is
-`NSWorkspace.shared.frontmostApplication` at the moment the change count moves, and with 0.8 s
-polling a user who copies and switches apps inside the same tick gets the wrong app on the row. That
-limit was already stated in the excluded-apps copy in Settings, because the exclusion list runs on
-the same guess; the icon's tooltip now states it too, since the row is where a user meets it. A wrong
-app on a row is the new failure this feature introduces, and the honest way to narrow the window is a
-shorter tick (task 15 in `BACKLOG.md`), not activation-notification history, which would be a
-heuristic layered on a heuristic and would make the failures harder to reason about rather than rarer.
+`NSWorkspace.shared.frontmostApplication` at the moment the change count moves, so a user who copies
+and switches apps inside the same tick gets the wrong app on the row. That limit was already stated in
+the excluded-apps copy in Settings, because the exclusion list runs on the same guess; the icon's
+tooltip now states it too, since the row is where a user meets it. A wrong app on a row is the new
+failure this feature introduces, and the only honest way to narrow the window is a shorter tick, which
+is `ClipboardPolling.interval` and why it went to 0.25 s (see the polling notes above), not
+activation-notification history, which would be a heuristic layered on a heuristic and would make the
+failures harder to reason about rather than rarer.
 
 **One read, two answers.** `ClipboardMonitor.captureRead(for:)` returns a `CaptureRead`, the decision
 and the identifier together, off a single `NSWorkspace` call. Asking twice would let the two disagree:
@@ -900,7 +979,9 @@ PRs welcome for:
 
 `Logging.info` goes to the unified log at `notice` level, so an installed release build can be
 inspected after the fact. `Logging.debug` stays on stdout in Debug builds only, because verbose
-messages can reference clipboard content and must not persist anywhere.
+messages can reference clipboard content and must not persist anywhere. Nothing collects that stdout
+for the copy `run.sh` installs, so reading a debug line means running from Xcode, which builds the
+`.debug` bundle id and keeps its own store and preferences.
 
 ```bash
 # Installed release build

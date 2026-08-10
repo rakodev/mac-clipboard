@@ -622,8 +622,9 @@ struct ExcludedAppsSection: View {
                 }
             }
 
-            // The honest version of the limit rather than a claim the polling cannot support.
-            Text("Copy while one of these apps is in front and the clip is not saved. MacClipboard checks the clipboard every 0.8 seconds, so the app in front when a change is noticed is a good guess at where the clip came from, not a certainty: copy and switch apps within the same moment and the clip is saved. The setting above does not depend on this guess, because the source app marks those clips itself.")
+            // The honest version of the limit rather than a claim the polling cannot support. The
+            // interval is interpolated so this sentence cannot drift from what the app actually does.
+            Text("Copy while one of these apps is in front and the clip is not saved. MacClipboard checks the clipboard every \(ClipboardPolling.intervalDescription) seconds, so the app in front when a change is noticed is a good guess at where the clip came from, not a certainty: copy and switch apps within the same moment and the clip is saved. The setting above does not depend on this guess, because the source app marks those clips itself.")
                 .font(.caption)
                 .foregroundColor(.secondary)
 

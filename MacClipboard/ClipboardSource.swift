@@ -8,11 +8,12 @@ import AppKit
 /// `ClipboardCapturePolicy`, so the guard that may drop the clip and the source recorded on it can
 /// never disagree about which app was in front.
 ///
-/// With 0.8 s polling that is a good guess rather than a fact, exactly as the excluded-apps copy in
-/// Settings already says: copy and switch apps inside the same moment and the recorded app is the
-/// wrong one. Do not try to sharpen it with `NSWorkspace.didActivateApplicationNotification`
-/// history, which is a heuristic layered on a heuristic; the honest way to narrow the window is a
-/// shorter tick, which is task 15 in `docs/BACKLOG.md`.
+/// With polling that is a good guess rather than a fact, exactly as the excluded-apps copy in
+/// Settings already says: copy and switch apps inside the same tick and the recorded app is the wrong
+/// one. `ClipboardPolling.interval` is the width of that window, and narrowing it is the only honest
+/// way to make the guess better; it went from 0.8 s to 0.25 s for this reason among others. Do not try
+/// to sharpen it with `NSWorkspace.didActivateApplicationNotification` history, which is a heuristic
+/// layered on a heuristic.
 ///
 /// Only the bundle identifier is stored, as `excludedBundleIdentifiers` does. The name and the icon
 /// are resolved at display time by `ClipboardSourceAppCatalog`, so an app the user has since
