@@ -48,20 +48,8 @@ The numbers are stable identifiers, not positions: a completed task leaves a gap
 renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or `FOLLOWUPS.md` keeps
 meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
 (deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
-(keeping the formatting a clip was copied with) were all completed on 2026-08-09.
-
-### 9. Multiple selected items cannot be pasted together
-
-`ContentView` already supports multi-select (Cmd+Backspace deletes a selection), so the missing
-piece is one action rather than a feature: join the selected text items and put the result on the
-pasteboard as a new clip. This is the cheap answer to the "copy several things, paste them into one
-place" request, and it lands without a new mode, a new indicator or a new state machine, which is
-what the sequential paste stack in `FOLLOWUPS.md` would need.
-
-Done means: a "Copy merged" action with a key and a context menu entry; joining in the order shown
-in the list, top to bottom, stated in the UI so it is predictable; a separator that is a newline;
-non-text items in the selection either skipped with a count shown or the action disabled, decided
-once and applied consistently; and the merged clip entering history as an ordinary new item.
+(keeping the formatting a clip was copied with) were all completed on 2026-08-09. Task 9 (merging a
+selection into one clip) was completed on 2026-08-10.
 
 ### 10. A multi-line clip cannot be split into separate items
 

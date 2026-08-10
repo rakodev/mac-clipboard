@@ -31,6 +31,7 @@
 		B0TEST000000000000000003 /* UpdateServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000013 /* UpdateServiceTests.swift */; };
 		B0TEST000000000000000007 /* GlobalHotkeyShortcutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */; };
 		B0TEST000000000000000008 /* RichTextClipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000018 /* RichTextClipTests.swift */; };
+		B0TEST000000000000000009 /* MergedCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000019 /* MergedCopyTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -71,6 +72,7 @@
 		B0TEST000000000000000013 /* UpdateServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateServiceTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalHotkeyShortcutTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000018 /* RichTextClipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextClipTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000019 /* MergedCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergedCopyTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -140,6 +142,7 @@
 				B0TEST000000000000000014 /* FavoritesExportTests.swift */,
 				B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */,
 				B0TEST000000000000000018 /* RichTextClipTests.swift */,
+				B0TEST000000000000000019 /* MergedCopyTests.swift */,
 				B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */,
 				B0TEST000000000000000016 /* PersistenceStoreTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
@@ -273,6 +276,7 @@
 				B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */,
 				B0TEST000000000000000007 /* GlobalHotkeyShortcutTests.swift in Sources */,
 				B0TEST000000000000000008 /* RichTextClipTests.swift in Sources */,
+				B0TEST000000000000000009 /* MergedCopyTests.swift in Sources */,
 				B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */,
 				B0TEST000000000000000006 /* PersistenceStoreTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,

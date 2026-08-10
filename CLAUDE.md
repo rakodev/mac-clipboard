@@ -221,6 +221,22 @@ pasteboard plus copies the user made deliberately. Five things this depends on:
   item cannot be edited at all until it is revealed. Content is never trimmed (whitespace in a clip
   is content, unlike in a note), and favorite and note are not inherited.
 
+### Copy Merged Follows the Same Model
+
+`Cmd+M`, and the row's context menu, join a multi-selection into one new clip
+(`ClipboardMonitor.copyMerged` → `ClipboardMergedCopy`). Same rules as the editor: sources untouched,
+new item, masking only gained, nothing trimmed. Three things that are its own:
+
+- **The order is the list's order**, so `plan(forSelectionIn:selectedIds:)` takes `filteredItems`
+  rather than the `Set<UUID>`, which has none. The action's title says "Top to Bottom" before it runs.
+- **Non-text items are skipped, never dropped silently.** The count appears in the menu title and
+  again in the status banner afterwards.
+- **It writes the pasteboard**, unlike `saveEditedText`, which deliberately does not. The action is
+  called Copy. A merged clip carries no RTF or HTML: splicing several documents would produce a
+  flavour claiming to be what the user copied.
+
+Design notes are in `docs/DEVELOPMENT.md`.
+
 ## A Text Clip Keeps Its Formatting, and the Plain Text Stays Its Content
 
 `ClipboardRichText` holds the whole rule. A text clip stores the pasteboard's RTF *and* HTML beside
@@ -497,6 +513,8 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 | `Cmd+V` | Reveal sensitive item |
 | `Cmd+N` | Focus note field |
 | `Cmd+Z` | Full-size image preview |
+| `Cmd+Click` | Add an item to the selection |
+| `Cmd+M` | Copy the selection merged, top to bottom |
 | `Cmd+Backspace` | Delete item(s) |
 | `Escape` | Close popover |
 
@@ -595,6 +613,18 @@ When modifying UI:
 - [ ] Multi-select deletion works
 - [ ] Image preview opens with Cmd+Z
 
+When modifying Copy Merged:
+- [ ] Cmd-click three text items, press Cmd+M: one new item at the top holds all three joined with
+      newlines, in the order they were shown, and the three originals are unchanged
+- [ ] Pasting straight into another app gives the same joined text
+- [ ] Right-clicking any row offers the same action, with the count in its title, and with nothing
+      selected the entry is greyed and says how to make a selection
+- [ ] Selecting an image alongside two text items merges the two and reports 1 skipped
+- [ ] Selecting one text item and one image offers nothing to merge
+- [ ] A merge that includes a hidden item is hidden, and the popover switches to All to show it
+- [ ] Merging text that is already the top item moves it rather than adding a second copy, and the
+      pasteboard still gets it
+
 When modifying the editor:
 - [ ] Clicking the preview text opens it with the caret where the click landed
 - [ ] Dragging over the preview text selects it and does not open the editor; Cmd+C copies it
@@ -659,4 +689,5 @@ the only check that needs both the signature and the ticket to be there.
 | Update data model | `ClipboardData.xcdatamodeld`, `PersistenceManager.swift`, `ClipboardMonitor.swift` |
 | Change UI layout | `ContentView.swift` |
 | Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |
+| Change Copy Merged | `ClipboardMonitor.swift` (`ClipboardMergedCopy`, `copyMerged`), `ContentView.swift` (`ClipboardMergedCopyContent`, `copyMergedSelection`) |
 | Modify menu bar behavior | `MenuBarController.swift` |

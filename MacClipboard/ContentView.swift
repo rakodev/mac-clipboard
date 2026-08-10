@@ -114,8 +114,8 @@ struct ContentView: View {
     @State private var editText: String = ""
     @State private var editDraftRestored = false
     @State private var showDiscardEditConfirmation = false
-    @State private var editStatus: ClipboardEditStatus?
-    @State private var editStatusTask: Task<Void, Never>?
+    @State private var actionStatus: ClipboardActionStatus?
+    @State private var actionStatusTask: Task<Void, Never>?
     @State private var pendingSelectionId: UUID?
     @State private var keyFocusToken = 0
     @State private var editorFocusToken = 0
@@ -193,10 +193,10 @@ struct ContentView: View {
         let listHeight = CGFloat(itemsToShow) * itemHeight
 
         // Post-save confirmation line (when shown)
-        let editStatusHeight: CGFloat = editStatus == nil ? 0 : 22
+        let actionStatusHeight: CGFloat = actionStatus == nil ? 0 : 22
 
         // Calculate total height (no additional preview height since it's now horizontal)
-        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + capturePausedHeight + editStatusHeight + listHeight
+        let totalHeight = baseHeight + permissionHeight + hotkeyWarningHeight + capturePausedHeight + actionStatusHeight + listHeight
 
         // Set a minimum height to ensure preview is always visible
         // This is especially important when there's only 1 item
@@ -223,8 +223,8 @@ struct ContentView: View {
                 searchBarView
                 filterPickerView
 
-                if let editStatus {
-                    ClipboardEditStatusBanner(status: editStatus)
+                if let actionStatus {
+                    ClipboardActionStatusBanner(status: actionStatus)
                 }
             }
 
@@ -348,7 +348,7 @@ struct ContentView: View {
             // Cancel any pending tasks
             searchDebounceTask?.cancel()
             filterTask?.cancel()
-            editStatusTask?.cancel()
+            actionStatusTask?.cancel()
             // Clear revealed sensitive items when popover closes
             revealedSensitiveIds.removeAll()
         }
@@ -752,7 +752,12 @@ struct ContentView: View {
     }
 
     private var clipboardListView: some View {
-        ScrollViewReader { proxy in
+        // Worked out once per rebuild rather than per row: every row's context menu describes the
+        // same selection, and the plan carries the joined text.
+        let plan = mergePlan
+        let mergeActionTitle = ClipboardMergedCopyContent.actionTitle(for: plan)
+
+        return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -788,7 +793,10 @@ struct ContentView: View {
                                         revealedSensitiveIds.insert(item.id)
                                     }
                                 },
-                                timeAgoText: timeAgoText(for: item)
+                                timeAgoText: timeAgoText(for: item),
+                                mergeActionTitle: mergeActionTitle,
+                                canCopyMerged: plan != nil,
+                                onCopyMerged: { copyMergedSelection() }
                             )
                             .id(item.id)
                             .onAppear {
@@ -868,7 +876,7 @@ struct ContentView: View {
         isSearchFocused = false
         isNoteFocused = false
         showShortcuts = false
-        clearEditStatus()
+        clearActionStatus()
 
         editSource = item
         editText = item.fullText
@@ -948,30 +956,65 @@ struct ContentView: View {
         }
     }
 
-    private func finishSave(id: UUID, status: ClipboardEditStatus, thenPaste: Bool) {
+    private func finishSave(id: UUID, status: ClipboardActionStatus, thenPaste: Bool) {
         endEditing(selecting: nil)
 
-        guard let saved = clipboardMonitor.clipboardHistory.first(where: { $0.id == id }) else {
-            showEditStatus(status)
-            return
-        }
-
-        if thenPaste {
+        if thenPaste, let saved = clipboardMonitor.clipboardHistory.first(where: { $0.id == id }) {
             pasteItem(saved)
             return
         }
 
-        // Show the row that was just written whatever tab or search the user was on: a save that
-        // lands outside the current filter looks like a save that did nothing. The All tab shows
-        // every item, hidden ones included.
-        if ClipboardFilter.filteredItems(from: [saved], selectedFilter: selectedFilter, searchText: searchText).isEmpty {
+        revealWrittenItem(withId: id)
+        showActionStatus(status)
+    }
+
+    /// Selects the row an action just wrote, whatever tab or search the user was on.
+    ///
+    /// A write that lands outside the current filter looks like a write that did nothing. The All
+    /// tab shows every item, hidden ones included, which is what a masked result needs: both the
+    /// editor and Copy Merged can only gain masking, so either can produce a row that the Hidden
+    /// tab is the only other place to find.
+    private func revealWrittenItem(withId id: UUID) {
+        guard let written = clipboardMonitor.clipboardHistory.first(where: { $0.id == id }) else { return }
+
+        if ClipboardFilter.filteredItems(from: [written], selectedFilter: selectedFilter, searchText: searchText).isEmpty {
             searchText = ""
             debouncedSearchText = ""
             selectedFilter = .all
         }
 
         selectItem(withId: id)
-        showEditStatus(status)
+    }
+
+    // MARK: - Merging a Selection
+
+    /// What ⌘M and the row's context menu would do right now, or nil when the selection cannot be
+    /// merged. Read off `filteredItems` rather than off `selectedItemIds`, so the join order is the
+    /// order on screen.
+    private var mergePlan: ClipboardMergedCopy.Plan? {
+        ClipboardMergedCopy.plan(forSelectionIn: filteredItems, selectedIds: selectedItemIds)
+    }
+
+    /// Returns false when there was nothing to merge, so the key can fall through unclaimed.
+    @discardableResult
+    private func copyMergedSelection() -> Bool {
+        guard let plan = mergePlan else { return false }
+
+        let outcome = clipboardMonitor.copyMerged(plan)
+        // The selection has been spent. Leaving it highlighted would invite a second ⌘M that
+        // silently does nothing, the join already being the item at the top.
+        selectedItemIds.removeAll()
+
+        switch outcome {
+        case .merged(let id):
+            revealWrittenItem(withId: id)
+            showActionStatus(.merged(count: plan.mergedCount, skipped: plan.skippedCount))
+        case .alreadyInHistory(let id):
+            revealWrittenItem(withId: id)
+            showActionStatus(.alreadyInHistory)
+        }
+
+        return true
     }
 
     /// Selects `id` if it is in the list already, otherwise leaves it pending for the next
@@ -986,20 +1029,20 @@ struct ContentView: View {
         }
     }
 
-    private func showEditStatus(_ status: ClipboardEditStatus) {
-        editStatusTask?.cancel()
-        editStatus = status
-        editStatusTask = Task {
+    private func showActionStatus(_ status: ClipboardActionStatus) {
+        actionStatusTask?.cancel()
+        actionStatus = status
+        actionStatusTask = Task {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
             guard !Task.isCancelled else { return }
-            await MainActor.run { editStatus = nil }
+            await MainActor.run { actionStatus = nil }
         }
     }
 
-    private func clearEditStatus() {
-        editStatusTask?.cancel()
-        editStatusTask = nil
-        editStatus = nil
+    private func clearActionStatus() {
+        actionStatusTask?.cancel()
+        actionStatusTask = nil
+        actionStatus = nil
     }
 
     // MARK: - Navigation Functions
@@ -1267,6 +1310,14 @@ struct ContentView: View {
                     return true
                 }
             }
+        case 46 where keyEvent.modifierFlags.contains(.command): // M key
+            // The modifier is matched in the pattern rather than tested inside the case, unlike the
+            // letters above. A case that matches and then does nothing swallows the key: that is why
+            // typing f, d, z, e, h, v or n over the list starts no search, and m should not join
+            // them. Only ⌘M is claimed here, so a bare m still reaches `default` and the search
+            // field, and ⌘M with shortcuts switched off does nothing rather than typing an m.
+            if userPreferences.shortcutsEnabled, copyMergedSelection() { return true }
+            return false
         case 45: // N key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if isNoteFocused {
@@ -1393,6 +1444,23 @@ struct ClipboardDeletionConfirmationContent {
 
     static func deleteAllMessage(itemCount: Int) -> String {
         "Are you sure? This will permanently delete \(itemCount) item\(itemCount == 1 ? "" : "s") from your clipboard history. Favorites are kept, so unstar anything you also want removed. This action cannot be undone."
+    }
+}
+
+struct ClipboardMergedCopyContent {
+    /// The context menu entry, which is the one place the action can describe itself *before* it
+    /// runs. So it carries all three things a user needs to predict the result: how many items,
+    /// which order, and how many of the ones they picked are being left out.
+    ///
+    /// With nothing mergeable it stays visible and says how to make a selection instead of
+    /// disappearing. A ⌘-click on a second row is not a gesture anyone finds by accident, and a
+    /// greyed entry that explains itself is the cheapest place in a menu bar app to teach it.
+    static func actionTitle(for plan: ClipboardMergedCopy.Plan?) -> String {
+        guard let plan else { return "Copy Merged (⌘-Click Two or More Text Items)" }
+
+        let base = "Copy \(plan.mergedCount) Merged, Top to Bottom"
+        guard plan.skippedCount > 0 else { return base }
+        return "\(base) (\(plan.skippedCount) Skipped)"
     }
 }
 
@@ -1835,9 +1903,15 @@ struct ClipboardCompactPreviewView: View {
     }
 }
 
-enum ClipboardEditStatus: Equatable {
+/// The one line the popover gets to explain what an action just did to the history.
+///
+/// Shared by the editor and by Copy Merged because both write a row the user did not watch arrive,
+/// and both have the same "that text was already here" case: the merger dedupes by content, so a
+/// save or a join that matches an existing clip moves it to the top instead of adding a second one.
+enum ClipboardActionStatus: Equatable {
     case savedNew
     case alreadyInHistory
+    case merged(count: Int, skipped: Int)
 
     var icon: String {
         switch self {
@@ -1845,6 +1919,8 @@ enum ClipboardEditStatus: Equatable {
             return "checkmark.circle"
         case .alreadyInHistory:
             return "arrow.up.circle"
+        case .merged:
+            return "arrow.triangle.merge"
         }
     }
 
@@ -1854,12 +1930,19 @@ enum ClipboardEditStatus: Equatable {
             return "Saved as a new item. The original is unchanged."
         case .alreadyInHistory:
             return "That text was already in your history, so it moved to the top."
+        case .merged(let count, let skipped):
+            // The order is repeated here, not only in the action's title: the row that just
+            // appeared shows its first line alone, so top to bottom is the claim being made.
+            guard skipped > 0 else {
+                return "Merged \(count) items top to bottom. The originals are unchanged."
+            }
+            return "Merged \(count) items top to bottom. \(skipped) with no text were skipped."
         }
     }
 }
 
-private struct ClipboardEditStatusBanner: View {
-    let status: ClipboardEditStatus
+private struct ClipboardActionStatusBanner: View {
+    let status: ClipboardActionStatus
 
     var body: some View {
         HStack(spacing: 5) {
@@ -2006,6 +2089,11 @@ struct ClipboardItemRow: View {
     let onToggleMultiSelect: () -> Void
     let onToggleReveal: () -> Void
     let timeAgoText: String
+    /// Describes the whole multi-selection, not this row: right-clicking anywhere in the list is
+    /// how the action is reached, and the title says which items it would take.
+    let mergeActionTitle: String
+    let canCopyMerged: Bool
+    let onCopyMerged: () -> Void
 
     private var shouldMask: Bool {
         item.isSensitive && !isRevealed
@@ -2158,6 +2246,14 @@ struct ClipboardItemRow: View {
             // Double click: select and paste
             onSelect()
             onCopy()
+        }
+        .contextMenu {
+            // Deliberately not a right-click menu of everything a row can do. The list is driven
+            // by keys and the preview pane already carries the per-item actions; this is here for
+            // the one action that has no other home, because it belongs to a selection rather than
+            // to the row that was clicked.
+            Button(mergeActionTitle, action: onCopyMerged)
+                .disabled(!canCopyMerged)
         }
     }
     
@@ -2695,6 +2791,8 @@ private struct ShortcutReferenceView: View {
                     ("⌘V", "Reveal sensitive item"),
                     ("⌘N", "Focus note field"),
                     ("⌘Z", "Full-size image preview"),
+                    ("⌘-click", "Add an item to the selection"),
+                    ("⌘M", "Copy the selection merged, top to bottom"),
                     ("⌘⌫", "Delete item(s)"),
                     ("⌘F", "Toggle favorites filter"),
                     ("⌘/", "Show shortcuts"),

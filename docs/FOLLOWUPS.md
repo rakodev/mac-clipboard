@@ -163,3 +163,15 @@ Follow-ups are ideas worth revisiting later, but not committed backlog work yet.
     stapled, or leave it to users who set `HOMEBREW_CASK_OPTS=--no-quarantine`. Deliberately
     removing a Gatekeeper prompt on the user's behalf is a product and security call, not a
     cleanup, so it is parked here rather than done.
+
+- [ ] Decide whether the letter shortcuts should still swallow the key when they decline it.
+  - What happens: `ContentView.handleKeyEvent` claims f, d, z, e, h, v and n as `case N:` and then
+    tests for ⌘ inside the case. A case that matches and then does nothing exits the switch, so the
+    `default` branch that puts a printable character into the search field is never reached, and
+    typing any of those seven letters over the list does nothing at all. Every other letter starts
+    a search. Found on 2026-08-10 while adding ⌘M for Copy Merged, which matches the modifier in
+    the pattern instead (`case 46 where ...contains(.command)`) so a bare m still reaches search.
+  - Why later: the fix is one `where` clause per case and is not risky in itself, but it changes
+    what seven keys do for anyone who has learned the current behaviour, and it is worth checking
+    first whether search-on-any-letter is even the intended model, since ⌘F, ⌘D and the rest read
+    as the point of those keys. Not a defect this task introduced, and out of its scope.

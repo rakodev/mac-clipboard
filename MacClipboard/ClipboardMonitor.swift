@@ -463,6 +463,98 @@ enum ClipboardTextEditOutcome: Equatable {
     case alreadyInHistory(id: UUID)
 }
 
+/// Joining several selected text items into one new clip.
+///
+/// The same shape as `ClipboardTextEdit`: the source rows are never touched and the join lands as
+/// an ordinary new item, so history stays a log of what was on the pasteboard plus the copies the
+/// user deliberately made. It is one action on a selection the user already has, rather than a
+/// paste stack with a mode and an indicator to keep in step; see `docs/FOLLOWUPS.md`.
+struct ClipboardMergedCopy {
+    /// A newline, and only a newline. A configurable separator would be a preference whose effect
+    /// is invisible until after the merge, and a blank line between the pieces is one keystroke in
+    /// the editor afterwards.
+    static let separator = "\n"
+
+    /// What merging a selection would produce, worked out before any history is touched so it can
+    /// be tested on its own and so the action's own title can state the counts before it is used.
+    struct Plan: Equatable {
+        let text: String
+        /// How many items were joined. Always at least 2, or there is no plan.
+        let mergedCount: Int
+        /// How many selected items carry no text of their own. Left out rather than represented by
+        /// a placeholder, and reported in the UI, so a merge never silently drops part of what the
+        /// user picked.
+        let skippedCount: Int
+        /// Whether any of the *joined* items is masked. A skipped image contributes nothing to the
+        /// text, so its own flag has nothing to say about the result.
+        let includesSensitiveSource: Bool
+    }
+
+    /// `items` is the list as it is shown, top to bottom, and that is the order the pieces are
+    /// joined in. The order is read off the list rather than off `selectedIds` on purpose: a
+    /// `Set<UUID>` has none, and matching what the user can see is the whole of what makes the
+    /// result predictable.
+    static func plan(forSelectionIn items: [ClipboardItem], selectedIds: Set<UUID>) -> Plan? {
+        // The list asks for this on every rebuild, and no multi-selection is the ordinary state, so
+        // the cheap answer comes before the scan and the join.
+        guard selectedIds.count >= 2 else { return nil }
+
+        let selected = items.filter { selectedIds.contains($0.id) }
+        let texts = selected.filter { $0.type == .text }
+
+        // One item is not a merge and none is not a selection: below two there is nothing this
+        // action does that pasting the item itself does not already do.
+        guard texts.count >= 2 else { return nil }
+
+        return Plan(
+            text: texts.map(\.fullText).joined(separator: separator),
+            mergedCount: texts.count,
+            skippedCount: selected.count - texts.count,
+            includesSensitiveSource: texts.contains { $0.isSensitive }
+        )
+    }
+
+    /// Builds the new item.
+    ///
+    /// Whitespace is preserved exactly, as in the editor: the leading tab on a clip is often the
+    /// point of it. Formatting is deliberately dropped, so a merged clip pastes plain: RTF and HTML
+    /// are whole documents, and splicing several together would produce a flavour claiming to be
+    /// what the user copied while being something this app assembled.
+    ///
+    /// Masking can only be gained, again as in the editor: `sensitivity` is the policy's verdict on
+    /// the joined text, or-ed with the sources' own flags, so a merge that includes one hidden clip
+    /// cannot produce a visible copy of it. Favorite and note are not inherited: this is not the
+    /// item the user starred or annotated, and with several sources there is no single one to
+    /// inherit from anyway.
+    static func mergedItem(
+        from plan: Plan,
+        sensitivity: ClipboardSensitivityFlags,
+        id: UUID = UUID(),
+        timestamp: Date = Date()
+    ) -> ClipboardItem {
+        ClipboardItem(
+            id: id,
+            content: plan.text,
+            type: .text,
+            timestamp: timestamp,
+            isFavorite: false,
+            isSensitive: sensitivity.isSensitive || plan.includesSensitiveSource,
+            isAutoSensitive: sensitivity.isAutoSensitive,
+            isPasswordLike: sensitivity.isPasswordLike,
+            isManuallyUnsensitive: false,
+            note: nil
+        )
+    }
+}
+
+/// What `ClipboardMonitor.copyMerged` actually did, for the same reason
+/// `ClipboardTextEditOutcome` exists: a join whose text was already in history moves that row to
+/// the top instead of adding a second copy, and the popover has to be able to say so.
+enum ClipboardMergedCopyOutcome: Equatable {
+    case merged(id: UUID)
+    case alreadyInHistory(id: UUID)
+}
+
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
 
@@ -1332,6 +1424,39 @@ class ClipboardMonitor: ObservableObject {
         }
 
         return result.removedItemIDs.isEmpty ? .saved(id: edited.id) : .alreadyInHistory(id: edited.id)
+    }
+
+    /// Joins a selection into one new text item and puts it on the pasteboard.
+    ///
+    /// Main thread only: it mutates `clipboardHistory` and returns what happened, because the
+    /// caller has to be able to report the counts. Unlike `saveEditedText` this *does* write the
+    /// pasteboard, and the difference is the request rather than an inconsistency: saving an edit
+    /// must not silently replace whatever the user has copied, while putting the join somewhere it
+    /// can be pasted is the entire point of an action called Copy.
+    @discardableResult
+    func copyMerged(_ plan: ClipboardMergedCopy.Plan) -> ClipboardMergedCopyOutcome {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        let sensitivity = ClipboardSensitivityPolicy.flags(
+            for: plan.text,
+            hasSensitivePasteboardType: false,
+            autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+            autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+        )
+        let merged = ClipboardMergedCopy.mergedItem(from: plan, sensitivity: sensitivity)
+
+        // The merger dedupes by content, so a join that happens to match something already in
+        // history moves that row to the top instead of adding a second copy of it.
+        guard let result = insertIntoHistory(merged) else {
+            // The join is already the item at the top, so there is nothing to insert. It still has
+            // to reach the pasteboard: the user asked for a copy, not for a row.
+            let existing = clipboardHistory.first ?? merged
+            copyToClipboard(existing)
+            return .alreadyInHistory(id: existing.id)
+        }
+
+        copyToClipboard(merged)
+        return result.removedItemIDs.isEmpty ? .merged(id: merged.id) : .alreadyInHistory(id: merged.id)
     }
 
     func toggleSensitive(_ item: ClipboardItem) {

@@ -186,6 +186,49 @@ Then read `NSPasteboard.general.types` after a paste from the popover: the flavo
 are present after ⏎ and absent after ⇧⏎. Do both halves separately, since writing HTML *without*
 RTF is exactly the case that RTF-only support got wrong.
 
+### Copy Merged
+
+`Cmd+M`, or the context menu on any row, joins the multi-selection into one new text item and puts
+it on the pasteboard. `ClipboardMergedCopy` holds the whole decision as a pure value
+(`plan(forSelectionIn:selectedIds:)` → `Plan` → `mergedItem(from:sensitivity:)`), so the join, the
+counts and the action's own title are all testable without a pasteboard or a store. Notes on the
+calls that are not obvious from the code:
+
+**Why the plan takes the list and not just the selection.** `selectedItemIds` is a `Set<UUID>` and
+has no order, so joining from it would give whatever order hashing happened to produce, differing
+between runs of the same selection. Passing `filteredItems` makes the order the one on screen, which
+is the only order the user can predict. It also drops ids that are no longer in the list, which is
+what happens when the filter changes or a selected row is deleted while the selection survives.
+
+**Why non-text items are skipped rather than disabling the action.** The alternative considered was
+refusing the whole merge if the selection holds an image. It loses: a user ⌘-clicking down a list is
+selecting the things they want joined, and an image caught along the way is a slip, not a change of
+intent. Refusing would also have to explain itself somewhere, and a greyed menu entry has no room.
+So the skip is silent in the mechanism and loud in the copy: the count appears in the menu title
+before the merge and in the status banner after it.
+
+**Why the separator is not configurable.** A separator preference is invisible until after a merge,
+which is the worst moment to discover it is wrong, and the two obvious wants (a blank line between
+pieces, a comma) are each one edit away in the editor afterwards. `ClipboardMergedCopy.separator` is
+a newline and stays one.
+
+**Why the merged clip carries no formatting.** RTF and HTML are whole documents with headers,
+font tables and a body. Concatenating several would produce bytes that pass `isRTF` or `looksLikeHTML`
+while being something this app assembled, and the row's formatting marker promises "the formatting
+this was copied with". Plain text is the honest answer; see the rich text section above.
+
+**Why it writes the pasteboard when `saveEditedText` does not.** Saving an edit is a change to
+history and must not silently replace what the user has copied. Copy Merged is a copy, named as one
+in the menu and reached with ⌘M: the point is to paste it next. It goes through `copyToClipboard`,
+which pauses capture and adopts the change count, so the poll does not add the clip a second time.
+
+**What happens when the join already exists.** `insertIntoHistory` returns nil when the same text is
+already the top item, and `copyMerged` still calls `copyToClipboard` on that row. Skipping it would
+leave the user with an action that appeared to do nothing, having asked for a copy.
+
+Manual checks are in the CLAUDE.md testing checklist; `MacClipboardTests/MergedCopyTests.swift`
+covers the order, the skips, the whitespace, the masking and the titles.
+
 ### Sensitive Content Detection
 
 The app can auto-detect sensitive content using two methods:

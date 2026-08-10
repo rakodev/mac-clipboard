@@ -118,7 +118,8 @@ without quitting it:
 | `Cmd+N` | Focus note field for selected item |
 | `Cmd+Backspace` | Delete items (shows confirmation) |
 | `Cmd+Z` | Open image preview (when image selected) |
-| `Cmd+Click` | Select multiple items for deletion |
+| `Cmd+Click` | Add an item to the selection |
+| `Cmd+M` | Copy the selected items merged into one, top to bottom |
 | `0-9` | Quick paste item by number |
 | `Enter` | Paste selected item |
 | `Shift+Enter` | Paste selected item without its formatting |
@@ -149,7 +150,12 @@ While editing a copy:
 * **Edit a copy**: Click the preview text (the caret lands where you clicked), press `Cmd+E`, or click the pencil icon. Saving adds a new item and leaves the original untouched. An edit of a hidden item stays hidden. Drag over the preview text to select it without opening the editor.
 * **Notes**: Add a note to any item (press `Cmd+N` or click the note field) - useful for labeling passwords, API keys, etc.
 * **Search**: Start typing to filter items instantly (searches content and notes)
-* **Multi-select**: Hold `Cmd` and click to select multiple items for deletion
+* **Multi-select**: Hold `Cmd` and click to select multiple items
+* **Merge**: With several items selected, press `Cmd+M` or right-click and choose **Copy Merged** to
+  join them into one new clip, in the order they appear in the list, top to bottom, one per line. The
+  new clip goes on your clipboard ready to paste, and the items it came from are left as they were.
+  Anything selected that is not text, such as an image, is left out, and the action says how many
+  before and after. A merge that includes a hidden item is hidden too
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
 ### Content Types Supported
