@@ -33,6 +33,7 @@
 		B0TEST000000000000000008 /* RichTextClipTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000018 /* RichTextClipTests.swift */; };
 		B0TEST000000000000000009 /* MergedCopyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000019 /* MergedCopyTests.swift */; };
 		B0TEST000000000000000060 /* SelectionExtensionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000061 /* SelectionExtensionTests.swift */; };
+		B0TEST000000000000000062 /* TextSplitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000063 /* TextSplitTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -75,6 +76,7 @@
 		B0TEST000000000000000018 /* RichTextClipTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RichTextClipTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000019 /* MergedCopyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergedCopyTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000061 /* SelectionExtensionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SelectionExtensionTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000063 /* TextSplitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSplitTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -146,6 +148,7 @@
 				B0TEST000000000000000018 /* RichTextClipTests.swift */,
 				B0TEST000000000000000019 /* MergedCopyTests.swift */,
 				B0TEST000000000000000061 /* SelectionExtensionTests.swift */,
+				B0TEST000000000000000063 /* TextSplitTests.swift */,
 				B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */,
 				B0TEST000000000000000016 /* PersistenceStoreTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
@@ -281,6 +284,7 @@
 				B0TEST000000000000000008 /* RichTextClipTests.swift in Sources */,
 				B0TEST000000000000000009 /* MergedCopyTests.swift in Sources */,
 				B0TEST000000000000000060 /* SelectionExtensionTests.swift in Sources */,
+				B0TEST000000000000000062 /* TextSplitTests.swift in Sources */,
 				B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */,
 				B0TEST000000000000000006 /* PersistenceStoreTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,

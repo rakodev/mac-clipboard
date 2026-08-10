@@ -277,6 +277,25 @@ new item, masking only gained, nothing trimmed. Three things that are its own:
   called Copy. A merged clip carries no RTF or HTML: splicing several documents would produce a
   flavour claiming to be what the user copied.
 
+### Split Is the Same Model Run Backwards
+
+`Cmd+Shift+M`, and the row's context menu, turn the selected multi-line text item into one new item
+per line (`ClipboardMonitor.splitIntoItems` → `ClipboardTextSplit`). Same rules again: source
+untouched, new items, masking only gained, nothing trimmed. Four things that are its own:
+
+- **The pieces are inserted last line first**, because every insert goes in at position 0. That, and
+  timestamps descending a millisecond a piece, are what make the list read in the source's order
+  both now and after a relaunch.
+- **The policy runs per piece**, not once over the clip, so a password on line 4 masks only the item
+  it becomes. A masked source still masks every piece.
+- **It does not write the pasteboard**, unlike `copyMerged`. A split has no single result, and the
+  point is to paste the pieces one at a time afterwards.
+- **Above 100 pieces the user is asked first.** It is the one action that multiplies rows.
+
+Blank and whitespace-only lines are dropped; surviving lines keep their own whitespace. The plan
+comes from the cursor's item rather than the right-clicked row, so both context menu entries describe
+the selection, and `splitPlan` stands down for a multi-selection, which is Copy Merged's.
+
 Design notes are in `docs/DEVELOPMENT.md`.
 
 ## A Text Clip Keeps Its Formatting, and the Plain Text Stays Its Content
@@ -559,6 +578,7 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 | `Cmd+↑` / `Cmd+↓` | Extend the selection (`Shift+↑` / `Shift+↓` do the same) |
 | `Option+↑` | Jump to the top of the list (was `Cmd+↑` until 0.1.24) |
 | `Cmd+M` | Copy the selection merged, top to bottom |
+| `Cmd+Shift+M` | Split the selected item into one item per line |
 | `Cmd+Backspace` | Delete item(s) |
 | `Escape` | Close popover |
 
@@ -694,6 +714,19 @@ When modifying Copy Merged:
 - [ ] Merging text that is already the top item moves it rather than adding a second copy, and the
       pasteboard still gets it
 
+When modifying Split:
+- [ ] Select a clip of three lines, press Cmd+Shift+M: three new items at the top, reading top to
+      bottom in the source's order, and the source unchanged further down
+- [ ] The pasteboard is untouched: what was copied before the split still pastes elsewhere
+- [ ] Blank lines and lines of only spaces or tabs produce no items; an indented line keeps its tab
+- [ ] The action is unavailable on images, files and single-line text, and the context menu entry
+      says what would make it available
+- [ ] With two or more rows Cmd-clicked, Split is greyed and Copy Merged is the one offered
+- [ ] Splitting a hidden item gives hidden items, and the popover switches to All to show them
+- [ ] A clip with a repeated line produces one item for it, and the banner says how many moved
+- [ ] Over 100 lines asks first, names the count, and cancelling adds nothing
+- [ ] Relaunching keeps the pieces in the same order they were left in
+
 When modifying the editor:
 - [ ] Clicking the preview text opens it with the caret where the click landed
 - [ ] Dragging over the preview text selects it and does not open the editor; Cmd+C copies it
@@ -759,5 +792,6 @@ the only check that needs both the signature and the ticket to be there.
 | Change UI layout | `ContentView.swift` |
 | Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |
 | Change Copy Merged | `ClipboardMonitor.swift` (`ClipboardMergedCopy`, `copyMerged`), `ContentView.swift` (`ClipboardMergedCopyContent`, `copyMergedSelection`) |
+| Change Split | `ClipboardMonitor.swift` (`ClipboardTextSplit`, `splitIntoItems`), `ContentView.swift` (`ClipboardTextSplitContent`, `splitSelectedItem`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
 | Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |

@@ -555,6 +555,117 @@ enum ClipboardMergedCopyOutcome: Equatable {
     case alreadyInHistory(id: UUID)
 }
 
+/// Splitting one multi-line text item into a clip per line.
+///
+/// The mirror of `ClipboardMergedCopy`, and it follows the editor's model for the same reason: the
+/// source row is never touched and every piece lands as an ordinary new item, so history stays a log
+/// of what was on the pasteboard plus the copies the user deliberately made. Copy a column of names
+/// out of a spreadsheet, split, then paste them one at a time.
+struct ClipboardTextSplit {
+    /// Above this many pieces the user is asked first.
+    ///
+    /// A stray copy of a log file is one keystroke away from becoming thousands of rows, and unlike
+    /// every other action in the popover this one multiplies. The number is a judgement rather than
+    /// a measurement: a hundred lines is more than anyone splits on purpose without noticing.
+    static let confirmationThreshold = 100
+
+    /// What splitting an item would produce, worked out before any history is touched so it can be
+    /// tested on its own and so the action's own title can state the count before it is used.
+    struct Plan: Equatable {
+        /// The pieces in the order they are read in the source, top to bottom. They are *inserted*
+        /// in the reverse of this, so the first line ends up newest; see `items(from:sensitivity:)`.
+        let pieces: [String]
+        /// Lines that carried nothing but whitespace and were left out. Not shown to the user
+        /// anywhere: it is here so the count in the title can be checked against the source.
+        let droppedBlankLineCount: Int
+        /// Whether the source is masked. Every piece inherits it, so a hidden clip cannot be split
+        /// into visible ones.
+        let sourceIsSensitive: Bool
+
+        var pieceCount: Int { pieces.count }
+
+        var needsConfirmation: Bool { pieces.count > ClipboardTextSplit.confirmationThreshold }
+    }
+
+    /// Nil when there is nothing to split: a non-text item, or text that yields fewer than two
+    /// pieces. One piece is not a split, it is the item the user already has.
+    ///
+    /// The type check is not redundant with `fullText`, which answers for every kind of item: an
+    /// image carrying multi-line `associatedText` would otherwise offer to be split into clips of
+    /// text the row never claimed to hold.
+    static func plan(for item: ClipboardItem?) -> Plan? {
+        guard let item, item.type == .text else { return nil }
+
+        // Line endings only, so a clip is cut where the user can see it is cut. `.newlines` covers
+        // CR, LF and the Unicode line and paragraph separators; a CRLF pair splits into two, with
+        // an empty piece between them that the filter below drops.
+        let lines = item.fullText.components(separatedBy: .newlines)
+
+        // A line of tabs between two blocks is a blank line, not a clip. It is dropped by the same
+        // rule as an empty one, and the lines that survive are never trimmed: a leading tab is
+        // often exactly what the user wants pasted, as it is in the editor.
+        let pieces = lines.filter { $0.contains(where: { !$0.isWhitespace }) }
+
+        guard pieces.count >= 2 else { return nil }
+
+        return Plan(
+            pieces: pieces,
+            droppedBlankLineCount: lines.count - pieces.count,
+            sourceIsSensitive: item.isSensitive
+        )
+    }
+
+    /// Builds the new items, in reading order.
+    ///
+    /// `sensitivity` is the policy's verdict on each piece, asked for one piece at a time rather
+    /// than once for the whole clip: a password on line 4 masks the clip it becomes and leaves the
+    /// nine ordinary lines around it readable. It is or-ed with the source's own flag, so masking
+    /// can only be gained, exactly as in the editor and in Copy Merged. Favorite and note are not
+    /// inherited: these are not the item the user starred or annotated. Formatting is dropped for
+    /// the reason a merge drops it, from the other end: a line out of the middle of an RTF or HTML
+    /// document is not a document, and the row's marker promises the formatting a clip was copied
+    /// with.
+    ///
+    /// The timestamps descend by a millisecond a piece so that the first line is the newest. The
+    /// order in `clipboardHistory` comes from the order they are inserted in, but the order they
+    /// come back in after a relaunch comes from these, and the two have to agree.
+    static func items(
+        from plan: Plan,
+        sensitivity: (String) -> ClipboardSensitivityFlags,
+        timestamp base: Date = Date()
+    ) -> [ClipboardItem] {
+        plan.pieces.enumerated().map { index, piece in
+            let flags = sensitivity(piece)
+            return ClipboardItem(
+                id: UUID(),
+                content: piece,
+                type: .text,
+                timestamp: base.addingTimeInterval(-0.001 * Double(index)),
+                isFavorite: false,
+                isSensitive: flags.isSensitive || plan.sourceIsSensitive,
+                isAutoSensitive: flags.isAutoSensitive,
+                isPasswordLike: flags.isPasswordLike,
+                isManuallyUnsensitive: false,
+                note: nil
+            )
+        }
+    }
+}
+
+/// What `ClipboardMonitor.splitIntoItems` actually did.
+///
+/// The counts are separated for the same reason `ClipboardTextEditOutcome` has an
+/// `alreadyInHistory` case: the merger dedupes by content, so splitting a list with a repeated line
+/// produces fewer rows than it has pieces, and without saying so that reads as dropped text.
+struct ClipboardTextSplitOutcome: Equatable {
+    /// The row to select afterwards: the first line of the source, or whatever it merged into.
+    let topItemId: UUID?
+    /// Pieces that became a new row.
+    let addedCount: Int
+    /// Pieces that matched a clip already in the history, which moved to the top instead.
+    let movedCount: Int
+}
+
 class ClipboardMonitor: ObservableObject {
     @Published var clipboardHistory: [ClipboardItem] = []
 
@@ -1457,6 +1568,53 @@ class ClipboardMonitor: ObservableObject {
 
         copyToClipboard(merged)
         return result.removedItemIDs.isEmpty ? .merged(id: merged.id) : .alreadyInHistory(id: merged.id)
+    }
+
+    /// Splits a multi-line text item into one new item per line, leaving the source untouched.
+    ///
+    /// Main thread only, as `saveEditedText` and `copyMerged` are, and for the same reason: it
+    /// mutates `clipboardHistory` and returns what happened so the caller can report the counts.
+    ///
+    /// The pasteboard is deliberately not written, unlike `copyMerged`. A split has no single
+    /// result to copy, and the point of it is to paste the pieces one at a time from the popover
+    /// afterwards; replacing what the user has copied to do that would be taking something away.
+    @discardableResult
+    func splitIntoItems(_ plan: ClipboardTextSplit.Plan) -> ClipboardTextSplitOutcome {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        let pieces = ClipboardTextSplit.items(from: plan) { piece in
+            ClipboardSensitivityPolicy.flags(
+                for: piece,
+                hasSensitivePasteboardType: false,
+                autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+                autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+            )
+        }
+
+        var addedCount = 0
+        var movedCount = 0
+
+        // Last line first. Every insert goes in at position 0, so inserting in reverse is what
+        // leaves the list reading top to bottom in the source's own order, which is the order the
+        // user will paste them in.
+        for piece in pieces.reversed() {
+            guard let result = insertIntoHistory(piece) else {
+                // The piece is already the item at the top, so nothing was written.
+                movedCount += 1
+                continue
+            }
+            if result.removedItemIDs.isEmpty {
+                addedCount += 1
+            } else {
+                movedCount += 1
+            }
+        }
+
+        return ClipboardTextSplitOutcome(
+            topItemId: clipboardHistory.first?.id,
+            addedCount: addedCount,
+            movedCount: movedCount
+        )
     }
 
     func toggleSensitive(_ item: ClipboardItem) {

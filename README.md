@@ -121,6 +121,7 @@ without quitting it:
 | `Cmd+Click` | Add an item to the selection |
 | `Cmd+↑` `Cmd+↓` | Extend the selection up or down (`Shift` works too) |
 | `Cmd+M` | Copy the selected items merged into one, top to bottom |
+| `Cmd+Shift+M` | Split the selected item into one item per line |
 | `0-9` | Quick paste item by number |
 | `Enter` | Paste selected item |
 | `Shift+Enter` | Paste selected item without its formatting |
@@ -160,6 +161,11 @@ While editing a copy:
   new clip goes on your clipboard ready to paste, and the items it came from are left as they were.
   Anything selected that is not text, such as an image, is left out, and the action says how many
   before and after. A merge that includes a hidden item is hidden too
+* **Split**: The other direction. With a multi-line text item selected, press `Cmd+Shift+M` or
+  right-click and choose **Split** to turn it into one item per line, ready to paste one at a time.
+  Copy a column out of a spreadsheet, split it, and the lines are in the list in the order they were
+  written, first line at the top. Blank lines are left out, nothing else is trimmed, the original
+  item stays as it was, and a split of a hidden item stays hidden. Above 100 lines it asks first
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
 ### Content Types Supported

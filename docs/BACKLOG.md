@@ -49,24 +49,8 @@ renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or
 meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
 (deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
 (keeping the formatting a clip was copied with) were all completed on 2026-08-09. Task 9 (merging a
-selection into one clip) was completed on 2026-08-10.
-
-### 10. A multi-line clip cannot be split into separate items
-
-The mirror of task 9, and the same shape: one action on one selected item, no mode. Copy a column of
-names out of a spreadsheet, split, then paste them one at a time.
-
-Follow the editor's model exactly: the source item is untouched and the pieces are new items, so
-history stays a log of what was on the pasteboard plus copies the user made deliberately. Split on
-line endings only, and do not trim the lines. Whitespace inside a clip is content, as
-`CLAUDE.md` notes for the editor, and a leading tab is often exactly what the user wants pasted.
-Drop empty lines, and refuse or confirm above a sane count (100 lines) so a stray paste of a log file
-cannot fill the history in one action.
-
-Done means: the action available only on multi-line text items; the source item unchanged; the
-pieces inserted newest-first in reading order so pasting them in order works naturally; the count cap
-with a confirmation; and each piece re-run through `ClipboardSensitivityPolicy` so a masked source
-cannot produce unmasked pieces.
+selection into one clip) and task 10 (splitting one clip into a line per item) were completed on
+2026-08-10.
 
 ### 11. A hex colour clip shows no colour
 

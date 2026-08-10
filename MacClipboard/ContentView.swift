@@ -182,6 +182,10 @@ struct ContentView: View {
     @State private var showDiscardEditConfirmation = false
     @State private var actionStatus: ClipboardActionStatus?
     @State private var actionStatusTask: Task<Void, Never>?
+    /// Held while the confirmation for a large split is on screen, so the alert acts on the plan the
+    /// user was shown rather than on whatever the selection has become since.
+    @State private var pendingSplitPlan: ClipboardTextSplit.Plan?
+    @State private var showSplitConfirmation = false
     @State private var pendingSelectionId: UUID?
     @State private var keyFocusToken = 0
     @State private var editorFocusToken = 0
@@ -540,6 +544,22 @@ struct ContentView: View {
         } message: {
             Text("Your edit has not been saved as a new item yet.")
         }
+        .alert(
+            ClipboardTextSplitContent.confirmationTitle(pieceCount: pendingSplitPlan?.pieceCount ?? 0),
+            isPresented: $showSplitConfirmation,
+            presenting: pendingSplitPlan
+        ) { plan in
+            Button("Cancel", role: .cancel) { pendingSplitPlan = nil }
+            Button(ClipboardTextSplitContent.confirmButtonTitle(pieceCount: plan.pieceCount)) {
+                pendingSplitPlan = nil
+                performSplit(plan)
+            }
+        } message: { plan in
+            Text(ClipboardTextSplitContent.confirmationMessage(
+                pieceCount: plan.pieceCount,
+                historyLimit: userPreferences.maxClipboardItems
+            ))
+        }
         .clipboardDeletionConfirmation(
             selectedItem: selectedItem,
             selectedItemIds: $selectedItemIds,
@@ -876,9 +896,11 @@ struct ContentView: View {
 
     private var clipboardListView: some View {
         // Worked out once per rebuild rather than per row: every row's context menu describes the
-        // same selection, and the plan carries the joined text.
+        // same selection, and the plans carry the joined text and the pieces.
         let plan = mergePlan
         let mergeActionTitle = ClipboardMergedCopyContent.actionTitle(for: plan)
+        let splitPlan = self.splitPlan
+        let splitActionTitle = ClipboardTextSplitContent.actionTitle(for: splitPlan)
 
         return ScrollViewReader { proxy in
             ZStack(alignment: .bottomTrailing) {
@@ -922,7 +944,10 @@ struct ContentView: View {
                                 timeAgoText: timeAgoText(for: item),
                                 mergeActionTitle: mergeActionTitle,
                                 canCopyMerged: plan != nil,
-                                onCopyMerged: { copyMergedSelection() }
+                                onCopyMerged: { copyMergedSelection() },
+                                splitActionTitle: splitActionTitle,
+                                canSplit: splitPlan != nil,
+                                onSplit: { splitSelectedItem() }
                             )
                             .id(item.id)
                             .onAppear {
@@ -1120,6 +1145,48 @@ struct ContentView: View {
     /// order on screen.
     private var mergePlan: ClipboardMergedCopy.Plan? {
         ClipboardMergedCopy.plan(forSelectionIn: filteredItems, selectedIds: selectedItemIds)
+    }
+
+    // MARK: - Splitting an Item
+
+    /// What ⌘⇧M and the row's context menu would do right now, or nil when there is nothing to
+    /// split. Worked out from the cursor's item, as ⌘E is, not from the clicked row: computing it
+    /// per row would mean scanning every visible clip's text on every rebuild, and a clip can be
+    /// megabytes.
+    ///
+    /// A multi-selection belongs to Copy Merged, so the two actions are never both offered: with two
+    /// or more rows ⌘-clicked, ⌘M is the one that applies.
+    private var splitPlan: ClipboardTextSplit.Plan? {
+        guard selectedItemIds.count < 2 else { return nil }
+        return ClipboardTextSplit.plan(for: selectedItem)
+    }
+
+    /// Returns false when there was nothing to split, so the key can fall through unclaimed.
+    @discardableResult
+    private func splitSelectedItem() -> Bool {
+        guard let plan = splitPlan else { return false }
+
+        guard !plan.needsConfirmation else {
+            pendingSplitPlan = plan
+            showSplitConfirmation = true
+            return true
+        }
+
+        performSplit(plan)
+        return true
+    }
+
+    private func performSplit(_ plan: ClipboardTextSplit.Plan) {
+        let outcome = clipboardMonitor.splitIntoItems(plan)
+
+        // The list means something else now: the source has been pushed down by everything the
+        // split added, so a ⌘-click made before it is a highlight on a row that has moved.
+        clearMultiSelection()
+
+        if let id = outcome.topItemId {
+            revealWrittenItem(withId: id)
+        }
+        showActionStatus(.split(count: plan.pieceCount, moved: outcome.movedCount))
     }
 
     /// Returns false when there was nothing to merge, so the key can fall through unclaimed.
@@ -1491,10 +1558,18 @@ struct ContentView: View {
             // The modifier is matched in the pattern rather than tested inside the case, unlike the
             // letters above. A case that matches and then does nothing swallows the key: that is why
             // typing f, d, z, e, h, v or n over the list starts no search, and m should not join
-            // them. Only ⌘M is claimed here, so a bare m still reaches `default` and the search
-            // field, and ⌘M with shortcuts switched off does nothing rather than typing an m.
-            if userPreferences.shortcutsEnabled, copyMergedSelection() { return true }
-            return false
+            // them. Only ⌘M and ⌘⇧M are claimed here, so a bare m still reaches `default` and the
+            // search field, and either with shortcuts switched off does nothing rather than typing
+            // an m.
+            //
+            // ⇧ picks the mirror action: ⌘M joins a selection into one clip, ⌘⇧M cuts one clip into
+            // several. They share a key because they are the same idea in opposite directions, and
+            // the two can never both apply, `splitPlan` standing down for a multi-selection.
+            guard userPreferences.shortcutsEnabled else { return false }
+            if keyEvent.modifierFlags.contains(.shift) {
+                return splitSelectedItem()
+            }
+            return copyMergedSelection()
         case 45: // N key
             if keyEvent.modifierFlags.contains(.command) && userPreferences.shortcutsEnabled {
                 if isNoteFocused {
@@ -1646,6 +1721,38 @@ struct ClipboardMergedCopyContent {
         let base = "Copy \(plan.mergedCount) Merged, Top to Bottom"
         guard plan.skippedCount > 0 else { return base }
         return "\(base) (\(plan.skippedCount) Skipped)"
+    }
+}
+
+struct ClipboardTextSplitContent {
+    /// The context menu entry. Like Copy Merged's it states the count before the action runs, and
+    /// with nothing to split it says what would make it available rather than disappearing.
+    ///
+    /// It names the *selected* item because a right click does not move the cursor, so the row under
+    /// the pointer and the row this would take are not always the same one.
+    static func actionTitle(for plan: ClipboardTextSplit.Plan?) -> String {
+        guard let plan else { return "Split into Lines (Select a Multi-Line Text Item)" }
+        return "Split Selected Item into \(plan.pieceCount) Items"
+    }
+
+    static func confirmationTitle(pieceCount: Int) -> String {
+        "Split into \(pieceCount) Items?"
+    }
+
+    /// The one action in the popover that multiplies rows, so the confirmation says what that costs
+    /// rather than only how many there are. The history limit is named only when the split would
+    /// actually reach it: an accurate warning that does not apply is how a confirmation stops being
+    /// read at all.
+    static func confirmationMessage(pieceCount: Int, historyLimit: Int) -> String {
+        var message = "This adds \(pieceCount) items to your history, one per line, and leaves the original item as it is."
+        if pieceCount >= historyLimit {
+            message += " Your history keeps \(historyLimit) items, so the oldest non-favorites will be pushed out."
+        }
+        return message
+    }
+
+    static func confirmButtonTitle(pieceCount: Int) -> String {
+        "Split into \(pieceCount) Items"
     }
 }
 
@@ -2099,6 +2206,10 @@ enum ClipboardActionStatus: Equatable {
     case savedNew
     case alreadyInHistory
     case merged(count: Int, skipped: Int)
+    /// `moved` counts the pieces that matched a clip already in history, which moved to the top
+    /// instead of being added again. Without it a list with a repeated line produces fewer rows
+    /// than it has lines, with nothing on screen to say why.
+    case split(count: Int, moved: Int)
     /// The Homebrew upgrade command was put on the pasteboard from the update banner. It belongs
     /// here rather than in an alert because it *is* a clipboard action: the row is about to appear
     /// at the top of the history like any other copy.
@@ -2112,6 +2223,8 @@ enum ClipboardActionStatus: Equatable {
             return "arrow.up.circle"
         case .merged:
             return "arrow.triangle.merge"
+        case .split:
+            return "arrow.triangle.branch"
         case .copiedUpgradeCommand:
             return "terminal"
         }
@@ -2130,6 +2243,13 @@ enum ClipboardActionStatus: Equatable {
                 return "Merged \(count) items top to bottom. The originals are unchanged."
             }
             return "Merged \(count) items top to bottom. \(skipped) with no text were skipped."
+        case .split(let count, let moved):
+            // Where the pieces went is the claim being made: the first line is at the top, so the
+            // list now reads in the source's own order and pasting them in turn works.
+            guard moved > 0 else {
+                return "Split into \(count) items, first line at the top. The original is unchanged."
+            }
+            return "Split into \(count) items, first line at the top. \(moved) were already in your history."
         case .copiedUpgradeCommand:
             return "Copied. Paste it into Terminal to upgrade."
         }
@@ -2289,6 +2409,12 @@ struct ClipboardItemRow: View {
     let mergeActionTitle: String
     let canCopyMerged: Bool
     let onCopyMerged: () -> Void
+    /// Describes the selected item, not this row, for the same reason `mergeActionTitle` describes
+    /// the selection: a right click does not move the cursor, and the title says which item it
+    /// would take.
+    let splitActionTitle: String
+    let canSplit: Bool
+    let onSplit: () -> Void
 
     private var shouldMask: Bool {
         item.isSensitive && !isRevealed
@@ -2444,11 +2570,23 @@ struct ClipboardItemRow: View {
         }
         .contextMenu {
             // Deliberately not a right-click menu of everything a row can do. The list is driven
-            // by keys and the preview pane already carries the per-item actions; this is here for
-            // the one action that has no other home, because it belongs to a selection rather than
-            // to the row that was clicked.
+            // by keys and the preview pane already carries the per-item actions; these two are here
+            // because they have no other home, and because both belong to what is selected rather
+            // than to the row that was clicked. Their titles say so, and only one of them is ever
+            // available: a multi-selection is Copy Merged's, anything else is Split's.
+            //
+            // The shortcuts are here to be *read*. A key equivalent on a contextual menu item is
+            // only live while that menu is open, so what makes ⌘M and ⌘⇧M work over the list is
+            // `handleKeyEvent`, as it is for every other key in the popover: do not delete that
+            // case in the belief that these two lines have taken it over. They earn their place
+            // because a menu entry is where a user meets the action, and an action nobody knows has
+            // a shortcut is an action nobody stops using the menu for.
             Button(mergeActionTitle, action: onCopyMerged)
+                .keyboardShortcut("m", modifiers: .command)
                 .disabled(!canCopyMerged)
+            Button(splitActionTitle, action: onSplit)
+                .keyboardShortcut("m", modifiers: [.command, .shift])
+                .disabled(!canSplit)
         }
     }
     
@@ -2989,6 +3127,7 @@ private struct ShortcutReferenceView: View {
                     ("⌘-click", "Add an item to the selection"),
                     ("⌘↑↓ / ⇧↑↓", "Extend the selection up or down"),
                     ("⌘M", "Copy the selection merged, top to bottom"),
+                    ("⌘⇧M", "Split the selected item into one item per line"),
                     ("⌘⌫", "Delete item(s)"),
                     ("⌘F", "Toggle favorites filter"),
                     ("⌘/", "Show shortcuts"),

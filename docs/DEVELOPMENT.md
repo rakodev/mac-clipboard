@@ -261,6 +261,66 @@ leave the user with an action that appeared to do nothing, having asked for a co
 Manual checks are in the CLAUDE.md testing checklist; `MacClipboardTests/MergedCopyTests.swift`
 covers the order, the skips, the whitespace, the masking and the titles.
 
+### Split
+
+`Cmd+Shift+M`, or the context menu on any row, turns the selected multi-line text item into one new
+item per line. `ClipboardTextSplit` holds the whole decision as a pure value (`plan(for:)` → `Plan` →
+`items(from:sensitivity:timestamp:)`), so the pieces, the counts, the masking and the titles are all
+testable without a store. It reuses Copy Merged's model wholesale: sources untouched, pieces land as
+ordinary new items through `insertIntoHistory`, masking can only be gained, nothing is trimmed.
+Notes on the calls that are not obvious from the code:
+
+**Why the pieces are inserted in reverse.** Every insert goes in at position 0, so inserting last
+line first is what leaves the list reading in the source's own order, which is the order they will
+be pasted in. The timestamps descend by a millisecond a piece for the same reason: the array order
+decides what the popover shows now, the timestamps decide what comes back after a relaunch, and the
+two have to agree that the first line is the newest item.
+
+**Why a whitespace-only line is dropped.** The backlog entry said empty lines; a line of tabs
+between two blocks is one in every way that matters, and a clip of three spaces arrives as a row
+showing nothing that cannot be told from an empty one. Lines that survive are never trimmed, which
+is the rule that actually protects a leading tab: dropping and trimming are separate decisions and
+only the first one is made here.
+
+**Why the plan is computed from the cursor's item, not the clicked row.** A right click does not
+move the selection, so the row under the pointer and the row the action takes are not always the
+same one, and the title says which. The alternative, a per-row plan, means scanning the text of
+every visible clip on every list rebuild, and a clip can be megabytes. Both context menu entries now
+describe what is selected rather than what was clicked, which is at least one consistent rule.
+
+**Why ⌘⇧M, sharing a key with ⌘M.** They are the same idea in opposite directions and the two can
+never both apply: `splitPlan` stands down when two or more rows are ⌘-clicked, which is exactly when
+`mergePlan` exists. Matching the modifiers in the `case 46` pattern keeps a bare m reaching the
+search field.
+
+**Why it does not write the pasteboard, when Copy Merged does.** A split has no single result to
+copy, and the point of it is to paste the pieces one at a time afterwards. Replacing what the user
+has copied in order to do that would be taking something away; the action is called Split, not Copy.
+
+**Why the cap is a confirmation and not a refusal.** This is the one action in the popover that
+multiplies rows, and a stray copy of a log file is one keystroke from thousands of them. Above 100
+pieces the alert names the count, and names the history limit as well when the split would reach it,
+because that is the part the user cannot see coming. Nothing is capped after they confirm:
+`trimHistoryToLimitPreservingFavorites` is the existing answer to a history with too much in it, and
+it keeps the newest, which after a reverse insert is the first lines of the source.
+
+**Why the menu shows ⌘M and ⌘⇧M without owning them.** Both entries carry a `.keyboardShortcut`,
+which SwiftUI maps to the NSMenuItem key equivalent, so macOS draws the glyphs right-aligned the way
+it does in any menu. A key equivalent on a *contextual* menu is only live while that menu is open,
+which is why `handleKeyEvent`'s `case 46` is still what makes the keys work over the list. The two
+cannot fight: the menu is closed whenever the list has the keyboard. If a SwiftUI release ever did
+register these window-wide, both actions are already safe against firing twice, because each clears
+what it consumed (`clearMultiSelection`, and a split leaves a one-line item selected), so the second
+call finds no plan.
+
+**What happens to a repeated line.** The merger dedupes by content, so a list with the same name
+twice produces one row for it, not two. `ClipboardTextSplitOutcome` counts those separately and the
+status banner says how many moved, because otherwise 12 lines becoming 11 rows reads as dropped
+text.
+
+Manual checks are in the CLAUDE.md testing checklist; `MacClipboardTests/TextSplitTests.swift`
+covers the line rules, the ordering, the masking, the cap and the titles.
+
 ### Sensitive Content Detection
 
 The app can auto-detect sensitive content using two methods:
