@@ -298,6 +298,29 @@ the selection, and `splitPlan` stands down for a multi-selection, which is Copy 
 
 Design notes are in `docs/DEVELOPMENT.md`.
 
+## No Key That Could Be a Search Term May Be Lost
+
+Typing anywhere in the popover starts a search; there is no mode to enter. `ClipboardSearchTyping`
+holds the rule, `SearchTypingTests` pins it, and it is a decision of its own because the same
+mistake was made twice and both times looked like the app dropping keystrokes:
+
+- **The typing check runs before the shortcut table, not in its `default` arm.**
+  `KeyEventView.performKeyEquivalent` sees every key in the window whoever holds first responder, so
+  a case that matches on key code and then fails its ⌘ test consumes the key and passes it to
+  nobody. Over the list that lost `f`, `d`, `z`, `e`, `h`, `v` and `n` entirely.
+- **Focus is read as the fact of holding the keyboard, never as the intention.** `@FocusState` flips
+  on assignment while AppKit follows a pass or two later, and keys in that gap reached neither the
+  list nor a field that was not listening yet: "pickup" typed at speed arrived as "pckup". The search
+  field is an `NSTextField` of the app's own (`ClipboardSearchField`) so it can report when it truly
+  has the keyboard, and take focus with the caret at the end rather than selecting its contents,
+  which is what let the whole handoff become synchronous. Until it reports in, `handleKeyEvent` keeps
+  claiming keys and appending them itself, and `unfocusSearch()` moves both flags together for the
+  same reason in the other direction.
+
+`0`-`9` used to jump the selection. Removing that is what lets a digit be searched for, and what
+gives the ten newest rows the same icon or thumbnail as every other row. Design notes are in
+`docs/DEVELOPMENT.md`.
+
 ## A Text Clip Keeps Its Formatting, and the Plain Text Stays Its Content
 
 `ClipboardRichText` holds the whole rule. A text clip stores the pasteboard's RTF *and* HTML beside
@@ -566,7 +589,7 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 | `Enter` | Paste selected item |
 | `Shift+Enter` | Paste selected item without its formatting |
 | `Cmd+E` | Edit a copy of a text item |
-| `0-9` | Quick paste by position |
+| Any letter or digit | Start searching, over the list or from any row |
 | `↑/↓` | Navigate items |
 | `Cmd+F` | Cycle filter tabs |
 | `Cmd+D` | Toggle favorite |
@@ -689,6 +712,19 @@ When modifying the update check:
       the release page
 
 When modifying the global hotkey: the checklist is in `docs/DEVELOPMENT.md`.
+
+When modifying search or the popover's key handling:
+- [ ] Typing a word over the list as fast as you can type gives that word, every letter of it, with
+      the popover freshly opened and again with a long history loaded
+- [ ] The same for a word starting with f, d, z, e, h, v, n or m, which are the ⌘-shortcut letters
+- [ ] Digits reach the search: a clip found by a year or a house number is findable by typing it
+- [ ] Backspace during that first burst takes back the letter it should
+- [ ] Tab focuses and unfocuses the field; Escape hands the keyboard back to the list, and the arrows
+      work immediately afterwards
+- [ ] Clicking into the field, typing, then pressing Enter still pastes the selected item
+- [ ] ⌘F, ⌘D, ⌘E, ⌘H, ⌘V, ⌘N, ⌘M, ⌘⇧M and ⌘⌫ all still act rather than typing their letter
+- [ ] With shortcuts switched off in Settings, those combinations do nothing rather than typing
+      their letter, and the bare letters still search
 
 When modifying UI:
 - [ ] Filter tabs work correctly

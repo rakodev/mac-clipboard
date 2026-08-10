@@ -23,7 +23,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
 * 👀 **Smart preview** - Click any item to see full content before pasting
 * 🖼️ **Image preview** - Full-size image preview with `Cmd+Z`
-* 🎯 **Quick paste** - Click, press Enter, or use number keys (0-9) to paste
+* 🎯 **Quick paste** - Click an item, or select it and press Enter
 * 💾 **Persistent storage** - History saved to disk, survives app restarts
 * 📁 **Multiple content types** - Supports text, images, and file paths
 * 🗑️ **Bulk delete** - Select multiple items with `Cmd+Click` for deletion
@@ -122,7 +122,7 @@ without quitting it:
 | `Cmd+↑` `Cmd+↓` | Extend the selection up or down (`Shift` works too) |
 | `Cmd+M` | Copy the selected items merged into one, top to bottom |
 | `Cmd+Shift+M` | Split the selected item into one item per line |
-| `0-9` | Quick paste item by number |
+| Any letter or digit | Start searching |
 | `Enter` | Paste selected item |
 | `Shift+Enter` | Paste selected item without its formatting |
 | `↑` `↓` | Navigate between items |
@@ -141,7 +141,8 @@ While editing a copy:
 ### Using Clipboard Items
 
 * **Preview**: Click any item to see full content in the preview panel
-* **Paste**: Click, press Enter, or use number keys (0-9) for quick paste
+* **Paste**: Click an item, or select it with the arrow keys and press Enter
+* **Search**: Just start typing over the list, digits included; `Tab` focuses the search field
 * **Formatting**: A clip copied from Word, Notes, Pages, Mail, TextEdit, a browser, Slack or any
   other app that offers styled text keeps its bold, italics, colours and links, and pasting it puts
   them back. Those items are marked with a text icon in the list and in the preview. To paste one as

@@ -146,6 +146,95 @@ struct ClipboardSelectionExtension {
     }
 }
 
+/// What a key pressed over the popover means: something to search for, or something for the shortcut
+/// table.
+///
+/// It is a decision of its own because it has to be made *before* the shortcut table rather than in
+/// its default arm, and because the state it reads is subtle enough to be worth stating in tests.
+/// Two bugs live here, and both were the same mistake of asking the wrong question:
+///
+/// - A shortcut's key code matching, and then its ⌘ test failing, used to swallow the key: typing
+///   over the list, `f`, `d`, `z`, `e`, `h`, `v` and `n` searched for nothing at all. So the letters
+///   are claimed first, and only what carries ⌘ or ⌃ is left to the table.
+/// - Focus was read as an intention (`@FocusState`, set the instant it is assigned) rather than as
+///   the fact of holding the keyboard, which AppKit hands over a runloop pass or two later. Every
+///   key in that gap was tested against a flag that had already flipped, so it was neither claimed
+///   here nor delivered to a field that was not listening yet: typed quickly, "pickup" arrived as
+///   "pckup". `fieldHasKeyboard` is the fact, and `.extend` is what covers the gap.
+enum ClipboardSearchTyping {
+    struct State: Equatable {
+        /// Whether the search field is the one AppKit is delivering keys to.
+        let fieldHasKeyboard: Bool
+        let noteHasKeyboard: Bool
+        /// Whether a search has been started, whether or not the field has caught up.
+        let searchIsFocused: Bool
+        let searchIsEmpty: Bool
+    }
+
+    enum Outcome: Equatable {
+        /// Start a search with this text, replacing whatever the field was left showing, and ask for
+        /// focus.
+        case start(String)
+        /// Add to the search being typed. The field has not been handed the keyboard yet, so nothing
+        /// else would receive this key.
+        case extend(String)
+        /// Take the last character back off the search.
+        case deleteLast
+        /// Not typing. The shortcut table should have it.
+        case shortcut
+    }
+
+    /// Keys that carry a character but mean something else. Space is not one of them: it is a
+    /// character in a clip like any other.
+    private static let nonTypingKeyCodes: Set<UInt16> = [
+        36,  // Return
+        48,  // Tab
+        51,  // Delete
+        53,  // Escape
+        117, // Forward delete
+        123, 124, 125, 126, // Arrows
+        96, 97, 98, 99, 100, 101, 103, 111 // F1-F8
+    ]
+
+    private static let deleteKeyCode: UInt16 = 51
+
+    static func outcome(
+        characters: String?,
+        keyCode: UInt16,
+        modifiers: NSEvent.ModifierFlags,
+        state: State
+    ) -> Outcome {
+        // The field has the keyboard, so these keys are already going where they belong; and a note
+        // being written is not a search.
+        guard !state.fieldHasKeyboard, !state.noteHasKeyboard else { return .shortcut }
+
+        // ⌘ and ⌃ make a shortcut out of a letter. ⌥ does not: it composes characters, and ⌥e e is
+        // an é somebody meant to search for.
+        guard !modifiers.contains(.command), !modifiers.contains(.control) else { return .shortcut }
+
+        // Backspace only corrects a search that is being typed. Over the list it still means
+        // nothing, and ⌘⌫ was left to the table above.
+        if keyCode == deleteKeyCode {
+            return state.searchIsFocused && !state.searchIsEmpty ? .deleteLast : .shortcut
+        }
+
+        guard isTypedCharacter(characters: characters, keyCode: keyCode),
+              let characters else { return .shortcut }
+
+        return state.searchIsFocused ? .extend(characters) : .start(characters)
+    }
+
+    /// Whether the key is something a user could be searching for. Digits are, since `0`-`9` stopped
+    /// jumping the selection: a clip is as likely to be found by a house number or a year as by a
+    /// word, and a search that silently ignores every digit typed at it is worse than no search.
+    static func isTypedCharacter(characters: String?, keyCode: UInt16) -> Bool {
+        guard let characters, let char = characters.first else { return false }
+        guard !nonTypingKeyCodes.contains(keyCode) else { return false }
+
+        return char.isPrintableASCII || char.isLetter || char.isNumber || char.isSymbol || char == " "
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
     @ObservedObject var menuBarController: MenuBarController
@@ -155,7 +244,6 @@ struct ContentView: View {
     @State private var searchDebounceTask: Task<Void, Never>?
     @State private var filterTask: Task<Void, Never>?
     @State private var computedFilteredItems: [ClipboardItem] = []
-    @State private var pendingSearchCharacter: String?
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
     @State private var selectedFilter: FilterTab = .all
@@ -165,7 +253,14 @@ struct ContentView: View {
     /// Set while ⌘/⇧ arrows are growing the selection, nil at every other time. See
     /// `ClipboardSelectionExtension`.
     @State private var selectionAnchor: ClipboardSelectionExtension.Anchor?
-    @FocusState private var isSearchFocused: Bool
+    /// Whether the search field *should* have the keyboard. Plain `@State` rather than `@FocusState`
+    /// because the search field is an `NSTextField` of the app's own (`ClipboardSearchField`); see
+    /// there for why SwiftUI's could not be kept.
+    @State private var isSearchFocused = false
+    /// Whether the search field *does* have the keyboard, reported by the field itself. It lags
+    /// `isSearchFocused` by a runloop pass or two on the way up, and that gap is where typed letters
+    /// used to disappear: `handleKeyEvent` keeps claiming keys until this turns true.
+    @State private var searchFieldHasKeyboard = false
     @FocusState private var isNoteFocused: Bool
     @State private var timeAgoCache: [UUID: String] = [:]
     @State private var editingNote: String = ""
@@ -453,7 +548,10 @@ struct ContentView: View {
             }
 
             searchDebounceTask = Task {
-                try? await Task.sleep(nanoseconds: 300_000_000) // 300ms debounce for smooth typing
+                // Short, because the filtering itself already runs off the main thread: this only
+                // stops a burst of keystrokes starting a task each. 300ms read as the search lagging
+                // behind the typing.
+                try? await Task.sleep(nanoseconds: 120_000_000)
                 if !Task.isCancelled {
                     await MainActor.run {
                         debouncedSearchText = newValue
@@ -518,17 +616,6 @@ struct ContentView: View {
             if !filteredItems.isEmpty && selectedIndex >= filteredItems.count {
                 selectedIndex = 0
                 updateSelectedItem()
-            }
-        }
-        .onChange(of: isSearchFocused) { focused in
-            // Apply pending character after search field gains focus
-            if focused, let char = pendingSearchCharacter {
-                pendingSearchCharacter = nil
-                // Small delay to ensure TextField is ready and any auto-selection has occurred
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                    // Setting searchText replaces any selection
-                    self.searchText = char
-                }
             }
         }
         .background(KeyEventHandler(focusToken: keyFocusToken) { keyEvent in
@@ -867,14 +954,16 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .foregroundColor(.secondary)
             
-            TextField("Search clipboard... (or just start typing)", text: $searchText)
-                .textFieldStyle(PlainTextFieldStyle())
-                .focused($isSearchFocused)
-                .onSubmit {
-                    // When user presses enter in search, paste the selected item immediately
-                    isSearchFocused = false
-                    pasteSelectedItem()
-                }
+            ClipboardSearchField(
+                text: $searchText,
+                placeholder: "Search clipboard... (or just start typing)",
+                isFocused: isSearchFocused
+            ) { hasKeyboard in
+                searchFieldHasKeyboard = hasKeyboard
+                // A click into the field, or anything that takes the keyboard away from it, decides
+                // this as much as the key handler does, so what the app wants follows what happened.
+                isSearchFocused = hasKeyboard
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
@@ -909,7 +998,6 @@ struct ContentView: View {
                         ForEach(Array(filteredItems.enumerated()), id: \.element.id) { index, item in
                             ClipboardItemRow(
                                 item: item,
-                                index: index,
                                 isSelected: selectedIndex == index,
                                 isMultiSelected: selectedItemIds.contains(item.id),
                                 isRevealed: revealedSensitiveIds.contains(item.id),
@@ -960,7 +1048,10 @@ struct ContentView: View {
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .id("listview-\(searchText)-\(selectedFilter.rawValue)") // Force refresh when search or filter changes
+                // Rebuilt when the search settles, never per keystroke: this identity throws the
+                // whole scroll view away and builds it again, and doing that on every letter is what
+                // made typing feel heavy on a long history.
+                .id("listview-\(debouncedSearchText)-\(selectedFilter.rawValue)")
                 .onChange(of: selectedIndex) { newIndex in
                     withAnimation(.easeInOut(duration: 0.2)) {
                         if newIndex < filteredItems.count {
@@ -1025,7 +1116,7 @@ struct ContentView: View {
         guard canEditSelectedItem, let item = selectedItem else { return }
 
         saveCurrentNote()
-        isSearchFocused = false
+        unfocusSearch()
         isNoteFocused = false
         showShortcuts = false
         clearActionStatus()
@@ -1251,7 +1342,7 @@ struct ContentView: View {
     private func navigateUp() {
         // Always navigate, unfocus search if needed
         if isSearchFocused {
-            isSearchFocused = false
+            unfocusSearch()
         }
         endSelectionRun()
         selectedIndex = max(0, selectedIndex - 1)
@@ -1261,7 +1352,7 @@ struct ContentView: View {
     private func navigateDown() {
         // Always navigate, unfocus search if needed
         if isSearchFocused {
-            isSearchFocused = false
+            unfocusSearch()
         }
         endSelectionRun()
         selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
@@ -1281,7 +1372,7 @@ struct ContentView: View {
     /// ⌘ or ⇧ on an arrow key grows the multi-selection instead of moving the cursor alone.
     private func extendSelection(by delta: Int) {
         if isSearchFocused {
-            isSearchFocused = false
+            unfocusSearch()
         }
 
         guard let result = ClipboardSelectionExtension.extending(
@@ -1354,19 +1445,6 @@ struct ContentView: View {
         }
     }
 
-    private func handleNumberKey(_ number: Int) {
-        guard !filteredItems.isEmpty else { return }
-        
-        // Number 0 is the most recent (index 0), number 9 is the 10th most recent (index 9)
-        let targetIndex = number
-        
-        if targetIndex < filteredItems.count {
-            selectedIndex = targetIndex
-            isSearchFocused = false
-            updateSelectedItem()
-        }
-    }
-    
     private func initializeTimeCache() {
         timeAgoCache.removeAll()
         cacheTimeAgoForNewItems()
@@ -1432,6 +1510,14 @@ struct ContentView: View {
             return handleEditorKeyEvent(keyEvent)
         }
 
+        // Typing belongs to the search field, and it is claimed here rather than in the switch's
+        // `default` arm. Every shortcut below carries ⌘, so a bare letter can never be one, but a
+        // case that matches on key code alone and then fails its inner test returns false and the
+        // key reaches nobody: that is why f, d, z, e, h, v and n used to start no search at all.
+        if let claimed = claimTypingForSearch(keyEvent) {
+            return claimed
+        }
+
         switch keyEvent.keyCode {
         case 126: // Up arrow
             // ⌥↑ jumps to the top. It used to be ⌘↑, and moved when ⌘ became a modifier that grows
@@ -1474,7 +1560,7 @@ struct ContentView: View {
         case 36: // Return/Enter
             // Always paste the selected item, unfocus search if needed
             if isSearchFocused {
-                isSearchFocused = false
+                unfocusSearch()
             }
             // ⇧⏎ pastes the same item without the formatting it was copied with. Deliberately next
             // to the paste key rather than somewhere mnemonic: it is the same action with one thing
@@ -1500,7 +1586,7 @@ struct ContentView: View {
                 return true
             }
             if isSearchFocused {
-                isSearchFocused = false
+                unfocusSearch()
                 return true
             }
             menuBarController.hidePopoverAndActivatePreviousApp()
@@ -1576,7 +1662,7 @@ struct ContentView: View {
                     if let item = selectedItem { saveNote(for: item) }
                     isNoteFocused = false
                 } else {
-                    isSearchFocused = false
+                    unfocusSearch()
                     isNoteFocused = true
                 }
                 return true
@@ -1587,35 +1673,55 @@ struct ContentView: View {
                 return true
             }
         case 48: // Tab
-            isSearchFocused.toggle()
-            return true
-        case 29: if !isSearchFocused { handleNumberKey(0); return true }
-        case 18: if !isSearchFocused { handleNumberKey(1); return true }
-        case 19: if !isSearchFocused { handleNumberKey(2); return true }
-        case 20: if !isSearchFocused { handleNumberKey(3); return true }
-        case 21: if !isSearchFocused { handleNumberKey(4); return true }
-        case 23: if !isSearchFocused { handleNumberKey(5); return true }
-        case 22: if !isSearchFocused { handleNumberKey(6); return true }
-        case 26: if !isSearchFocused { handleNumberKey(7); return true }
-        case 28: if !isSearchFocused { handleNumberKey(8); return true }
-        case 25: if !isSearchFocused { handleNumberKey(9); return true }
-        default:
-            if let characters = keyEvent.characters,
-               !characters.isEmpty,
-               !isSearchFocused,
-               !isNoteFocused,
-               isPrintableCharacter(keyEvent) {
-                // Store the character and focus the search field
-                // The character will be applied after focus is confirmed
-                pendingSearchCharacter = characters
+            if isSearchFocused {
+                unfocusSearch()
+            } else {
                 isSearchFocused = true
-                return true
             }
+            return true
+        default:
             return false
         }
         return false
     }
-    
+
+    /// Hands the keyboard back to the list. Both flags move together and immediately: the field
+    /// gives up first responder a pass or two later, and a key typed in between belongs to a new
+    /// search rather than to a field that is on its way out.
+    private func unfocusSearch() {
+        isSearchFocused = false
+        searchFieldHasKeyboard = false
+    }
+
+    /// Typing that belongs to the search field, applied. `ClipboardSearchTyping` holds the rule and
+    /// the reasoning; nil means the key was not typing and the shortcut table should have it.
+    private func claimTypingForSearch(_ keyEvent: NSEvent) -> Bool? {
+        let outcome = ClipboardSearchTyping.outcome(
+            characters: keyEvent.characters,
+            keyCode: keyEvent.keyCode,
+            modifiers: keyEvent.modifierFlags,
+            state: ClipboardSearchTyping.State(
+                fieldHasKeyboard: searchFieldHasKeyboard,
+                noteHasKeyboard: isNoteFocused,
+                searchIsFocused: isSearchFocused,
+                searchIsEmpty: searchText.isEmpty
+            )
+        )
+
+        switch outcome {
+        case .shortcut:
+            return nil
+        case .start(let characters):
+            searchText = characters
+            isSearchFocused = true
+        case .extend(let characters):
+            searchText += characters
+        case .deleteLast:
+            searchText.removeLast()
+        }
+        return true
+    }
+
     /// Whether an arrow key should grow the selection rather than move the cursor.
     ///
     /// Not gated on `shortcutsEnabled`, for the same reason the bare arrows are not: this is
@@ -1644,36 +1750,6 @@ struct ContentView: View {
         default:
             return false
         }
-    }
-
-    private func isPrintableCharacter(_ keyEvent: NSEvent) -> Bool {
-        // Check if it's a printable character (letters, symbols, space)
-        // Exclude special keys and number keys (used for navigation)
-        guard let characters = keyEvent.characters, !characters.isEmpty else { return false }
-        
-        let char = characters.first!
-        let keyCode = keyEvent.keyCode
-        
-        // Exclude special keys by keycode
-        let specialKeyCodes: Set<UInt16> = [
-            36,  // Enter
-            48,  // Tab
-            49,  // Space (we'll handle this specially)
-            51,  // Delete
-            53,  // Escape
-            117, // Forward Delete
-            123, 124, 125, 126, // Arrow keys
-            96, 97, 98, 99, 100, 101, 103, 111, // Function keys F1-F8
-            // Number keys (used for navigation)
-            29, 18, 19, 20, 21, 23, 22, 26, 28, 25 // 0-9
-        ]
-        
-        if specialKeyCodes.contains(keyCode) && keyCode != 49 { // Allow space (49)
-            return false
-        }
-        
-        // Check if character is printable (letters, symbols, space, but not digits)
-        return (char.isPrintableASCII || char.isLetter || char.isSymbol || char == " ") && !char.isNumber
     }
 }
 
@@ -2394,7 +2470,6 @@ private struct ClipboardTextEditorView: View {
 
 struct ClipboardItemRow: View {
     let item: ClipboardItem
-    let index: Int
     let isSelected: Bool
     let isMultiSelected: Bool
     let isRevealed: Bool
@@ -2434,19 +2509,10 @@ struct ClipboardItemRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            // Show number for first 10 items, icon for others
-            if index < 10 {
-                // Show number (0-9)
-                Text("\(index)")
-                    .font(.system(.caption, design: .monospaced))
-                    .fontWeight(.semibold)
-                    .foregroundColor(isSelected ? .accentColor : .secondary)
-                    .frame(width: 20, height: 20)
-                    .background(
-                        Circle()
-                            .fill(isSelected ? Color.accentColor.opacity(0.2) : Color.secondary.opacity(0.1))
-                    )
-            } else if item.type == .image, !shouldMask, item.isImageLoaded, let image = item.content as? NSImage {
+            // Every row shows what it holds. The first ten used to show their position instead,
+            // which was the label on the 0-9 shortcut; with that gone the digit said nothing, and it
+            // cost the ten newest images the thumbnail every other image row gets.
+            if item.type == .image, !shouldMask, item.isImageLoaded, let image = item.content as? NSImage {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -2769,6 +2835,146 @@ final class CallbackTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+}
+
+/// The search field, as an `NSTextField` of the app's own rather than SwiftUI's `TextField`.
+///
+/// Two things are needed that `TextField` plus `@FocusState` cannot give, and both are about the gap
+/// between asking for focus and having it. `@FocusState` flips the instant it is assigned while
+/// AppKit moves first responder a runloop pass later, and `KeyEventView.performKeyEquivalent` sees
+/// every key in the window throughout that gap:
+///
+/// - **It says when it actually holds the keyboard** (`onKeyboardChange`), so `handleKeyEvent` knows
+///   whether a key is still its to claim. Reading the *intent* instead is what dropped a letter out
+///   of every fast-typed search.
+/// - **It takes focus with the caret at the end**, where `NSTextField` would select its whole
+///   contents. Selecting was why the old code had to write the first character 20 ms *after*
+///   focusing, and that delayed write then overwrote whatever the field had received by then.
+///
+/// Everything else about the keyboard stays where it was: Enter, Escape, Tab and the arrows all
+/// reach `handleKeyEvent` through `performKeyEquivalent` whether this field has focus or not, so it
+/// deliberately implements none of them.
+struct ClipboardSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let placeholder: String
+    /// What the app wants. The field takes first responder to match it, and gives it up when it
+    /// goes false and the field is still the one holding it.
+    let isFocused: Bool
+    let onKeyboardChange: (Bool) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> FocusReportingTextField {
+        let field = FocusReportingTextField()
+        field.delegate = context.coordinator
+        field.isBordered = false
+        field.drawsBackground = false
+        field.focusRingType = .none
+        field.font = .preferredFont(forTextStyle: .body)
+        field.cell?.usesSingleLineMode = true
+        field.cell?.wraps = false
+        field.cell?.isScrollable = true
+        field.cell?.lineBreakMode = .byTruncatingTail
+        field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        return field
+    }
+
+    func updateNSView(_ field: FocusReportingTextField, context: Context) {
+        context.coordinator.text = $text
+        field.placeholderString = placeholder
+        field.onKeyboardChange = onKeyboardChange
+
+        if field.stringValue != text {
+            field.stringValue = text
+            // Only a write from outside the field reaches here: the key handler appending to a
+            // search being typed, or a reset. Both belong at the end. What the user types into the
+            // field arrives through the delegate, where `stringValue` already matches.
+            moveCaretToEnd(field)
+        }
+
+        syncFirstResponder(field)
+    }
+
+    private func syncFirstResponder(_ field: FocusReportingTextField) {
+        // Recorded on the field, not just captured below: this struct is rebuilt on every update, so
+        // a block scheduled by an earlier one would otherwise act on a wish that has since changed
+        // and take the keyboard away from a search that has started again in the meantime.
+        field.desiredFocus = isFocused
+
+        guard (field.currentEditor() != nil) != isFocused else { return }
+
+        // Asynchronously, because a responder change during a SwiftUI update is a change to the view
+        // tree in the middle of building it.
+        DispatchQueue.main.async {
+            guard let window = field.window else { return }
+
+            if field.desiredFocus {
+                guard field.currentEditor() == nil else { return }
+                window.makeFirstResponder(field)
+                moveCaretToEnd(field)
+            } else if field.currentEditor() != nil {
+                // Only while this field is still the one holding the keyboard. The note field may
+                // have taken it in the meantime, and resigning then would pull it back out from
+                // under the note. Handing it to nobody is enough: the list's keys arrive through
+                // `performKeyEquivalent`, which does not care who the first responder is.
+                window.makeFirstResponder(nil)
+            }
+        }
+    }
+
+    private func moveCaretToEnd(_ field: FocusReportingTextField) {
+        guard let editor = field.currentEditor() else { return }
+        editor.selectedRange = NSRange(location: (field.stringValue as NSString).length, length: 0)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
+/// An `NSTextField` that reports holding and losing the keyboard.
+///
+/// `becomeFirstResponder` is the earliest point at which the field is the one being typed into, and
+/// `textDidEndEditing` the point at which it stops being: between them the field editor is installed
+/// and every key goes there. The reports are dispatched rather than sent inline because both are
+/// called from inside AppKit's responder machinery, and their readers are SwiftUI state.
+class FocusReportingTextField: NSTextField {
+    var onKeyboardChange: ((Bool) -> Void)?
+    /// Whether the view above wants this field focused, as of its last update.
+    var desiredFocus = false
+
+    override func becomeFirstResponder() -> Bool {
+        let became = super.becomeFirstResponder()
+        if became { scheduleKeyboardReport() }
+        return became
+    }
+
+    override func textDidEndEditing(_ notification: Notification) {
+        super.textDidEndEditing(notification)
+        scheduleKeyboardReport()
+    }
+
+    /// Reports what is true when the report runs rather than what was true when it was scheduled.
+    /// One responder change can overtake another, and a stale report would put the keyboard back in
+    /// a field the user has already left.
+    private func scheduleKeyboardReport() {
+        let report = onKeyboardChange
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            report?(self.currentEditor() != nil)
+        }
     }
 }
 
@@ -3111,8 +3317,8 @@ private struct ShortcutReferenceView: View {
                     ("↑ / ↓", "Navigate items"),
                     ("⌥↑", "Scroll to top"),
                     ("← / →", "Switch filter tabs"),
-                    ("0–9", "Quick paste by position"),
                     ("Tab", "Focus search"),
+                    ("Any letter or digit", "Start searching"),
                 ])
 
                 ShortcutReferenceSection(title: "Actions", shortcuts: [

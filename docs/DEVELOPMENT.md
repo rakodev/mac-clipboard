@@ -186,6 +186,59 @@ Then read `NSPasteboard.general.types` after a paste from the popover: the flavo
 are present after ⏎ and absent after ⇧⏎. Do both halves separately, since writing HTML *without*
 RTF is exactly the case that RTF-only support got wrong.
 
+### Typing Over the List Is a Search
+
+There is no "enter search mode": a letter or a digit pressed anywhere in the popover starts a
+search, and `Tab` is only there for people who want to click into the field. That is what makes
+finding a clip cheap, so the rule protecting it is that **no key that could be a search term may be
+lost**. `ClipboardSearchTyping` is the whole decision, `SearchTypingTests` pins it, and both exist
+because it was broken twice in ways that looked like the app dropping keystrokes at random.
+
+**Where the keys used to go.** `KeyEventView.performKeyEquivalent` receives every key in the window,
+whoever holds first responder. That is why `handleKeyEvent` can implement Enter, Escape and the
+arrows once and have them work whether the search field has the keyboard or not. It is also the trap:
+a handler that sees a key and declines it has *consumed the chance to handle it*, because the first
+responder it then falls through to is frequently nobody at all.
+
+- **A shortcut case that matches and then declines swallows the key.** `case 3` is the `F` key, and
+  it acts only with ⌘. A bare `f` matched the case, failed the inner test, fell out of the switch
+  and reached nobody: over the list, `f`, `d`, `z`, `e`, `h`, `v` and `n` started no search at all,
+  so "favorite" searched for "avorite". The typing check therefore runs *before* the switch, not in
+  its `default` arm. Every shortcut carries ⌘ or ⌃, so nothing is taken from the table by this.
+- **Focus is a fact, not an intention.** `@FocusState` flips the moment it is assigned; AppKit moves
+  first responder a runloop pass or two later. Keys pressed in that gap were tested against the flag,
+  found it already true, and were dropped as "the field's problem" while the field was not yet
+  listening. Typed at speed, "pickup" arrived as "pckup", losing exactly the character after the
+  first. So `ClipboardSearchField` reports when it *actually* holds the keyboard, and until it does,
+  `handleKeyEvent` keeps claiming keys and appending them to the search itself.
+
+**Why the search field is an `NSTextField` of the app's own.** Two things SwiftUI's `TextField` will
+not do. It cannot say when it has really taken the keyboard, which is the fact above. And an
+`NSTextField` selects its whole contents on becoming first responder, so text put there before
+focusing would be replaced by the next keystroke: that is what forced the old code to write the
+first character 20 ms *after* focusing, and that delayed write then overwrote whatever the field had
+managed to receive in the meantime. `ClipboardSearchField` takes focus with the caret at the end
+instead, so everything can be written synchronously and there is no deferred write left to clobber
+anything.
+
+Three smaller rules that fall out of it:
+
+- **`unfocusSearch()` moves both flags at once.** Handing the keyboard back to the list has the same
+  gap in the other direction, and a key typed during it belongs to a new search rather than to a
+  field on its way out.
+- **The field reports what is true when the report runs**, not when it was scheduled, and
+  `syncFirstResponder` reads its wish off the view (`desiredFocus`) rather than off a captured
+  struct. One responder change can overtake another, and a stale block would take the keyboard away
+  from a search that has already started again.
+- **The list identity is keyed on the debounced search text.** `.id("listview-…")` throws away the
+  entire scroll view and rebuilds it; doing that per keystroke made typing feel heavy on a long
+  history, which widened every window above.
+
+**`0`-`9` no longer jump the selection.** They were a position shortcut, and their cost was that
+every digit typed at the search was silently ignored while the ten newest rows showed a number in
+place of the icon or thumbnail the rest of the list shows. Arrows and search cover the same ground
+without a mode to be in.
+
 ### Extending a Selection From the Keyboard
 
 ⌘ or ⇧ held on ↑/↓ grows the multi-selection instead of moving the cursor alone.
