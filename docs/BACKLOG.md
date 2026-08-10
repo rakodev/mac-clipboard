@@ -94,3 +94,61 @@ colour and breaking the semantic-colour rule.
 Done means: a System / Light / Dark control in Settings, applied at launch and on change, covering
 the popover, the settings window and the onboarding window.
 
+### 14. A clip does not record which app it came from
+
+Raised in external feedback on the backlog post, 2026-08-10, alongside task 15. The pasteboard
+carries no author: `NSPasteboard` has no metadata saying which process wrote a clip, so the only
+way to know is to sample `NSWorkspace.shared.frontmostApplication` at the moment the change is
+noticed. `checkClipboard` already does exactly that, once, inside `captureDecision(for:)`, and
+throws the answer away as soon as the exclusion check has run. `PersistedClipboardItem` has no
+attribute for it.
+
+The value is that a history list is scanned by source before it is read: an icon and an app name
+say "that is the thing I copied out of Slack" faster than the first line of text does, and it gives
+a filter worth having on a long history.
+
+Two scoping calls. Store the **bundle identifier only**, as `excludedBundleIdentifiers` does, and
+resolve the name and the icon at display time the way `ExcludedAppRow` already does, so an app the
+user has since uninstalled still reads correctly and no icon bytes reach the store. And capture it
+on the **same read** that feeds the capture decision rather than a second call, so the guard and the
+recorded source can never disagree about which app was in front.
+
+The known limit carries over unchanged: with 0.8 s polling the frontmost app is a good guess, not a
+fact, and the rule in `CLAUDE.md` stands, so do not layer `didActivateApplicationNotification`
+history on it to sharpen the guess. Task 15 is the honest way to narrow the window. A row showing
+the wrong app is the new failure this task introduces, which is why the two belong together.
+
+Done means: an optional attribute on `PersistedClipboardItem` with a lightweight migration; the
+identifier captured on the existing read; name and icon resolved at display time; a way to filter or
+search by source app; nothing shown at all for clips captured before this change, for a process with
+no bundle identifier, and for items the user made themselves (an edit, a merge, a split), since
+those have no source; and tests covering the no-frontmost-app case.
+
+### 15. The polling interval is a literal, and a second copy inside one tick is lost
+
+Raised in the same feedback as task 14. `startMonitoring` builds `Timer(timeInterval: 0.8,
+repeats: true)`. `changeCount` moves once per write, so two copies inside the same 800 ms window
+leave it higher by more than one while the pasteboard holds only the later clip. The earlier one is
+unrecoverable, and nothing anywhere says it happened, so the loss is invisible in use and
+unmeasured in development.
+
+Two parts, and the first is worth having on its own. **Make the drop observable**: compare the delta
+against the last seen count and log when it is greater than one, so how often this really happens
+becomes a measurement rather than an argument. **Then pick the interval on evidence**, either a
+shorter fixed tick or one that runs fast while the user is active and backs off when they are not.
+
+The scoping call: this is not a preference. A slider asks the user to trade responsiveness against
+battery on numbers they cannot see, and a menu bar app pays for every pixel of UI. Whatever is
+chosen should live in one named place instead of a literal inside `startMonitoring`.
+
+What makes a shorter tick affordable is that reading `changeCount` is cheap while reading the
+pasteboard's contents is not, and the current shape already only reads contents once the count has
+moved. A Universal Clipboard item can make that read slow, so keep the fast path fast and leave the
+work where it is.
+
+Done means: the interval named in one place; a debug log when `changeCount` jumps by more than one;
+an idle cost measurement at the chosen interval, recorded in `docs/DEVELOPMENT.md`, rather than a
+number picked by feel; the pause path still adopting the pasteboard's count before the timer
+restarts (`ClipboardCapturePause.changeCountOnResume`, which is what stops a resume capturing the
+clip the user paused to avoid); and the pending-capture retry unchanged.
+
