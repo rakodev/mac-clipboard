@@ -21,6 +21,7 @@
 		A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0FAVEXPORT00000000000000 /* FavoritesExport.swift */; };
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
 		A0UPDATESERVICE00000000001 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0UPDATESERVICE00000000000 /* UpdateService.swift */; };
+		A0IMAGETEXTRECOG000000001 /* ImageTextRecognition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0IMAGETEXTRECOG000000000 /* ImageTextRecognition.swift */; };
 		A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */; };
 		E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2515D8D1089F4890B45C263D /* PersistenceManager.swift */; };
 		B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */; };
@@ -36,6 +37,7 @@
 		B0TEST000000000000000064 /* SearchTypingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000065 /* SearchTypingTests.swift */; };
 		B0TEST000000000000000062 /* TextSplitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000063 /* TextSplitTests.swift */; };
 		B0TEST000000000000000066 /* ColorSwatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000067 /* ColorSwatchTests.swift */; };
+		B0TEST000000000000000068 /* ImageTextRecognitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000069 /* ImageTextRecognitionTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -81,6 +83,8 @@
 		B0TEST000000000000000065 /* SearchTypingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchTypingTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000063 /* TextSplitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextSplitTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000067 /* ColorSwatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorSwatchTests.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000069 /* ImageTextRecognitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTextRecognitionTests.swift; sourceTree = "<group>"; };
+		A0IMAGETEXTRECOG000000000 /* ImageTextRecognition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTextRecognition.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -125,6 +129,7 @@
 				A0FAVEXPORT00000000000000 /* FavoritesExport.swift */,
 				A0PERMISSIONMGR000000000000 /* PermissionManager.swift */,
 				A0UPDATESERVICE00000000000 /* UpdateService.swift */,
+				A0IMAGETEXTRECOG000000000 /* ImageTextRecognition.swift */,
 				A0SETTINGSVIEW0000000000 /* SettingsView.swift */,
 				2515D8D1089F4890B45C263D /* PersistenceManager.swift */,
 				508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */,
@@ -155,6 +160,7 @@
 				B0TEST000000000000000065 /* SearchTypingTests.swift */,
 				B0TEST000000000000000063 /* TextSplitTests.swift */,
 				B0TEST000000000000000067 /* ColorSwatchTests.swift */,
+				B0TEST000000000000000069 /* ImageTextRecognitionTests.swift */,
 				B0TEST000000000000000015 /* InPlaceUpdateDetectionTests.swift */,
 				B0TEST000000000000000016 /* PersistenceStoreTests.swift */,
 				B0TEST000000000000000012 /* SensitiveContentDetectorTests.swift */,
@@ -274,6 +280,7 @@
 				A0FAVEXPORT00000000000001 /* FavoritesExport.swift in Sources */,
 				A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */,
 				A0UPDATESERVICE00000000001 /* UpdateService.swift in Sources */,
+				A0IMAGETEXTRECOG000000001 /* ImageTextRecognition.swift in Sources */,
 				A0SETTINGSVIEW0000000001 /* SettingsView.swift in Sources */,
 				E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */,
 				A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */,
@@ -293,6 +300,7 @@
 				B0TEST000000000000000064 /* SearchTypingTests.swift in Sources */,
 				B0TEST000000000000000062 /* TextSplitTests.swift in Sources */,
 				B0TEST000000000000000066 /* ColorSwatchTests.swift in Sources */,
+				B0TEST000000000000000068 /* ImageTextRecognitionTests.swift in Sources */,
 				B0TEST000000000000000005 /* InPlaceUpdateDetectionTests.swift in Sources */,
 				B0TEST000000000000000006 /* PersistenceStoreTests.swift in Sources */,
 				B0TEST000000000000000002 /* SensitiveContentDetectorTests.swift in Sources */,

@@ -256,6 +256,7 @@ class PersistenceManager: ObservableObject {
                 persistedItem.isPasswordLike = item.isPasswordLike
                 persistedItem.isManuallyUnsensitive = item.isManuallyUnsensitive
                 persistedItem.note = item.note
+                persistedItem.isRecognizedText = item.isRecognizedText
 
                 switch item.type {
                 case .text:
@@ -402,6 +403,9 @@ class PersistenceManager: ObservableObject {
             isPasswordLike: persistedItem.isPasswordLike,
             isManuallyUnsensitive: persistedItem.isManuallyUnsensitive,
             note: persistedItem.note,
+            // False for every row written before this attribute existed, which is the honest answer:
+            // nothing recorded where those clips came from. See `ClipboardImageTextRecognition`.
+            isRecognizedText: persistedItem.isRecognizedText,
             associatedText: contentType == .image ? persistedItem.textContent : nil,
             // Re-checked on the way out as well as on the way in: a row written by a build that
             // stored something else under these attributes must not put a formatting marker on a

@@ -374,6 +374,71 @@ text.
 Manual checks are in the CLAUDE.md testing checklist; `MacClipboardTests/TextSplitTests.swift`
 covers the line rules, the ordering, the masking, the cap and the titles.
 
+### Reading the Text in an Image
+
+`Cmd+R`, or the button in the preview toolbar, reads the text in the selected image and saves it as a
+new text item. `ClipboardImageTextRecognition` holds the value-level half (`plan(for:isRevealed:)` →
+`Plan`, `text(from:)`, `recognizedItem(from:text:sensitivity:)`), `ImageTextRecognizing` is the seam
+in front of Vision, and `ClipboardMonitor.recognizeText` is the one place that touches history. It
+reuses the editor's model wholesale: the source is untouched, the result lands through
+`insertIntoHistory`, masking can only be gained, nothing is trimmed.
+
+**Why on request and never on capture.** `VNRecognizeTextRequest` is cheap to reach for and not cheap
+to run: an accurate pass over a full-screen screenshot is hundreds of milliseconds of CPU. A history
+holds 176 images per the storage note, most of them pasted once and forgotten, so recognising on
+capture would spend that on almost nothing. There is no preference for it either; a switch that turns
+on background OCR of everything you screenshot is not a switch this app should have.
+
+**Why the text is a new item and not `associatedText` on the image.** As an item of its own it is
+searchable, editable, favouritable, persistable and deletable like anything else. Hung off the image
+it would be none of those, and the image row would stop meaning "what was on the pasteboard", which
+is the one thing every row here means.
+
+**Why reading order is rebuilt rather than trusted.** Vision returns observations in an order that is
+not documented as reading order, and the order *is* the output of this feature. `text(from:)` sorts by
+box: top to bottom, and left to right within a line. This is not theoretical tidiness. Rendering
+"Left" and "Right" side by side and running the real request returns two observations at midY 0.262
+and 0.253, so the vertical-overlap rule is what turns them into `Left Right` instead of two lines.
+Same-line boxes are joined with a space, which is right for a sentence Vision split in two and the
+least wrong thing for a row of table cells.
+
+**Why the grouping compares against the row's first box.** Comparing each box against the previously
+grouped one lets a column of slightly descending lines chain into a single very tall "line". The
+threshold is half the shorter box, as a fraction rather than a distance, because Vision's boxes are
+normalised to the image and a fixed number would mean something different for every screenshot. There
+is a test for a five-line column that overlaps its neighbour by more than the threshold each time.
+
+**Why the comparator is not "same line?".** Asking that question inside a `sorted(by:)` predicate is
+not a transitive ordering, and a comparator that is not an ordering is a sort with no defined result.
+So the lines get a total order by `(midY, minX)` first and the grouping walks the sorted array.
+
+**Why a masked image is refused.** The editor makes the same test (`canEditSelectedItem`): reading a
+hidden clip would write a new row holding text the user never got to see. Revealing it first is one
+keystroke, and the disabled button says so rather than disappearing. Text read from a revealed hidden
+image is hidden, so masking is still only ever gained.
+
+**Why the marker is an attribute and not a note.** The backlog entry allowed either. A note would have
+cost nothing to write, but the note field belongs to the user, every other derived-item path in this
+app deliberately does not touch it, and `ClipboardFilter` scores an item with a note above one without
+so an auto-note would quietly outrank ordinary matches in every search. So `isRecognizedText` is a
+Boolean on `PersistedClipboardItem` with an inferred lightweight migration, false for every row
+written before it, marked with `text.viewfinder` in the row and in the preview's metadata line. It is
+not a display-time derivation, unlike the colour swatch, because provenance is not content: there is
+nothing in the text to derive it from.
+
+**Why the work lives on `ClipboardMonitor` and not in the popover.** The popover's content view is
+rebuilt on every open and destroyed on every close, and a recognition outstanding when the user clicks
+away would be lost with it. The monitor survives, so the row arrives either way; the view holds only
+the spinner's state (`recognizingImageIds`) and refuses a second pass on an image already in flight.
+
+**Why the pasteboard is not written.** Same as Split: the user asked to read an image, not to replace
+what they have copied. The new row is selected instead, so `⏎` pastes it.
+
+`MacClipboardTests/ImageTextRecognitionTests.swift` covers what the action applies to, the ordering
+and grouping rules, the whitespace-only drops, what the item inherits, and the monitor's four
+outcomes over a store of its own with a stub recogniser. Vision itself is not under test there, which
+is the point of the seam; the manual checks are in the CLAUDE.md checklist.
+
 ### A Clip That Is a Colour
 
 `ClipboardColorSwatch` (in `ContentView.swift`, with the other display-time value types) parses a
@@ -571,6 +636,8 @@ From 0.1.25 that check also runs on its own, once a day, which makes it the one 
 * Dev builds never check automatically. They are routinely ahead of the latest release, so a nag would be wrong as often as it was right.
 
 Switching the preference off leaves the manual check working, in Settings and in the menu, so no build ever loses the ability to answer "am I current".
+
+Text recognition (`Cmd+R`, see above) does not widen this. Vision runs the request locally, needs no entitlement and opens no connection, so an image and the text read out of it never leave the Mac. If a future change here ever needed a server, the answer is that the feature does not ship rather than that the boundary moves.
 
 ### Telling the User About a Release Without Getting in the Way
 

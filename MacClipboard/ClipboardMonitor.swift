@@ -677,6 +677,9 @@ class ClipboardMonitor: ObservableObject {
     private var isPausing = false
     private var userPreferences: UserPreferencesManager
     private var persistenceManager: PersistenceManager
+    /// Injected so a test can exercise `recognizeText` without Vision and without a fixture image
+    /// that happens to contain legible text.
+    private let textRecognizer: ImageTextRecognizing
     private var maintenanceTimer: Timer?
     private var pendingChangeCount: Int?
     private var pendingCaptureAttempts: Int = 0
@@ -685,9 +688,11 @@ class ClipboardMonitor: ObservableObject {
     private let pendingCaptureRetryDelay: TimeInterval = 0.25
     
     init(userPreferences: UserPreferencesManager = UserPreferencesManager.shared,
-         persistenceManager: PersistenceManager = PersistenceManager.shared) {
+         persistenceManager: PersistenceManager = PersistenceManager.shared,
+         textRecognizer: ImageTextRecognizing = VisionImageTextRecognizer()) {
         self.userPreferences = userPreferences
         self.persistenceManager = persistenceManager
+        self.textRecognizer = textRecognizer
         self.isCapturePaused = userPreferences.capturePaused
 
         // Load persisted history first. A pause survives a relaunch, so a paused app comes back
@@ -1617,6 +1622,81 @@ class ClipboardMonitor: ObservableObject {
         )
     }
 
+    /// Reads the text in an image item and saves it as a new text item, leaving the image untouched.
+    ///
+    /// Asked for on the main thread, as the other derive-a-new-item actions are, but unlike them it
+    /// finishes later: the image may have to come off disk first, and the recognition itself is long
+    /// enough that nothing can wait for it. `completion` is called on the main queue, and the work
+    /// belongs here rather than in the popover so that closing the popover mid-recognition still
+    /// leaves the new row in history.
+    ///
+    /// The pasteboard is deliberately not written, as in `splitIntoItems`: the user asked to read an
+    /// image, not to replace what they have copied. The new row is selected instead, so ⏎ pastes it.
+    func recognizeText(
+        _ plan: ClipboardImageTextRecognition.Plan,
+        completion: @escaping (ClipboardImageTextRecognitionOutcome) -> Void
+    ) {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        guard let item = clipboardHistory.first(where: { $0.id == plan.itemId }) else {
+            completion(.failed)
+            return
+        }
+
+        // The same load the preview does: an image beyond the newest few is not in memory.
+        loadImageIfNeeded(item) { [weak self] image in
+            guard let self else { return }
+            guard let image else {
+                Logging.info("🔍 No image to read text from for item \(plan.itemId)")
+                completion(.failed)
+                return
+            }
+
+            self.textRecognizer.recognizeText(in: image) { result in
+                switch result {
+                case .failure(let error):
+                    Logging.info("🔍 Text recognition failed: \(error.localizedDescription)")
+                    completion(.failed)
+                case .success(let lines):
+                    let text = ClipboardImageTextRecognition.text(from: lines)
+                    completion(self.saveRecognizedText(text, for: plan))
+                }
+            }
+        }
+    }
+
+    private func saveRecognizedText(
+        _ text: String,
+        for plan: ClipboardImageTextRecognition.Plan
+    ) -> ClipboardImageTextRecognitionOutcome {
+        dispatchPrecondition(condition: .onQueue(.main))
+
+        guard !text.isEmpty else { return .noTextFound }
+
+        let sensitivity = ClipboardSensitivityPolicy.flags(
+            for: text,
+            hasSensitivePasteboardType: false,
+            autoDetectSensitiveData: userPreferences.autoDetectSensitiveData,
+            autoHidePasswordLikeStrings: userPreferences.autoHidePasswordLikeStrings
+        )
+        let recognized = ClipboardImageTextRecognition.recognizedItem(
+            from: plan,
+            text: text,
+            sensitivity: sensitivity
+        )
+        let lineCount = text.components(separatedBy: "\n").count
+
+        // The merger dedupes by content, so text that was recognised before, or that the user has
+        // since copied by hand, moves that row to the top instead of adding a second copy of it.
+        guard let result = insertIntoHistory(recognized) else {
+            return .alreadyInHistory(id: clipboardHistory.first?.id ?? plan.itemId)
+        }
+
+        return result.removedItemIDs.isEmpty
+            ? .recognized(id: recognized.id, lineCount: lineCount)
+            : .alreadyInHistory(id: recognized.id)
+    }
+
     func toggleSensitive(_ item: ClipboardItem) {
         DispatchQueue.main.async {
             if let index = self.clipboardHistory.firstIndex(where: { $0.id == item.id }) {
@@ -1688,12 +1768,16 @@ struct ClipboardItem: Identifiable, Equatable {
     var isPasswordLike: Bool   // True if detected as password-like string
     var isManuallyUnsensitive: Bool  // True if user explicitly un-marked as sensitive (prevents re-apply)
     var note: String?
+    /// Whether this text was read out of an image rather than copied. See
+    /// `ClipboardImageTextRecognition`: a stored flag rather than a note, because the note belongs
+    /// to the user, and rather than a display-time derivation, because provenance is not content.
+    let isRecognizedText: Bool
     var associatedText: String?  // Optional text representation when clipboard item is image + text
     var rtfData: Data?   // The source app's RTF for a text item, written back on paste. See ClipboardRichText.
     var htmlData: Data?  // The source app's HTML, for the apps that write that instead of RTF.
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, associatedText: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, isRecognizedText: Bool = false, associatedText: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -1705,6 +1789,9 @@ struct ClipboardItem: Identifiable, Equatable {
         self.isPasswordLike = isPasswordLike
         self.isManuallyUnsensitive = isManuallyUnsensitive
         self.note = note
+        // Text only, for the reason the flavours below are: the marker says this text was read out
+        // of an image, and only a text item holds text.
+        self.isRecognizedText = (type == .text) && isRecognizedText
         self.associatedText = associatedText
         // Formatting belongs to text. An image or a file carrying RTF or HTML would be a marker in
         // the row that no paste could honour, since neither writes a text flavour.
@@ -1809,6 +1896,7 @@ struct ClipboardItem: Identifiable, Equatable {
                lhs.isPasswordLike == rhs.isPasswordLike &&
                lhs.isManuallyUnsensitive == rhs.isManuallyUnsensitive &&
                lhs.note == rhs.note &&
+               lhs.isRecognizedText == rhs.isRecognizedText &&
                lhs.associatedText == rhs.associatedText &&
                lhs.rtfData == rhs.rtfData &&
                lhs.htmlData == rhs.htmlData &&

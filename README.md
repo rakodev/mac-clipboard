@@ -23,6 +23,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
 * 👀 **Smart preview** - Click any item to see full content before pasting
 * 🖼️ **Image preview** - Full-size image preview with `Cmd+Z`
+* 🔎 **Read text from an image** - Press `Cmd+R` on a screenshot to save the text in it as a new item, recognised on your own Mac
 * 🎨 **Colour swatches** - A clip that is a colour (`#3A7BD5`, `rgb(58, 123, 213)`) shows the colour beside it
 * 🎯 **Quick paste** - Click an item, or select it and press Enter
 * 💾 **Persistent storage** - History saved to disk, survives app restarts
@@ -118,6 +119,7 @@ without quitting it:
 | `Cmd+V` | Temporarily reveal sensitive item content |
 | `Cmd+N` | Focus note field for selected item |
 | `Cmd+Backspace` | Delete items (shows confirmation) |
+| `Cmd+R` | Read the text in the selected image into a new item |
 | `Cmd+Z` | Open image preview (when image selected) |
 | `Cmd+Click` | Add an item to the selection |
 | `Cmd+↑` `Cmd+↓` | Extend the selection up or down (`Shift` works too) |
@@ -172,6 +174,12 @@ While editing a copy:
   `rgb(58, 123, 213)`, shows that colour as a swatch in the list and in the preview, with the hex
   spelled out beside it when the clip is written some other way. A colour mentioned inside other
   text gets no swatch, so a stylesheet does not come back covered in them
+* **Read the text in an image**: With an image selected, press `Cmd+R` or click the text button in the
+  preview toolbar. The text is recognised on your own Mac, with nothing sent anywhere, and saved as a
+  new item at the top of the list, marked so you can tell it from something you copied yourself. The
+  image is left exactly as it was, and what you had copied stays on your clipboard. It only runs when
+  you ask: nothing is recognised in the background. An image with no readable text in it says so and
+  adds nothing, and a hidden image has to be revealed first
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
 ### Content Types Supported
@@ -252,7 +260,7 @@ Two further settings hide items that *are* saved, revealed with `Cmd+V`:
 
 ### Keyboard Shortcuts
 
-* Enable/disable in-app keyboard shortcuts (`Cmd+D`, `Cmd+H`, `Cmd+F`, `Cmd+N`, `Cmd+Backspace`, `Cmd+Z`, etc.)
+* Enable/disable in-app keyboard shortcuts (`Cmd+D`, `Cmd+H`, `Cmd+F`, `Cmd+N`, `Cmd+R`, `Cmd+Backspace`, `Cmd+Z`, etc.)
 
 ## Requirements
 
@@ -284,6 +292,7 @@ defaults delete com.macclipboard.app 2>/dev/null || true
 * **Clipboard data stays local**: Clipboard history is stored only on your Mac and is never synced or uploaded
 * **Local storage only**: History stored in `~/Library/Application Support/MacClipboard`
 * **Explicit update checks only**: The optional "Check for Updates" action contacts the GitHub Releases API; no clipboard content is sent
+* **Text recognition runs on your Mac**: `Cmd+R` reads an image with Apple's on-device Vision framework. No image and no text leaves the machine, and it only runs when you ask
 * **Configurable retention**: Set how long items are kept (or disable persistence entirely)
 * **Exclusions**: Clips marked confidential by the source app, and clips from apps you name, can be
   dropped before they are recorded at all (see [Privacy settings](#privacy))

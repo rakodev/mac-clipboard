@@ -49,25 +49,8 @@ renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or
 meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
 (deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
 (keeping the formatting a clip was copied with) were all completed on 2026-08-09. Task 9 (merging a
-selection into one clip), task 10 (splitting one clip into a line per item) and task 11 (a swatch on
-a clip that is a colour) were completed on 2026-08-10.
-
-### 12. Text in a copied image cannot be extracted
-
-Vision's `VNRecognizeTextRequest` runs on device with no network and no extra entitlement, and the
-app already targets macOS 13, so this is a much smaller feature than it sounds.
-
-Run it **only when the user asks**, from an action on a selected image, never on capture. OCR on
-every screenshot would spend CPU and battery on images that are mostly pasted once and forgotten,
-and the storage note in `CLAUDE.md` shows how many images a real history holds.
-
-The result should become a new text item rather than being stuffed into `associatedText`, so it is
-searchable, persistable and deletable like anything else, and so the image row keeps meaning "what
-was on the pasteboard".
-
-Done means: an action and a key on image items; a progress and failure state for images with no
-readable text; the resulting item marked in its note or display so it is clearly derived; UI copy
-stating the recognition is on device; and the request kept off the main thread.
+selection into one clip), task 10 (splitting one clip into a line per item), task 11 (a swatch on a
+clip that is a colour) and task 12 (reading the text in a copied image) were completed on 2026-08-10.
 
 ### 13. Light and dark follow the system with no way to override
 

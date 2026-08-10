@@ -71,6 +71,7 @@ MacClipboard/
 ├── PersistenceManager.swift   # Core Data stack, save/load items, image storage
 ├── PermissionManager.swift    # Accessibility permission handling
 ├── UpdateService.swift        # Release check, ReleaseVersion, UpdateChecker (schedule + state)
+├── ImageTextRecognition.swift # On-device OCR: the plan, the line ordering, the Vision request
 ├── AppInstallation.swift      # Install location, duplicate copies, signing identity
 ├── Logging.swift              # Debug/release logging utility
 └── ClipboardData.xcdatamodeld # Core Data model (PersistedClipboardItem entity)
@@ -298,6 +299,31 @@ the selection, and `splitPlan` stands down for a multi-selection, which is Copy 
 
 Design notes are in `docs/DEVELOPMENT.md`.
 
+## The Text in an Image Is Read On Request, Never on Capture
+
+`Cmd+R`, and the button in the preview toolbar, read the text in the selected image with Vision and
+save it as a new text item (`ClipboardImageTextRecognition`, `ClipboardMonitor.recognizeText`). The
+same model as the editor, Copy Merged and Split: the image row is untouched, the text lands as an
+ordinary item, masking can only be gained, nothing is trimmed, and the pasteboard is not written.
+Four rules of its own:
+
+- **Only when asked, one image at a time.** Recognising on capture would spend CPU and battery on
+  screenshots that are pasted once and forgotten. There is no preference and no queue.
+- **The result is an item, not a field on the image.** Putting it in `associatedText` would make it
+  unsearchable as a clip and unable to be edited or deleted on its own, and the image row would stop
+  meaning "what was on the pasteboard".
+- **A masked image is refused until it is revealed**, as the editor is: reading one would write out
+  text the user never saw. Text read from a hidden image is hidden too.
+- **Reading order is rebuilt from the boxes, not taken from Vision.** Its result order is not
+  documented as reading order, and here the order *is* the output. Boxes that overlap vertically are
+  one line joined with a space; measured on a two-column image, Vision returns those as separate
+  observations. `text(from:)` holds the rule and the tests pin it.
+
+`isRecognizedText` marks the item in the row and the preview. It is an attribute rather than a note
+because the note field is the user's, and rather than a display-time derivation because provenance is
+not content. The recognition is on device with no entitlement and no network; the update check
+remains the app's only unprompted network call. Design notes are in `docs/DEVELOPMENT.md`.
+
 ## A Clip That Is a Colour Shows the Colour
 
 `ClipboardColorSwatch` parses a text clip that is **exactly** a colour (`#RGB`, `#RGBA`, `#RRGGBB`,
@@ -410,6 +436,7 @@ Key singletons:
 - `rtfData`, `htmlData`: Binary, inline (the source app's formatting for a text item; see below)
 - `isFavorite`, `isSensitive`: Boolean
 - `note`: String (user-added)
+- `isRecognizedText`: Boolean (this text was read out of an image; see below)
 - `createdAt`, `updatedAt`: Date
 
 ## Images Are the Storage Cost, Not Text
@@ -613,6 +640,7 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 | `Cmd+H` | Toggle sensitive mode |
 | `Cmd+V` | Reveal sensitive item |
 | `Cmd+N` | Focus note field |
+| `Cmd+R` | Read the text in an image, on this Mac, into a new item |
 | `Cmd+Z` | Full-size image preview |
 | `Cmd+Click` | Add an item to the selection |
 | `Cmd+↑` / `Cmd+↓` | Extend the selection (`Shift+↑` / `Shift+↓` do the same) |
@@ -780,6 +808,24 @@ When modifying Split:
 - [ ] Over 100 lines asks first, names the count, and cancelling adds nothing
 - [ ] Relaunching keeps the pieces in the same order they were left in
 
+When modifying text recognition:
+- [ ] With a screenshot of text selected, ⌘R and the preview's text button both add one new item at
+      the top holding the text, reading top to bottom, with the image left where it was
+- [ ] The new row and its preview both carry the read-from-an-image marker, and it is still there
+      after a relaunch
+- [ ] The pasteboard is untouched: what was copied before ⌘R still pastes elsewhere. ⏎ on the new
+      row pastes the text
+- [ ] A screenshot of two columns keeps each row on one line rather than one column then the other
+- [ ] While it runs the button becomes a spinner and a second ⌘R does nothing; closing the popover
+      mid-read still leaves the new item in history when it is reopened
+- [ ] A photo with no text says so and adds nothing
+- [ ] The action is unavailable on text and file items, and greyed on a masked image until ⌘V reveals
+      it; text read from a revealed hidden image is hidden, and the popover switches to All to show it
+- [ ] Reading the same image twice does not add a second row, and the banner says the text was
+      already in the history
+- [ ] Running it on an old image that is no longer in memory loads the image first and still works
+- [ ] With shortcuts switched off in Settings, ⌘R does nothing and the button still works
+
 When modifying the colour swatch:
 - [ ] Copying `#FF5733`, `#f53`, `#FF573380` and `rgb(255, 87, 51)` each gives the row a swatch of
       that colour, and the preview one beside the character count
@@ -860,5 +906,6 @@ the only check that needs both the signature and the ticket to be there.
 | Change Copy Merged | `ClipboardMonitor.swift` (`ClipboardMergedCopy`, `copyMerged`), `ContentView.swift` (`ClipboardMergedCopyContent`, `copyMergedSelection`) |
 | Change Split | `ClipboardMonitor.swift` (`ClipboardTextSplit`, `splitIntoItems`), `ContentView.swift` (`ClipboardTextSplitContent`, `splitSelectedItem`) |
 | Change the colour swatch | `ContentView.swift` (`ClipboardColorSwatch`, `ClipboardColorSwatchView`) |
+| Change text recognition | `ImageTextRecognition.swift`, `ClipboardMonitor.swift` (`recognizeText`), `ContentView.swift` (`recognizeSelectedItemText`, `recognizeTextButton`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
 | Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |

@@ -435,6 +435,9 @@ struct ContentView: View {
     @State private var editingNote: String = ""
     @State private var revealedSensitiveIds: Set<UUID> = []  // Temporarily revealed sensitive items
     @State private var loadingImageIds: Set<UUID> = []  // Images currently being loaded from disk
+    /// Images whose text is being read right now. The recognition runs on `ClipboardMonitor`, so
+    /// closing the popover mid-pass still lands the new row; this is only the spinner's state.
+    @State private var recognizingImageIds: Set<UUID> = []
     @State private var loadedImages: [UUID: NSImage] = [:]  // Cache for lazy-loaded images
     @State private var showShortcuts: Bool = false
     @State private var isScrolledDown: Bool = false
@@ -647,6 +650,11 @@ struct ContentView: View {
                             },
                             onLoadImage: {
                                 loadLazyImage(selectedItem)
+                            },
+                            canRecognizeText: recognizeTextPlan != nil,
+                            isRecognizingText: recognizingImageIds.contains(selectedItem.id),
+                            onRecognizeText: {
+                                recognizeSelectedItemText()
                             },
                             onSaveNote: {
                                 saveNote(for: selectedItem)
@@ -1449,6 +1457,46 @@ struct ContentView: View {
         showActionStatus(.split(count: plan.pieceCount, moved: outcome.movedCount))
     }
 
+    // MARK: - Reading the Text in an Image
+
+    /// What ⌘R and the preview's button would do right now, or nil when there is nothing to read:
+    /// anything that is not an image, and an image that is still masked.
+    private var recognizeTextPlan: ClipboardImageTextRecognition.Plan? {
+        guard let selectedItem else { return nil }
+        return ClipboardImageTextRecognition.plan(
+            for: selectedItem,
+            isRevealed: revealedSensitiveIds.contains(selectedItem.id)
+        )
+    }
+
+    /// Returns false when there is nothing to read, so the key can fall through unclaimed.
+    @discardableResult
+    private func recognizeSelectedItemText() -> Bool {
+        guard let plan = recognizeTextPlan else { return false }
+        // A second ⌘R while the first pass is still running would read the same image twice and
+        // deduplicate down to one row, having spent the work twice.
+        guard !recognizingImageIds.contains(plan.itemId) else { return true }
+
+        recognizingImageIds.insert(plan.itemId)
+        clipboardMonitor.recognizeText(plan) { outcome in
+            recognizingImageIds.remove(plan.itemId)
+
+            switch outcome {
+            case .recognized(let id, let lineCount):
+                revealWrittenItem(withId: id)
+                showActionStatus(.recognizedText(lines: lineCount))
+            case .alreadyInHistory(let id):
+                revealWrittenItem(withId: id)
+                showActionStatus(.alreadyInHistory)
+            case .noTextFound:
+                showActionStatus(.noTextRecognized)
+            case .failed:
+                showActionStatus(.textRecognitionFailed)
+            }
+        }
+        return true
+    }
+
     /// Returns false when there was nothing to merge, so the key can fall through unclaimed.
     @discardableResult
     private func copyMergedSelection() -> Bool {
@@ -1809,6 +1857,12 @@ struct ContentView: View {
                     return true
                 }
             }
+        case 15 where keyEvent.modifierFlags.contains(.command): // R key
+            // The modifier is matched in the pattern rather than tested inside the case, for the
+            // reason spelled out under `case 46`: a case that matches and then does nothing swallows
+            // the key, and a bare r has to reach the search field.
+            guard userPreferences.shortcutsEnabled else { return false }
+            return recognizeSelectedItemText()
         case 46 where keyEvent.modifierFlags.contains(.command): // M key
             // The modifier is matched in the pattern rather than tested inside the case, unlike the
             // letters above. A case that matches and then does nothing swallows the key: that is why
@@ -2096,6 +2150,11 @@ struct ClipboardCompactPreviewView: View {
     let onToggleReveal: () -> Void
     let onReveal: () -> Void
     let onLoadImage: () -> Void
+    /// False for a masked image, so the button explains itself rather than disappearing: reading a
+    /// hidden image would write out text the user never got to see.
+    let canRecognizeText: Bool
+    let isRecognizingText: Bool
+    let onRecognizeText: () -> Void
     let onSaveNote: () -> Void
     /// Opens the editor. The offset is where in the text the caret should land, nil for the start.
     let onEdit: (Int?) -> Void
@@ -2182,12 +2241,43 @@ struct ClipboardCompactPreviewView: View {
                     .accessibilityLabel("Edit a copy")
                     .help(isMasked ? "Reveal this item before editing it (⌘V)" : "Edit a copy, saved as a new item (⌘E)")
                 }
+
+                if item.type == .image {
+                    recognizeTextButton
+                }
             }
 
             Button("Copy ⏎", action: onCopy)
                 .buttonStyle(.bordered)
                 .font(.caption)
                 .controlSize(.small)
+        }
+    }
+
+    /// Reading the text in an image, which is the one action here that takes long enough to need a
+    /// state of its own: the spinner replaces the button in the same 12pt slot, so the row does not
+    /// resize while it runs. The on-device claim is in the tooltip rather than in the row, because it
+    /// is the answer to "where does this image go", and that question is asked before pressing it.
+    @ViewBuilder private var recognizeTextButton: some View {
+        if isRecognizingText {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.7)
+                .frame(width: 14, height: 14)
+                .accessibilityLabel("Reading the text in this image")
+                .help("Reading the text in this image, on this Mac")
+        } else {
+            Button(action: onRecognizeText) {
+                Image(systemName: "text.viewfinder")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .disabled(!canRecognizeText)
+            .accessibilityLabel("Read the text in this image")
+            .help(canRecognizeText
+                ? "Read the text in this image on this Mac, saved as a new item (⌘R)"
+                : "Reveal this item before reading its text (⌘V)")
         }
     }
 
@@ -2239,6 +2329,20 @@ struct ClipboardCompactPreviewView: View {
     @ViewBuilder private var textMetadata: some View {
         let charCount = item.fullText.count
         let lineCount = item.fullText.components(separatedBy: .newlines).count
+        // First, and shown whether or not the item is masked, like the formatting marker: where a
+        // clip came from is not its content. It matters most on the items nobody watched arrive.
+        if item.isRecognizedText {
+            Image(systemName: "text.viewfinder")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .fixedSize()
+                .accessibilityLabel("Read from an image")
+                .help("This text was read from an image, on this Mac")
+            Text("•")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary.opacity(0.6))
+                .fixedSize()
+        }
         // Ahead of the counts, because it is the one thing here that says what the clip *is*. Behind
         // the mask, for the reason the row's swatch is.
         if !isMasked, let swatch = ClipboardColorSwatch.swatch(for: item) {
@@ -2461,9 +2565,9 @@ struct ClipboardCompactPreviewView: View {
 
 /// The one line the popover gets to explain what an action just did to the history.
 ///
-/// Shared by the editor and by Copy Merged because both write a row the user did not watch arrive,
-/// and both have the same "that text was already here" case: the merger dedupes by content, so a
-/// save or a join that matches an existing clip moves it to the top instead of adding a second one.
+/// Shared by the editor, Copy Merged, Split and text recognition because each writes a row the user
+/// did not watch arrive, and they share the "that text was already here" case: the merger dedupes by
+/// content, so anything matching an existing clip moves it to the top instead of adding a second one.
 enum ClipboardActionStatus: Equatable {
     case savedNew
     case alreadyInHistory
@@ -2472,6 +2576,13 @@ enum ClipboardActionStatus: Equatable {
     /// instead of being added again. Without it a list with a repeated line produces fewer rows
     /// than it has lines, with nothing on screen to say why.
     case split(count: Int, moved: Int)
+    /// Text was read out of an image. The one action whose result the user could not see coming, so
+    /// the line says how much arrived and that nothing left the Mac to get it.
+    case recognizedText(lines: Int)
+    /// The recognition ran and found nothing readable, which is the ordinary answer for a photo or a
+    /// diagram. Not a failure, and worded so it does not read as one.
+    case noTextRecognized
+    case textRecognitionFailed
     /// The Homebrew upgrade command was put on the pasteboard from the update banner. It belongs
     /// here rather than in an alert because it *is* a clipboard action: the row is about to appear
     /// at the top of the history like any other copy.
@@ -2487,6 +2598,12 @@ enum ClipboardActionStatus: Equatable {
             return "arrow.triangle.merge"
         case .split:
             return "arrow.triangle.branch"
+        case .recognizedText:
+            return "text.viewfinder"
+        case .noTextRecognized:
+            return "questionmark.circle"
+        case .textRecognitionFailed:
+            return "exclamationmark.triangle"
         case .copiedUpgradeCommand:
             return "terminal"
         }
@@ -2512,6 +2629,15 @@ enum ClipboardActionStatus: Equatable {
                 return "Split into \(count) items, first line at the top. The original is unchanged."
             }
             return "Split into \(count) items, first line at the top. \(moved) were already in your history."
+        case .recognizedText(let lines):
+            guard lines > 1 else {
+                return "Read 1 line of text on this Mac. The image is unchanged."
+            }
+            return "Read \(lines) lines of text on this Mac. The image is unchanged."
+        case .noTextRecognized:
+            return "No readable text in that image, so nothing was added."
+        case .textRecognitionFailed:
+            return "That image could not be read. Nothing was added."
         case .copiedUpgradeCommand:
             return "Copied. Paste it into Terminal to upgrade."
         }
@@ -2797,6 +2923,13 @@ struct ClipboardItemRow: View {
                         Image(systemName: "textformat")
                             .font(.system(size: 8))
                             .accessibilityLabel("Keeps its formatting")
+                    }
+                    // Same rule, and the same reason it is in the row rather than only in the
+                    // preview: a clip nobody copied should say so where it is first seen.
+                    if item.isRecognizedText {
+                        Image(systemName: "text.viewfinder")
+                            .font(.system(size: 8))
+                            .accessibilityLabel("Read from an image")
                     }
                     // Show Auto/PWD badges only when item is masked
                     if item.isAutoSensitive && shouldMask {
@@ -3573,6 +3706,7 @@ private struct ShortcutReferenceView: View {
                     ("⌘H", "Toggle sensitive"),
                     ("⌘V", "Reveal sensitive item"),
                     ("⌘N", "Focus note field"),
+                    ("⌘R", "Read the text in an image, on this Mac"),
                     ("⌘Z", "Full-size image preview"),
                     ("⌘-click", "Add an item to the selection"),
                     ("⌘↑↓ / ⇧↑↓", "Extend the selection up or down"),
