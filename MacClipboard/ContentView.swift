@@ -235,6 +235,175 @@ enum ClipboardSearchTyping {
     }
 }
 
+/// A text clip that is *exactly* a colour, shown as a swatch beside the row and in the preview.
+///
+/// Derived at display time and stored nowhere, so there is no attribute, no migration, and a history
+/// with no colours in it pays nothing. `#3A7BD5` is a string that says nothing until you paste it
+/// somewhere that renders it, and the swatch is the whole feature: it turns a row of hex into the
+/// colour it names.
+///
+/// The scoping rule is what keeps it from becoming noise: the **whole trimmed clip** has to be a
+/// colour. Matching a colour found anywhere inside the text would put a swatch on most CSS, most
+/// stylesheets, and a good deal of ordinary code, which is a marker that means nothing because it is
+/// on everything.
+struct ClipboardColorSwatch: Equatable {
+    /// 0...255 rather than a fraction, so `hexLabel` is the bytes back out rather than a float
+    /// rounded a second time.
+    let red: Int
+    let green: Int
+    let blue: Int
+    /// 0...1. Below 1 the swatch is drawn over a checkerboard, because a translucent colour over the
+    /// row's background is indistinguishable from a lighter opaque one.
+    let alpha: Double
+    /// The trimmed source, kept only so the preview can tell whether `hexLabel` says anything the
+    /// clip does not already say itself.
+    let sourceText: String
+
+    /// Longer than this cannot be a colour, and the check runs before anything is allocated: a
+    /// 5,000 character clip must not pay for a trim and a lowercase to find out it is not seven
+    /// characters of hex. This is what makes the parse free on a full history.
+    static let maxLength = 40
+
+    // MARK: - Parsing
+
+    /// Nil for anything that is not a text item whose entire content is a colour.
+    static func swatch(for item: ClipboardItem?) -> ClipboardColorSwatch? {
+        guard let item, item.type == .text else { return nil }
+        return parse(item.fullText)
+    }
+
+    static func parse(_ text: String) -> ClipboardColorSwatch? {
+        // `prefix` stops counting at the cap, so this is bounded work whatever the clip holds.
+        guard text.prefix(maxLength + 1).count <= maxLength else { return nil }
+
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.hasPrefix("#") {
+            return parseHex(trimmed)
+        }
+        return parseFunctional(trimmed)
+    }
+
+    /// `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, in either case.
+    ///
+    /// Four digit counts and nothing between them: `#GGHHII` is the length of a colour and none of
+    /// the characters, and `#1234567` is hex of a length no notation has. Both are the near misses
+    /// this has to refuse, since a swatch showing a colour the clip does not name is worse than no
+    /// swatch at all.
+    private static func parseHex(_ trimmed: String) -> ClipboardColorSwatch? {
+        let digits = trimmed.dropFirst()
+        // ASCII as well as hex: `Character.isHexDigit` accepts the fullwidth forms, and `#ＡＢＣ` is
+        // not something anyone copied meaning a colour.
+        guard digits.allSatisfy({ $0.isASCII && $0.isHexDigit }) else { return nil }
+
+        let values = digits.compactMap { $0.hexDigitValue }
+        switch values.count {
+        case 3:
+            // Each nibble doubles: F becomes FF, which is ×17.
+            return make(values[0] * 17, values[1] * 17, values[2] * 17, 1, trimmed)
+        case 4:
+            return make(values[0] * 17, values[1] * 17, values[2] * 17, Double(values[3] * 17) / 255, trimmed)
+        case 6:
+            return make(values[0] << 4 | values[1], values[2] << 4 | values[3], values[4] << 4 | values[5], 1, trimmed)
+        case 8:
+            return make(
+                values[0] << 4 | values[1],
+                values[2] << 4 | values[3],
+                values[4] << 4 | values[5],
+                Double(values[6] << 4 | values[7]) / 255,
+                trimmed
+            )
+        default:
+            return nil
+        }
+    }
+
+    /// `rgb(255, 87, 51)` and `rgba(255, 87, 51, 0.5)`, plus the space-separated spelling CSS Color 4
+    /// added: `rgb(255 87 51 / 50%)`.
+    ///
+    /// `rgb` and `rgba` are aliases in that spec, so both take three or four components rather than
+    /// each being held to its own name. Channels are whole numbers only: `rgb(100%, 0%, 0%)` is a
+    /// colour this refuses, which costs a swatch on a notation almost nobody copies and keeps the
+    /// parse to one rule per component.
+    private static func parseFunctional(_ trimmed: String) -> ClipboardColorSwatch? {
+        let lowered = trimmed.lowercased()
+        guard lowered.hasSuffix(")") else { return nil }
+
+        let body: Substring
+        if lowered.hasPrefix("rgba(") {
+            body = lowered.dropFirst(5).dropLast()
+        } else if lowered.hasPrefix("rgb(") {
+            body = lowered.dropFirst(4).dropLast()
+        } else {
+            return nil
+        }
+
+        // A comma anywhere means the legacy spelling; without one the components are separated by
+        // whitespace and the alpha by a slash. Mixing them gives a field that parses as neither.
+        let fields: [String] = body.contains(",")
+            ? body.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            : body.split(whereSeparator: { $0 == "/" || $0.isWhitespace }).map(String.init)
+
+        guard fields.count == 3 || fields.count == 4 else { return nil }
+        guard let red = Int(fields[0]), let green = Int(fields[1]), let blue = Int(fields[2]) else { return nil }
+
+        var alpha = 1.0
+        if fields.count == 4 {
+            guard let parsed = parseAlpha(fields[3]) else { return nil }
+            alpha = parsed
+        }
+
+        return make(red, green, blue, alpha, trimmed)
+    }
+
+    /// `0.5` or `50%`.
+    private static func parseAlpha(_ field: String) -> Double? {
+        if field.hasSuffix("%") {
+            guard let percent = Double(field.dropLast()) else { return nil }
+            return percent / 100
+        }
+        return Double(field)
+    }
+
+    /// Out of range is clamped rather than refused, which is what a browser does with it.
+    /// `rgb(300, 0, 0)` is a colour somebody wrote badly, not a clip that means something else.
+    private static func make(_ red: Int, _ green: Int, _ blue: Int, _ alpha: Double, _ source: String) -> ClipboardColorSwatch {
+        ClipboardColorSwatch(
+            red: min(max(red, 0), 255),
+            green: min(max(green, 0), 255),
+            blue: min(max(blue, 0), 255),
+            alpha: min(max(alpha, 0), 1),
+            sourceText: source
+        )
+    }
+
+    // MARK: - Display
+
+    /// sRGB, deliberately: that is what a hex colour on the web means, and reading it in the display
+    /// profile would show a colour other than the one the clip names.
+    var color: Color {
+        Color(.sRGB, red: Double(red) / 255, green: Double(green) / 255, blue: Double(blue) / 255, opacity: alpha)
+    }
+
+    var isTranslucent: Bool { alpha < 1 }
+
+    var hexLabel: String {
+        let base = String(format: "#%02X%02X%02X", red, green, blue)
+        guard isTranslucent else { return base }
+        return base + String(format: "%02X", Int((alpha * 255).rounded()))
+    }
+
+    /// Whether the preview should print `hexLabel` beside the swatch.
+    ///
+    /// False for a clip that already reads as that hex, whatever case it is written in, so the
+    /// common item does not get a label repeating the line above it. True for `rgb(255, 87, 51)` and
+    /// for `#F53`, where the hex is the conversion the user would otherwise do by hand.
+    var addsHexLabel: Bool {
+        sourceText.uppercased() != hexLabel
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
     @ObservedObject var menuBarController: MenuBarController
@@ -2070,6 +2239,23 @@ struct ClipboardCompactPreviewView: View {
     @ViewBuilder private var textMetadata: some View {
         let charCount = item.fullText.count
         let lineCount = item.fullText.components(separatedBy: .newlines).count
+        // Ahead of the counts, because it is the one thing here that says what the clip *is*. Behind
+        // the mask, for the reason the row's swatch is.
+        if !isMasked, let swatch = ClipboardColorSwatch.swatch(for: item) {
+            ClipboardColorSwatchView(swatch: swatch, size: 12)
+                .fixedSize()
+            if swatch.addsHexLabel {
+                Text(swatch.hexLabel)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .fixedSize()
+                    .textSelection(.enabled)
+            }
+            Text("•")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary.opacity(0.6))
+                .fixedSize()
+        }
         Text("\(charCount) chars")
             .font(.system(size: 10))
             .foregroundColor(.secondary)
@@ -2468,6 +2654,52 @@ private struct ClipboardTextEditorView: View {
     }
 }
 
+/// The colour itself, drawn at whatever size the row or the preview has room for.
+///
+/// The border is not decoration: a swatch of `#FFFFFF` in light mode, or of `#1E1E1E` in dark, is
+/// otherwise the background with nothing to say where it starts and stops, and those are two of the
+/// colours people copy most. It is a semantic colour for the same reason everything else here is,
+/// so it stays visible in both appearances.
+struct ClipboardColorSwatchView: View {
+    let swatch: ClipboardColorSwatch
+    let size: CGFloat
+
+    private var corner: CGFloat { size <= 12 ? 2 : 3 }
+
+    var body: some View {
+        ZStack {
+            if swatch.isTranslucent {
+                checkerboard
+            }
+            swatch.color
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: corner))
+        .overlay(
+            RoundedRectangle(cornerRadius: corner)
+                .stroke(Color.secondary.opacity(0.5), lineWidth: 0.5)
+        )
+        .accessibilityLabel("Colour \(swatch.hexLabel)")
+        .help("This clip is the colour \(swatch.hexLabel)")
+    }
+
+    /// Four squares, which at this size is all a checkerboard needs to be. Without it a colour at
+    /// 20% alpha and the same colour at 100% are the same swatch on a light background, and the
+    /// alpha is the part of `#RRGGBBAA` that a hex string is least readable about.
+    private var checkerboard: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                Color(NSColor.textBackgroundColor)
+                Color.secondary.opacity(0.35)
+            }
+            HStack(spacing: 0) {
+                Color.secondary.opacity(0.35)
+                Color(NSColor.textBackgroundColor)
+            }
+        }
+    }
+}
+
 struct ClipboardItemRow: View {
     let item: ClipboardItem
     let isSelected: Bool
@@ -2507,6 +2739,13 @@ struct ClipboardItemRow: View {
         return item.previewText
     }
 
+    /// Derived here rather than carried on the item: the parse is bounded by
+    /// `ClipboardColorSwatch.maxLength`, and the list is a `LazyVStack`, so only the rows on screen
+    /// ever run it.
+    private var colorSwatch: ClipboardColorSwatch? {
+        ClipboardColorSwatch.swatch(for: item)
+    }
+
     var body: some View {
         HStack(spacing: 8) {
             // Every row shows what it holds. The first ten used to show their position instead,
@@ -2526,6 +2765,11 @@ struct ClipboardItemRow: View {
                 Image(systemName: "lock.fill")
                     .font(.system(size: 12))
                     .foregroundColor(.orange)
+                    .frame(width: 20, height: 20)
+            } else if let colorSwatch {
+                // After the mask, never before it: the swatch is content, and a hidden clip gives
+                // away nothing about what it holds until it is revealed.
+                ClipboardColorSwatchView(swatch: colorSwatch, size: 14)
                     .frame(width: 20, height: 20)
             } else {
                 Image(systemName: iconName)

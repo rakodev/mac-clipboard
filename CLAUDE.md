@@ -298,6 +298,23 @@ the selection, and `splitPlan` stands down for a multi-selection, which is Copy 
 
 Design notes are in `docs/DEVELOPMENT.md`.
 
+## A Clip That Is a Colour Shows the Colour
+
+`ClipboardColorSwatch` parses a text clip that is **exactly** a colour (`#RGB`, `#RGBA`, `#RRGGBB`,
+`#RRGGBBAA`, `rgb()`, `rgba()`) and the row and the preview draw a swatch of it. Derived at display
+time and stored nowhere, so there is no attribute and no migration. Three rules:
+
+- **The whole trimmed clip, never a match inside it.** `color: #FF5733;` gets nothing. Matching
+  anywhere would put a swatch on most CSS and most code, and a marker that is on everything says
+  nothing.
+- **A near miss gets no swatch.** Hex is 3, 4, 6 or 8 ASCII hex digits and nothing between them, so
+  `#1234567`, `#GGHHII` and a ticket reference all refuse. Out-of-range `rgb()` components are the
+  one exception and are clamped, as a browser does.
+- **It is behind the mask, and bounded.** A hidden clip shows the lock until it is revealed, because
+  the colour is content. `maxLength` is checked with `prefix` before anything is allocated, and the
+  list is a `LazyVStack`, so a history of megabyte clips pays 41 characters of counting per visible
+  row. Design notes are in `docs/DEVELOPMENT.md`.
+
 ## No Key That Could Be a Search Term May Be Lost
 
 Typing anywhere in the popover starts a search; there is no mode to enter. `ClipboardSearchTyping`
@@ -763,6 +780,19 @@ When modifying Split:
 - [ ] Over 100 lines asks first, names the count, and cancelling adds nothing
 - [ ] Relaunching keeps the pieces in the same order they were left in
 
+When modifying the colour swatch:
+- [ ] Copying `#FF5733`, `#f53`, `#FF573380` and `rgb(255, 87, 51)` each gives the row a swatch of
+      that colour, and the preview one beside the character count
+- [ ] The preview prints `#FF5733` beside the swatch for the `rgb()` and `#f53` clips, and prints
+      nothing beside the swatch for the clip that already reads `#FF5733`
+- [ ] `color: #FF5733;`, `#GGHHII`, `#1234567` and a copied stylesheet all show the ordinary text
+      icon, not a swatch
+- [ ] `#FFFFFF` in light mode and `#000000` in dark are both visible as a bordered square rather
+      than disappearing into the row
+- [ ] `#FF573380` shows the checkerboard behind it; `#FF5733` does not
+- [ ] Marking a colour clip sensitive replaces the swatch with the lock in the row and takes it out
+      of the preview; revealing it brings both back
+
 When modifying the editor:
 - [ ] Clicking the preview text opens it with the caret where the click landed
 - [ ] Dragging over the preview text selects it and does not open the editor; Cmd+C copies it
@@ -829,5 +859,6 @@ the only check that needs both the signature and the ticket to be there.
 | Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |
 | Change Copy Merged | `ClipboardMonitor.swift` (`ClipboardMergedCopy`, `copyMerged`), `ContentView.swift` (`ClipboardMergedCopyContent`, `copyMergedSelection`) |
 | Change Split | `ClipboardMonitor.swift` (`ClipboardTextSplit`, `splitIntoItems`), `ContentView.swift` (`ClipboardTextSplitContent`, `splitSelectedItem`) |
+| Change the colour swatch | `ContentView.swift` (`ClipboardColorSwatch`, `ClipboardColorSwatchView`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
 | Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |

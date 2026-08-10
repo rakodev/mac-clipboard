@@ -374,6 +374,59 @@ text.
 Manual checks are in the CLAUDE.md testing checklist; `MacClipboardTests/TextSplitTests.swift`
 covers the line rules, the ordering, the masking, the cap and the titles.
 
+### A Clip That Is a Colour
+
+`ClipboardColorSwatch` (in `ContentView.swift`, with the other display-time value types) parses a
+text clip that is *exactly* a colour and gives the row and the preview a swatch of it. `#3A7BD5`
+says nothing until you paste it somewhere that renders it; the swatch is the whole feature.
+
+Nothing is stored. There is no attribute, no migration, and a history with no colours in it pays
+nothing, which is why this is a display-time derivation rather than something computed on capture.
+
+**Why only the whole trimmed clip counts.** Matching a colour found anywhere in the text would put a
+swatch on most CSS, most stylesheets and a good deal of ordinary code, and a marker that is on
+everything means nothing. So `color: #FF5733;` gets no swatch and `#FF5733` does. The same rule is
+what makes the parse cheap: it can refuse on length before it allocates anything.
+
+**Which notations, and why those.** `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, plus `rgb()` and
+`rgba()` in both the legacy comma spelling and the CSS Color 4 space-and-slash one. `rgb` and `rgba`
+are aliases in that spec, so neither is held to its own component count. Channels are whole numbers
+only: `rgb(100%, 0%, 0%)` gets no swatch, which costs a notation almost nobody copies and keeps the
+parse to one rule per component. Alpha still takes a percentage, since that is where CSS puts them.
+
+**Which near misses have to be refused, and why they are the point.** A swatch showing a colour the
+clip does not name is worse than no swatch. Hex is 3, 4, 6 or 8 digits and nothing between them, so
+`#1234567` is refused on length; the digits must all be ASCII hex, so `#GGHHII` and a ticket
+reference like `#123abz` are refused on content, and `#ＡＢＣ` is refused because
+`Character.isHexDigit` accepts the fullwidth forms and nobody copied those meaning a colour.
+Out-of-range components are the one case that is *not* refused: `rgb(300, 0, 0)` is clamped, which
+is what a browser does with it, because that is a colour somebody wrote badly rather than a clip
+that means something else.
+
+**Why the cost is bounded rather than small.** `maxLength` (40) is checked with `prefix`, so a
+megabyte of CSS costs 41 characters of counting, not a trim and a lowercase of the whole clip. The
+list is a `LazyVStack`, so only the rows on screen run it at all. The trade is that a colour padded
+past the cap gets no swatch, which is a clip nobody has.
+
+**Why the swatch has a border and sometimes a checkerboard.** `#FFFFFF` in light mode and `#1E1E1E`
+in dark are the background with nothing to say where the swatch starts, and they are two of the
+colours people copy most, so the border is not decoration. It is `Color.secondary`, like every other
+colour in the app, so it holds up in both appearances. Below full alpha the swatch is drawn over a
+four-square checkerboard, because a translucent colour over the row background is otherwise
+indistinguishable from a lighter opaque one, and alpha is the part of `#RRGGBBAA` that is least
+readable as text.
+
+**Why the preview prints the hex sometimes and not always.** `addsHexLabel` is false when the clip
+already reads as that hex in any case, so the common item does not get a label repeating the line
+above it, and true for `rgb(255, 87, 51)` and `#F53`, where the hex is the conversion the user would
+otherwise do by hand.
+
+**Why a hidden item shows no swatch.** The colour is content. The row checks the mask first, so a
+masked clip shows the lock until it is revealed, and the preview's metadata row does the same.
+
+`MacClipboardTests/ColorSwatchTests.swift` covers the notations, every near miss above, the
+trimming, the length cap, the clamping, the labels and the item types.
+
 ### Sensitive Content Detection
 
 The app can auto-detect sensitive content using two methods:

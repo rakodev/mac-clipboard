@@ -49,21 +49,8 @@ renumbering the ones below it, so a reference written in `BACKLOG_ARCHIVE.md` or
 meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture), task 6
 (deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
 (keeping the formatting a clip was copied with) were all completed on 2026-08-09. Task 9 (merging a
-selection into one clip) and task 10 (splitting one clip into a line per item) were completed on
-2026-08-10.
-
-### 11. A hex colour clip shows no colour
-
-Small and self-contained: when a text clip is exactly a colour (`#RGB`, `#RRGGBB`, `#RRGGBBAA`,
-optionally `rgb()`), show a swatch in the row and in the preview. Nothing is stored; it is derived at
-display time, so there is no migration and no cost to a history that has none.
-
-The scoping call that keeps this from becoming noise: match only when the whole trimmed clip is a
-colour. Matching anywhere in the text would put a swatch on most CSS and most code snippets.
-
-Done means: the pattern and the parse covered by tests (including rejecting near misses like
-`#GGHHII` and a 7-character string), a swatch that stays legible in light and dark against the
-semantic backgrounds, and no measurable cost per row on a full history.
+selection into one clip), task 10 (splitting one clip into a line per item) and task 11 (a swatch on
+a clip that is a colour) were completed on 2026-08-10.
 
 ### 12. Text in a copied image cannot be extracted
 

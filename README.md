@@ -23,6 +23,7 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
 * 👀 **Smart preview** - Click any item to see full content before pasting
 * 🖼️ **Image preview** - Full-size image preview with `Cmd+Z`
+* 🎨 **Colour swatches** - A clip that is a colour (`#3A7BD5`, `rgb(58, 123, 213)`) shows the colour beside it
 * 🎯 **Quick paste** - Click an item, or select it and press Enter
 * 💾 **Persistent storage** - History saved to disk, survives app restarts
 * 📁 **Multiple content types** - Supports text, images, and file paths
@@ -167,6 +168,10 @@ While editing a copy:
   Copy a column out of a spreadsheet, split it, and the lines are in the list in the order they were
   written, first line at the top. Blank lines are left out, nothing else is trimmed, the original
   item stays as it was, and a split of a hidden item stays hidden. Above 100 lines it asks first
+* **Colours**: A clip that is nothing but a colour, such as `#3A7BD5`, `#f53`, `#3A7BD580` or
+  `rgb(58, 123, 213)`, shows that colour as a swatch in the list and in the preview, with the hex
+  spelled out beside it when the clip is written some other way. A colour mentioned inside other
+  text gets no swatch, so a stylesheet does not come back covered in them
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
 ### Content Types Supported
