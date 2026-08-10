@@ -83,6 +83,69 @@ struct ClipboardFilter {
     }
 }
 
+/// Growing a multi-selection from the keyboard, with ⌘ or ⇧ held on an arrow key.
+///
+/// The set the popover keeps is free-form: ⌘-click toggles any row, in any order, and nothing
+/// records which rows went in together. An arrow key cannot work off that alone, because reversing
+/// direction has to give back exactly the rows the presses before it took, and a set with no anchor
+/// cannot say which those were. So a run of extends is a range between an anchor and the cursor,
+/// recomputed on every press, unioned with whatever was already selected when the run began.
+///
+/// Both modifiers extend: ⌘ because ⌘-click is this app's own multi-select gesture and the hand is
+/// already there, ⇧ because it is what every other list on the Mac uses.
+struct ClipboardSelectionExtension {
+    /// Where the current run started. Held by id rather than by index: a capture arriving while the
+    /// popover is open pushes a row in at the top and shifts every index below it, and the anchor
+    /// has to keep meaning the row the user started from.
+    struct Anchor: Equatable {
+        let itemId: UUID
+        /// What was selected when the run began, so ⌘-clicks made beforehand are not swept away by
+        /// a range that happens to pass over them and then retreat.
+        let base: Set<UUID>
+    }
+
+    struct Result: Equatable {
+        let index: Int
+        let selectedIds: Set<UUID>
+        let anchor: Anchor
+    }
+
+    /// `delta` is -1 for up and +1 for down.
+    ///
+    /// Returns nil at either end of the list, so the key changes nothing rather than redrawing the
+    /// same selection: pressing ⇧↑ on the first row should not quietly select it.
+    static func extending(
+        from currentIndex: Int,
+        by delta: Int,
+        in items: [ClipboardItem],
+        selectedIds: Set<UUID>,
+        anchor: Anchor?
+    ) -> Result? {
+        guard !items.isEmpty else { return nil }
+
+        let cursor = min(max(currentIndex, 0), items.count - 1)
+        let next = cursor + delta
+        guard items.indices.contains(next) else { return nil }
+
+        // An anchor whose row has been filtered away or deleted starts the run again from the
+        // cursor, which is the one place on screen the user can see it starting from.
+        let resolved: (index: Int, base: Set<UUID>) = anchor
+            .flatMap { candidate in
+                items.firstIndex(where: { $0.id == candidate.itemId })
+                    .map { (index: $0, base: candidate.base) }
+            }
+            ?? (index: cursor, base: selectedIds)
+
+        let range = min(resolved.index, next)...max(resolved.index, next)
+
+        return Result(
+            index: next,
+            selectedIds: resolved.base.union(items[range].map(\.id)),
+            anchor: Anchor(itemId: items[resolved.index].id, base: resolved.base)
+        )
+    }
+}
+
 struct ContentView: View {
     @ObservedObject var clipboardMonitor: ClipboardMonitor
     @ObservedObject var menuBarController: MenuBarController
@@ -99,6 +162,9 @@ struct ContentView: View {
     @State private var showClearConfirmation = false
     @State private var showDeleteAllConfirmation = false  // Second confirmation for delete all
     @State private var selectedItemIds: Set<UUID> = []  // For multi-selection
+    /// Set while ⌘/⇧ arrows are growing the selection, nil at every other time. See
+    /// `ClipboardSelectionExtension`.
+    @State private var selectionAnchor: ClipboardSelectionExtension.Anchor?
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isNoteFocused: Bool
     @State private var timeAgoCache: [UUID: String] = [:]
@@ -388,7 +454,7 @@ struct ContentView: View {
                let index = newItems.firstIndex(where: { $0.id == wanted }) {
                 pendingSelectionId = nil
                 shouldResetSelectionAfterFilterChange = false
-                selectedItemIds.removeAll()
+                clearMultiSelection()
                 selectedIndex = index
                 selectedItem = newItems[index]
                 updatePopoverSize()
@@ -398,7 +464,7 @@ struct ContentView: View {
             if shouldResetSelectionAfterFilterChange {
                 shouldResetSelectionAfterFilterChange = false
                 selectedIndex = 0
-                selectedItemIds.removeAll()
+                clearMultiSelection()
                 updateSelectedItem()
             } else if let currentItem = selectedItem,
                let newIndex = newItems.firstIndex(where: { $0.id == currentItem.id }) {
@@ -420,7 +486,7 @@ struct ContentView: View {
             shouldResetSelectionAfterFilterChange = true
             selectedIndex = 0
             selectedItem = nil
-            selectedItemIds.removeAll()
+            clearMultiSelection()
             isScrolledDown = false
             // Recompute when filter tab changes
             recomputeFilteredItems()
@@ -473,6 +539,7 @@ struct ContentView: View {
             },
             onDeleteSelected: { ids in
                 clipboardMonitor.deleteItems(withIds: ids)
+                selectionAnchor = nil
             },
             onDeleteAll: {
                 clipboardMonitor.clearHistory()
@@ -770,7 +837,7 @@ struct ContentView: View {
                                 isRevealed: revealedSensitiveIds.contains(item.id),
                                 onSelect: {
                                     selectedIndex = index
-                                    selectedItemIds.removeAll()  // Clear multi-selection on regular click
+                                    clearMultiSelection()  // A plain click starts over
                                     updateSelectedItem()
                                 },
                                 onCopy: {
@@ -785,6 +852,9 @@ struct ContentView: View {
                                     } else {
                                         selectedItemIds.insert(item.id)
                                     }
+                                    // A ⌘-click ends whatever run of arrows was going, so the next
+                                    // ⌘↓ grows from the cursor and keeps this click.
+                                    endSelectionRun()
                                 },
                                 onToggleReveal: {
                                     if revealedSensitiveIds.contains(item.id) {
@@ -820,6 +890,7 @@ struct ContentView: View {
 
                 if isScrolledDown {
                     Button(action: {
+                        endSelectionRun()
                         selectedIndex = 0
                         updateSelectedItem()
                         if !filteredItems.isEmpty {
@@ -837,7 +908,7 @@ struct ContentView: View {
                     .buttonStyle(PlainButtonStyle())
                     .accessibilityLabel("Scroll to top")
                     .padding(6)
-                    .help("Scroll to top (⌘↑)")
+                    .help("Scroll to top (⌥↑)")
                 }
             }
         }
@@ -1003,7 +1074,7 @@ struct ContentView: View {
         let outcome = clipboardMonitor.copyMerged(plan)
         // The selection has been spent. Leaving it highlighted would invite a second ⌘M that
         // silently does nothing, the join already being the item at the top.
-        selectedItemIds.removeAll()
+        clearMultiSelection()
 
         switch outcome {
         case .merged(let id):
@@ -1047,11 +1118,19 @@ struct ContentView: View {
 
     // MARK: - Navigation Functions
 
+    /// Drops the multi-selection and the run that was growing it. Everything that makes the list
+    /// mean something else goes through here, so the two can never disagree.
+    private func clearMultiSelection() {
+        selectedItemIds.removeAll()
+        selectionAnchor = nil
+    }
+
     private func navigateUp() {
         // Always navigate, unfocus search if needed
         if isSearchFocused {
             isSearchFocused = false
         }
+        endSelectionRun()
         selectedIndex = max(0, selectedIndex - 1)
         updateSelectedItem()
     }
@@ -1061,7 +1140,38 @@ struct ContentView: View {
         if isSearchFocused {
             isSearchFocused = false
         }
+        endSelectionRun()
         selectedIndex = min(filteredItems.count - 1, selectedIndex + 1)
+        updateSelectedItem()
+    }
+
+    /// Ends a run of ⌘/⇧ arrows without touching what is selected.
+    ///
+    /// A plain arrow, or a ⌘-click, means the next extend should grow from where the cursor is now
+    /// rather than from wherever the last run started. What is already selected survives, and
+    /// becomes the base the next run builds on, so a user can pick a block, step past a row they do
+    /// not want, and pick another block.
+    private func endSelectionRun() {
+        selectionAnchor = nil
+    }
+
+    /// ⌘ or ⇧ on an arrow key grows the multi-selection instead of moving the cursor alone.
+    private func extendSelection(by delta: Int) {
+        if isSearchFocused {
+            isSearchFocused = false
+        }
+
+        guard let result = ClipboardSelectionExtension.extending(
+            from: selectedIndex,
+            by: delta,
+            in: filteredItems,
+            selectedIds: selectedItemIds,
+            anchor: selectionAnchor
+        ) else { return }
+
+        selectionAnchor = result.anchor
+        selectedItemIds = result.selectedIds
+        selectedIndex = result.index
         updateSelectedItem()
     }
 
@@ -1201,14 +1311,25 @@ struct ContentView: View {
 
         switch keyEvent.keyCode {
         case 126: // Up arrow
-            if keyEvent.modifierFlags.contains(.command) {
+            // ⌥↑ jumps to the top. It used to be ⌘↑, and moved when ⌘ became a modifier that grows
+            // the selection: ⌘↑ has to mean the same thing as ⌘↓ or neither is learnable.
+            if keyEvent.modifierFlags.contains(.option) {
+                endSelectionRun()
                 selectedIndex = 0
                 updateSelectedItem()
+                return true
+            }
+            if extendsSelection(keyEvent) {
+                extendSelection(by: -1)
                 return true
             }
             navigateUp()
             return true
         case 125: // Down arrow
+            if extendsSelection(keyEvent) {
+                extendSelection(by: 1)
+                return true
+            }
             navigateDown()
             return true
         case 123: // Left arrow
@@ -1364,6 +1485,14 @@ struct ContentView: View {
         return false
     }
     
+    /// Whether an arrow key should grow the selection rather than move the cursor.
+    ///
+    /// Not gated on `shortcutsEnabled`, for the same reason the bare arrows are not: this is
+    /// navigating the list, which is the one thing the popover cannot be asked to stop doing.
+    private func extendsSelection(_ keyEvent: NSEvent) -> Bool {
+        keyEvent.modifierFlags.contains(.command) || keyEvent.modifierFlags.contains(.shift)
+    }
+
     /// Keys handled while the editor is open. Everything not claimed here falls through to the
     /// text view, so ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z all do what they do in any other text field.
     private func handleEditorKeyEvent(_ keyEvent: NSEvent) -> Bool {
@@ -1493,6 +1622,8 @@ private struct ClipboardDeletionConfirmationModifier: ViewModifier {
                 } else {
                     Button("Cancel", role: .cancel) { }
                     Button(ClipboardDeletionConfirmationContent.selectedDeleteButtonTitle(selectedCount: selectedItemIds.count), role: .destructive) {
+                        // The anchor is dropped by `onDeleteSelected`: this modifier holds the set
+                        // and nothing else about the selection.
                         onDeleteSelected(selectedItemIds)
                         selectedItemIds.removeAll()
                     }
@@ -2776,7 +2907,7 @@ private struct ShortcutReferenceView: View {
 
                 ShortcutReferenceSection(title: "Navigation", shortcuts: [
                     ("↑ / ↓", "Navigate items"),
-                    ("⌘↑", "Scroll to top"),
+                    ("⌥↑", "Scroll to top"),
                     ("← / →", "Switch filter tabs"),
                     ("0–9", "Quick paste by position"),
                     ("Tab", "Focus search"),
@@ -2792,6 +2923,7 @@ private struct ShortcutReferenceView: View {
                     ("⌘N", "Focus note field"),
                     ("⌘Z", "Full-size image preview"),
                     ("⌘-click", "Add an item to the selection"),
+                    ("⌘↑↓ / ⇧↑↓", "Extend the selection up or down"),
                     ("⌘M", "Copy the selection merged, top to bottom"),
                     ("⌘⌫", "Delete item(s)"),
                     ("⌘F", "Toggle favorites filter"),

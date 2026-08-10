@@ -221,6 +221,20 @@ pasteboard plus copies the user made deliberately. Five things this depends on:
   item cannot be edited at all until it is revealed. Content is never trimmed (whitespace in a clip
   is content, unlike in a note), and favorite and note are not inherited.
 
+### A Multi-Selection Grows From an Anchor, Not From the Set
+
+⌘ or ⇧ on ↑/↓ extends the selection (`ClipboardSelectionExtension`). `selectedItemIds` is free-form,
+so it cannot say which rows a previous press took and reversing direction could not give them back.
+An extend is therefore a range between an anchor and the cursor, recomputed each press, unioned with
+whatever was selected when the run began. Three rules:
+
+- **The anchor is an id, not an index.** A capture arriving while the popover is open shifts every
+  index below it.
+- **`endSelectionRun()` ends a run without clearing the selection**; `clearMultiSelection()` clears
+  both. A plain arrow or a ⌘-click uses the first, so a user can pick a block, step past a row, and
+  pick another. Everything that changes what the list means uses the second.
+- **⌥↑ jumps to the top**, moved off ⌘↑ when ⌘ became an extend modifier.
+
 ### Copy Merged Follows the Same Model
 
 `Cmd+M`, and the row's context menu, join a multi-selection into one new clip
@@ -514,6 +528,8 @@ the keyboard layout, are in `docs/DEVELOPMENT.md`.
 | `Cmd+N` | Focus note field |
 | `Cmd+Z` | Full-size image preview |
 | `Cmd+Click` | Add an item to the selection |
+| `Cmd+↑` / `Cmd+↓` | Extend the selection (`Shift+↑` / `Shift+↓` do the same) |
+| `Option+↑` | Jump to the top of the list (was `Cmd+↑` until 0.1.24) |
 | `Cmd+M` | Copy the selection merged, top to bottom |
 | `Cmd+Backspace` | Delete item(s) |
 | `Escape` | Close popover |
@@ -612,6 +628,12 @@ When modifying UI:
 - [ ] Keyboard navigation functions
 - [ ] Multi-select deletion works
 - [ ] Image preview opens with Cmd+Z
+- [ ] Cmd+↓ three times from the top selects four rows; Cmd+↑ hands them back one at a time
+- [ ] Shift+↑ and Shift+↓ do exactly the same
+- [ ] Cmd+↑ on the first row and Cmd+↓ on the last change nothing
+- [ ] Cmd-click a row, then Cmd+↓ from elsewhere: the clicked row stays selected
+- [ ] A plain ↑ or ↓ keeps the selection but starts the next extend from the new cursor
+- [ ] Option+↑ jumps to the top, and the floating button's tooltip says so
 
 When modifying Copy Merged:
 - [ ] Cmd-click three text items, press Cmd+M: one new item at the top holds all three joined with

@@ -186,6 +186,38 @@ Then read `NSPasteboard.general.types` after a paste from the popover: the flavo
 are present after ⏎ and absent after ⇧⏎. Do both halves separately, since writing HTML *without*
 RTF is exactly the case that RTF-only support got wrong.
 
+### Extending a Selection From the Keyboard
+
+⌘ or ⇧ held on ↑/↓ grows the multi-selection instead of moving the cursor alone.
+`ClipboardSelectionExtension.extending(from:by:in:selectedIds:anchor:)` is the whole of it, and it is
+pure, so the model is tested without a popover.
+
+**Why an anchor rather than adding to the set.** The obvious implementation adds the row you step
+onto and removes the row you step off, which needs no new state and is wrong the moment you reverse
+past where you started: stepping back over the first row would remove it instead of extending the
+other way. Every list on the Mac anchors, and so does this. The anchor is set on the first press of
+a run, and the selection is recomputed as the range between it and the cursor on every press after.
+
+**Why the anchor is an id.** Indices move. A capture arriving while the popover is open goes in at
+position 0 and shifts everything below it, and `selectedIndex` is already re-synced by id in the
+`onChange(of: computedFilteredItems)` handler for that reason. An index-based anchor would have
+silently pointed one row off after any copy made while the popover was open.
+
+**Why a run ends without clearing the selection.** `endSelectionRun()` drops only the anchor;
+`clearMultiSelection()` drops the selection too. A plain arrow and a ⌘-click use the first, so the
+next extend grows from where the cursor now is while keeping what is already picked. That is what
+makes "select a block, skip a row, select another block" work from the keyboard alone. Filter
+changes, a plain click, a delete and a merge all use the second: they change what the list means, so
+a selection carried across them would be a selection of something the user never saw.
+
+**Why both ⌘ and ⇧.** ⇧+arrow is the platform standard. ⌘+arrow is not, but ⌘-click is this app's
+own multi-select gesture, so ⌘ is the modifier already under the hand of anyone who has learned it
+here. Neither is gated on `shortcutsEnabled`, for the same reason the bare arrows are not.
+
+**What it cost.** ⌘↑ meant "scroll to top" and moved to ⌥↑, because ⌘↑ and ⌘↓ have to mean the same
+thing as each other or neither is learnable. Three sites: the key handler, the floating button's
+tooltip, and the ⌘/ reference.
+
 ### Copy Merged
 
 `Cmd+M`, or the context menu on any row, joins the multi-selection into one new text item and puts
