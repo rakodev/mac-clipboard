@@ -22,6 +22,7 @@
 		A0PERMISSIONMGR000000000001 /* PermissionManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0PERMISSIONMGR000000000000 /* PermissionManager.swift */; };
 		A0UPDATESERVICE00000000001 /* UpdateService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0UPDATESERVICE00000000000 /* UpdateService.swift */; };
 		A0IMAGETEXTRECOG000000001 /* ImageTextRecognition.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0IMAGETEXTRECOG000000000 /* ImageTextRecognition.swift */; };
+		A0APPEARANCE000000000001 /* Appearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0APPEARANCE000000000000 /* Appearance.swift */; };
 		A48844D4AC8B4871B8C4A0B2 /* ClipboardData.xcdatamodeld in Sources */ = {isa = PBXBuildFile; fileRef = 508F627859E545F9886D6161 /* ClipboardData.xcdatamodeld */; };
 		E80EE0653306406CA8CB60BF /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2515D8D1089F4890B45C263D /* PersistenceManager.swift */; };
 		B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */; };
@@ -38,6 +39,7 @@
 		B0TEST000000000000000062 /* TextSplitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000063 /* TextSplitTests.swift */; };
 		B0TEST000000000000000066 /* ColorSwatchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000067 /* ColorSwatchTests.swift */; };
 		B0TEST000000000000000068 /* ImageTextRecognitionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000069 /* ImageTextRecognitionTests.swift */; };
+		B0TEST000000000000000070 /* AppearancePreferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0TEST000000000000000071 /* AppearancePreferenceTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -85,6 +87,8 @@
 		B0TEST000000000000000067 /* ColorSwatchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorSwatchTests.swift; sourceTree = "<group>"; };
 		B0TEST000000000000000069 /* ImageTextRecognitionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTextRecognitionTests.swift; sourceTree = "<group>"; };
 		A0IMAGETEXTRECOG000000000 /* ImageTextRecognition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageTextRecognition.swift; sourceTree = "<group>"; };
+		A0APPEARANCE000000000000 /* Appearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Appearance.swift; sourceTree = "<group>"; };
+		B0TEST000000000000000071 /* AppearancePreferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppearancePreferenceTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -122,6 +126,7 @@
 				A01234567890123456789006 /* ClipboardMonitor.swift */,
 				A01234567890123456789008 /* MenuBarController.swift */,
 				A01234567890123456789010 /* UserPreferences.swift */,
+				A0APPEARANCE000000000000 /* Appearance.swift */,
 				A0APPINSTALL000000000000 /* AppInstallation.swift */,
 				A0BUILDINFO00000000000000 /* BuildInfo.swift */,
 				A0GLOBALHOTKEY0000000000 /* GlobalHotkey.swift */,
@@ -151,6 +156,7 @@
 		B0TEST000000000000000040 /* MacClipboardTests */ = {
 			isa = PBXGroup;
 			children = (
+				B0TEST000000000000000071 /* AppearancePreferenceTests.swift */,
 				B0TEST000000000000000011 /* ClipboardHistoryMergerTests.swift */,
 				B0TEST000000000000000014 /* FavoritesExportTests.swift */,
 				B0TEST000000000000000017 /* GlobalHotkeyShortcutTests.swift */,
@@ -272,6 +278,7 @@
 				A01234567890123456789005 /* ClipboardMonitor.swift in Sources */,
 				A01234567890123456789007 /* MenuBarController.swift in Sources */,
 				A01234567890123456789009 /* UserPreferences.swift in Sources */,
+				A0APPEARANCE000000000001 /* Appearance.swift in Sources */,
 				A01234567890123456789001 /* MacClipboardApp.swift in Sources */,
 				A0APPINSTALL000000000001 /* AppInstallation.swift in Sources */,
 				A0BUILDINFO00000000000001 /* BuildInfo.swift in Sources */,
@@ -291,6 +298,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B0TEST000000000000000070 /* AppearancePreferenceTests.swift in Sources */,
 				B0TEST000000000000000001 /* ClipboardHistoryMergerTests.swift in Sources */,
 				B0TEST000000000000000004 /* FavoritesExportTests.swift in Sources */,
 				B0TEST000000000000000007 /* GlobalHotkeyShortcutTests.swift in Sources */,

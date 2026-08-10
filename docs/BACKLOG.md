@@ -50,19 +50,8 @@ meaning the task it meant. Task 5 (capture exclusions), task 4 (pausing capture)
 (deleting the store persistence left behind), task 7 (a configurable global hotkey) and task 8
 (keeping the formatting a clip was copied with) were all completed on 2026-08-09. Task 9 (merging a
 selection into one clip), task 10 (splitting one clip into a line per item), task 11 (a swatch on a
-clip that is a colour) and task 12 (reading the text in a copied image) were completed on 2026-08-10.
-
-### 13. Light and dark follow the system with no way to override
-
-Low value, near-zero cost, listed so it is not mistaken for a larger piece of work. The colour rules
-in `CLAUDE.md` mean light and dark already work; the only gap is a user who wants the popover to stay
-dark while the system is light. That is a three-way preference driving `NSApp.appearance`.
-
-Not in scope: a theme system, custom accent colours, or anything that would justify hardcoding a
-colour and breaking the semantic-colour rule.
-
-Done means: a System / Light / Dark control in Settings, applied at launch and on change, covering
-the popover, the settings window and the onboarding window.
+clip that is a colour), task 12 (reading the text in a copied image) and task 13 (a light and dark
+override) were completed on 2026-08-10.
 
 ### 14. A clip does not record which app it came from
 

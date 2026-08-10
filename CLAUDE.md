@@ -61,6 +61,7 @@ copy is touched: an installed release build has its own bundle id and keeps runn
 ```
 MacClipboard/
 ├── MacClipboardApp.swift      # App entry point & AppDelegate
+├── Appearance.swift           # AppearancePreference: System/Light/Dark, and the one NSApp.appearance
 ├── BuildInfo.swift            # Build channel (Dev/Release), bundle id, version
 ├── GlobalHotkey.swift         # GlobalHotkeyShortcut: key code + modifiers, validation, labels
 ├── ClipboardMonitor.swift     # Clipboard polling (0.8s interval), history management
@@ -667,6 +668,10 @@ Settings stored in UserDefaults via `UserPreferencesManager`:
   build), recorded in Settings; an unusable stored value falls back to the default
 - `shortcutsEnabled`: Bool (default: true)
 - `autoStartEnabled`: Bool (default: true)
+- `appearance`: `system` / `light` / `dark` (default: `system`), stored as the raw string and applied
+  as one `NSApp.appearance` by `AppDelegate`. `.system` assigns `nil`, which is how AppKit says
+  "follow the Mac". The menu bar icon is untouched: AppKit pins the status bar's window to the menu
+  bar's appearance, so a forced dark app cannot put a white glyph on a light menu bar
 - `autoDetectSensitiveData`: Bool (default: false), masks recognisable secrets
 - `autoHidePasswordLikeStrings`: Bool (default: false), masks high-entropy strings
 - `skipConcealedClips`: Bool (default: false), drops clips the source app marked confidential
@@ -771,6 +776,13 @@ When modifying search or the popover's key handling:
 - [ ] With shortcuts switched off in Settings, those combinations do nothing rather than typing
       their letter, and the bare letters still search
 
+When modifying the appearance override:
+- [ ] With the Mac set to light, picking Dark turns the popover, Settings, the right-click menu and
+      an alert dark straight away, without reopening anything, and the reverse on a dark Mac
+- [ ] The menu bar icon stays readable in both, and still shows the pause slash and the update dot
+- [ ] The choice survives a relaunch, and Reset puts it back to System
+- [ ] On System, switching the Mac between light and dark still carries the app with it
+
 When modifying UI:
 - [ ] Filter tabs work correctly
 - [ ] Keyboard navigation functions
@@ -871,6 +883,8 @@ When modifying the editor:
   - `.foregroundColor(.secondary)` for secondary text
   - `Color.accentColor` for highlights
   - Never use hardcoded `Color.white`, `Color.black`, or hex colors for backgrounds/text
+  - This rule is what makes `appearance` (System / Light / Dark, above) a preference rather than a
+    project: forcing dark on a light Mac works only because no colour here is written down
 
 ## Entitlements
 
@@ -900,6 +914,7 @@ the only check that needs both the signature and the ticket to be there.
 | Change clipboard polling | `ClipboardMonitor.swift` |
 | Change what a clip keeps beside its text | `ClipboardMonitor.swift` (`ClipboardRichText`), `ClipboardData.xcdatamodeld`, `PersistenceManager.swift` |
 | Modify settings | `SettingsView.swift`, `UserPreferences.swift` |
+| Change the light/dark override | `Appearance.swift`, `MacClipboardApp.swift` (`startFollowingAppearancePreference`), `SettingsView.swift` |
 | Update data model | `ClipboardData.xcdatamodeld`, `PersistenceManager.swift`, `ClipboardMonitor.swift` |
 | Change UI layout | `ContentView.swift` |
 | Change the copy editor | `ContentView.swift` (`ClipboardTextEditorView`), `ClipboardMonitor.swift` (`ClipboardTextEdit`), `MenuBarController.swift` (`ClipboardEditDraftStore`) |

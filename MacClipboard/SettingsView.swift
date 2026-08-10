@@ -75,6 +75,23 @@ struct SettingsView: View {
 
                         Toggle("Launch at login", isOn: $preferences.autoStartEnabled)
 
+                        // Both appearances work everywhere already, because every colour in the app
+                        // is a semantic one. This is here for the one thing that needs a preference:
+                        // keeping the popover dark on a Mac that is light, or the reverse.
+                        VStack(alignment: .leading, spacing: 4) {
+                            Picker("Appearance:", selection: $preferences.appearance) {
+                                ForEach(AppearancePreference.allCases) { option in
+                                    Text(option.label).tag(option)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(maxWidth: 320)
+
+                            Text("System follows your Mac's Light or Dark setting and changes with it. Light or Dark keeps MacClipboard's clipboard popover, settings and menus that way whatever your Mac is set to. The menu bar icon always follows the menu bar.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+
                         // The one thing MacClipboard does over the network without being asked, so
                         // it says exactly what it sends and can be switched off. The manual check in
                         // the footer keeps working either way.

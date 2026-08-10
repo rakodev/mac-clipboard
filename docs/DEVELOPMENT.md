@@ -662,6 +662,53 @@ Details worth keeping:
 * **`ReleaseVersion` parses prereleases.** The naive `split(".").compactMap { Int($0) }` read `0.1.25-beta.1` as `[0, 1]`, i.e. *older* than `0.1.24`, so a beta would have suppressed the update instead of offering it. Nothing has shipped through that hole, because `/releases/latest` excludes prereleases; the parse is what stops it opening the first time someone tags one.
 * **A Homebrew install is offered the command, not the download.** `UpdateChecker.isHomebrewManaged` looks for a Caskroom receipt under both `/opt/homebrew` and `/usr/local`. Downloading a DMG over a cask-managed copy leaves `brew` believing the old version is installed, and the next `brew upgrade` walks the app backwards. The command goes on the pasteboard, where `ClipboardMonitor` captures it like any other copy, which is correct: the user did copy it.
 
+### Light and Dark, and the One Override
+
+`AppearancePreference` (`Appearance.swift`) is System, Light or Dark, and `AppDelegate` applies it as
+a single `NSApp.appearance`. Settings shows it as a segmented control in General.
+
+**Why this is small, and has to stay small.** Both appearances already worked, because every colour
+in the app is a semantic one. The gap was only the user who wants the popover to stay dark on a Mac
+that is light, which is one property. Nothing here names a colour, and a theme system, custom accents
+or per-surface tints would all mean breaking the semantic-colour rule that makes this three lines
+instead of a rewrite.
+
+**Why `NSApp.appearance` rather than a list of surfaces.** It reaches the popover, the settings
+window, the onboarding window, the status item's menu and the alerts in one assignment, including the
+ones built after it runs, so a window added later cannot forget to follow the preference. The
+alternative was setting `appearance` on each surface, which is the same behaviour plus a list to keep
+in step.
+
+**What made the app-wide override safe was measuring what it cannot reach.** The worry with forcing
+dark is the menu bar: the icon is a template image, tinted for the appearance it is drawn in, so a
+white glyph on a light menu bar would be the one part of the app a user cannot choose to stop looking
+at. AppKit pins the status bar's own window to the *menu bar's* appearance rather than the app's. On a
+Mac set to light, with `NSApp.appearance` forced to `NSDarkAqua`, the status item button still reports
+`NSVibrantLight`, before and after the override, while a plain window of the same app reports
+`NSDarkAqua`. So the icon follows the bar it sits in, whatever this preference says, and it is not
+ours to theme.
+
+**Why `.system` assigns `nil` instead of skipping the assignment.** `nil` is not "leave the
+appearance alone" to `NSApplication`, it is "follow the system". Treating System as a no-op would
+leave the last override in place, so picking Dark and then System would stay dark with nothing on
+screen to explain it. `AppearancePreferenceTests` pins that direction specifically.
+
+**Why the raw string is stored.** `appearance` holds `"system"`, `"light"` or `"dark"`, not an index,
+so adding or reordering a case cannot turn somebody's Dark into Light. Anything unrecognised, from an
+absent key to a value written by a later version, reads as System, the same fallback an unusable
+stored hotkey takes.
+
+**Why `AppDelegate` owns the applying and not `UserPreferencesManager`.** A preference object is also
+built by tests, with a `UserDefaults` of its own, and a side effect in its `didSet` would push the
+developer's own appearance onto whatever app is hosting them. `MenuBarController` was the other
+candidate and is worse: it is built a quarter of a second into launch and not at all under a test
+host, while the onboarding window and the installation alerts can both be on screen before then. The
+preference change is applied on the next main-runloop pass, which keeps the assignment out of the
+SwiftUI update the picker is in the middle of.
+
+`Reset` in Settings puts this back to System, unlike the three preferences it deliberately leaves
+alone: nothing is lost, and the change is visible the moment it happens.
+
 ### UI Framework
 
 Native SwiftUI with `NSHostingController` embedded in `NSPopover` for modern, responsive interface.

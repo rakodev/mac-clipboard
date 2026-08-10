@@ -13,6 +13,7 @@ class UserPreferencesManager: ObservableObject {
         static let globalHotkeyKeyCode = "globalHotkeyKeyCode"
         static let globalHotkeyModifiers = "globalHotkeyModifiers"
         static let showImagePreviews = "showImagePreviews"
+        static let appearance = "appearance"
         static let autoStartEnabled = "autoStartEnabled"
         static let persistenceEnabled = "persistenceEnabled"
         static let saveImages = "saveImages"
@@ -99,6 +100,18 @@ class UserPreferencesManager: ObservableObject {
         }
     }
     
+    /// Whether the app follows the Mac's Light/Dark setting, or stays in one of them.
+    ///
+    /// Stored as the raw string rather than an index, so a case added or reordered later cannot
+    /// silently turn someone's Dark into Light. Applying it is `AppDelegate`'s job, not this
+    /// object's: preferences are read under a test host too, and an `NSApp.appearance` written from
+    /// here would reach whichever app is hosting them.
+    @Published var appearance: AppearancePreference {
+        didSet {
+            defaults.set(appearance.rawValue, forKey: Keys.appearance)
+        }
+    }
+
     // Whether to auto-start with system (launch at login)
     @Published var autoStartEnabled: Bool {
         didSet {
@@ -336,6 +349,7 @@ class UserPreferencesManager: ObservableObject {
         self.hotKeyEnabled = defaults.object(forKey: Keys.hotKeyEnabled) as? Bool ?? true
         self.globalHotkey = Self.storedGlobalHotkey(in: defaults) ?? .defaultForCurrentBuild
         self.showImagePreviews = defaults.object(forKey: Keys.showImagePreviews) as? Bool ?? true
+        self.appearance = AppearancePreference.stored(defaults.string(forKey: Keys.appearance))
         self.autoStartEnabled = defaults.object(forKey: Keys.autoStartEnabled) as? Bool ?? true
         
         // Persistence settings - enabled by default as requested
@@ -383,6 +397,10 @@ class UserPreferencesManager: ObservableObject {
         // recorder as well, so this is the second way back to it rather than the only one.
         globalHotkey = .defaultForCurrentBuild
         showImagePreviews = true
+        // Reset, because following the system is the safe direction and the change is visible the
+        // moment it happens: unlike the three exemptions below, nothing is lost and nobody has to be
+        // told what just changed.
+        appearance = .default
         autoStartEnabled = true
         persistenceEnabled = true
         saveImages = true

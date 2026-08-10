@@ -1,5 +1,6 @@
 import SwiftUI
 import ApplicationServices
+import Combine
 
 enum L10n {
     static func string(_ key: String, comment: String) -> String {
@@ -25,9 +26,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationSignalSource: DispatchSourceSignal?
     private var updateWatchTimer: Timer?
     private var didRelaunchAfterUpdate = false
+    private var appearanceCancellable: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
+        // Before anything can put a window on screen. The onboarding window below is built during
+        // this method, and an alert can follow a second later.
+        startFollowingAppearancePreference()
         installTerminationSignalHandler()
         terminateOtherInstances()
         Logging.info("[App] Launched \(BuildInfo.channelName) build \(BuildInfo.versionString) (\(BuildInfo.bundleIdentifier))")
@@ -66,8 +71,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    /// Applies the stored appearance now, and again whenever Settings changes it.
+    ///
+    /// Applied here rather than from `UserPreferencesManager` because a preference object is also
+    /// built by tests, and rather than from `MenuBarController` because that is created a quarter of
+    /// a second in and not at all under a test host, while the onboarding window and the launch
+    /// alerts appear before then. One `NSApp.appearance` covers every one of those surfaces plus the
+    /// popover, so there is no list of windows here to fall out of date.
+    ///
+    /// The hop to the main runloop keeps the assignment out of the SwiftUI update that the Settings
+    /// picker is in the middle of; the new value arrives in the closure, so nothing depends on when
+    /// `@Published` publishes.
+    private func startFollowingAppearancePreference() {
+        let preferences = UserPreferencesManager.shared
+        preferences.appearance.apply()
+
+        appearanceCancellable = preferences.$appearance
+            .removeDuplicates()
+            .receive(on: RunLoop.main)
+            .sink { $0.apply() }
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
         NotificationCenter.default.removeObserver(self)
+        appearanceCancellable = nil
         updateWatchTimer?.invalidate()
         updateWatchTimer = nil
         // Before the teardown, while the monitor and its store are still up. Does nothing unless
