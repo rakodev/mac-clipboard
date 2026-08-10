@@ -108,11 +108,11 @@ MacClipboard/
 
 ### Clipboard Monitoring
 
-Uses `NSPasteboard.general` with change count polling every 0.5 seconds for reliable clipboard tracking.
+Uses `NSPasteboard.general` with change count polling every 0.8 seconds for reliable clipboard tracking.
 
 ```swift
 // Polling loop checks for clipboard changes
-Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in
+Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { _ in
     let currentCount = NSPasteboard.general.changeCount
     if currentCount != lastChangeCount {
         // Process new clipboard content
@@ -438,6 +438,95 @@ what they have copied. The new row is selected instead, so `⏎` pastes it.
 and grouping rules, the whitespace-only drops, what the item inherits, and the monitor's four
 outcomes over a store of its own with a stub recogniser. Vision itself is not under test there, which
 is the point of the seam; the manual checks are in the CLAUDE.md checklist.
+
+### Where a Clip Came From
+
+`ClipboardSource.swift` holds the rule; `sourceBundleIdentifier` on `PersistedClipboardItem` holds
+the answer. A list of everything you have copied is scanned by source before it is read, and an app
+icon says "that is the thing I copied out of Slack" faster than the first line of text does.
+
+**The pasteboard has no author, so this is a guess and the code says so everywhere.** `NSPasteboard`
+carries no metadata about which process wrote a clip. The only signal available is
+`NSWorkspace.shared.frontmostApplication` at the moment the change count moves, and with 0.8 s
+polling a user who copies and switches apps inside the same tick gets the wrong app on the row. That
+limit was already stated in the excluded-apps copy in Settings, because the exclusion list runs on
+the same guess; the icon's tooltip now states it too, since the row is where a user meets it. A wrong
+app on a row is the new failure this feature introduces, and the honest way to narrow the window is a
+shorter tick (task 15 in `BACKLOG.md`), not activation-notification history, which would be a
+heuristic layered on a heuristic and would make the failures harder to reason about rather than rarer.
+
+**One read, two answers.** `ClipboardMonitor.captureRead(for:)` returns a `CaptureRead`, the decision
+and the identifier together, off a single `NSWorkspace` call. Asking twice would let the two disagree:
+the clip kept because Slack was not excluded, then labelled Mail. The retry path
+(`attemptPendingCapture`, which exists because some apps write a clip in stages) carries the first
+read's value in `pendingSourceBundleIdentifier` for the same reason the excluded-app check is not
+repeated there. By the time a deferred capture succeeds, the frontmost app answers a different
+question.
+
+**The identifier is stored; the name and the icon are not.** `ClipboardSourceAppCatalog` resolves
+both when a row is drawn, the way `ExcludedAppRow` already does. A name recorded at capture time
+would be frozen at the moment of the copy, and icons on rows would put pictures of apps in a store
+whose whole storage problem is pictures (see the image notes above). The trade is a LaunchServices
+lookup per distinct app, which is why the catalog caches: the search predicate resolves a name for
+every item in the history on every keystroke, so an uncached miss over a history full of clips from
+an uninstalled app would be the expensive case. Misses are cached along with hits, and
+`NSWorkspace.didLaunchApplicationNotification` clears the whole cache, so an app installed while
+MacClipboard is running stops reading as its own bundle identifier without a relaunch. The cache is
+behind an `NSLock` because the filter runs on a detached task while rows draw on the main thread.
+
+**Nothing is shown when nothing was recorded.** nil for a clip captured before the attribute existed,
+for a process with no bundle identifier, for a frontmost app AppKit will not name, and for an item
+the user made themselves: an edit, a merge, a split and text read from an image were all copied out
+of nothing. `ClipboardTextEdit`, `ClipboardMergedCopy`, `ClipboardTextSplit` and
+`ClipboardImageTextRecognition` take no source, so this falls out of their builders rather than being
+a rule anyone has to remember. An "Unknown app" placeholder was rejected: it is a claim about a clip
+that nothing was ever recorded for, and it would sit on the majority of rows on the first launch
+after upgrading.
+
+**A re-copy replaces the source, exactly as it replaces the formatting.** The source is a property of
+the copy, not a decision the user made about the clip, so it joins `rtfData` and `htmlData` in the
+list of things `ClipboardHistoryMerger` does *not* inherit, and in the comparison its "already at
+position 0, nothing to write" short-circuit makes. Without that comparison, copying a sentence out of
+Mail and then out of Slack would leave a row that keeps saying Mail. This cannot make an item claim
+it came from MacClipboard: `copyToClipboard` adopts the pasteboard's change count, so the app's own
+writes (Copy Merged's included) never come back through capture.
+
+**Searching by source matches the name the row shows.** Not the bundle identifier of an installed
+app: "com.google.Chrome" would make a search for "google", or for "com", return every clip copied out
+of Chrome. An app that is gone matches on its identifier, because that is then the only name it has
+and matching what is displayed is the rule that stays explainable. `ClipboardFilter.filteredItems`
+takes the resolver as a parameter so it stays a pure function under test.
+
+**The filter and the search are different tools, and both are worth having.** `sourceBundleIdentifier`
+on the same function is the exact one: only the clips from that app, matched on the identifier rather
+than the name because two apps can print the same name and the identifier is what was recorded.
+Typing "Mail" finds the clips that say the word as well as the ones from Mail, which is the right
+behaviour for a find; the menu finds only the ones from Mail, which is the right behaviour for a
+filter. Reached from two places, both going through `setSourceFilter`: the menu in the search bar,
+and the app's name in the preview, which is the same filter reached from the item that prompted the
+thought.
+
+**The menu offers only the apps that have something in the list.** It is read off the current tab and
+deliberately *before* the source filter and the search are applied, or picking an app would empty the
+menu that picked it. It is a `Menu` rather than a row of app tabs because the set is different on
+every Mac and grows with the history, so tabs would wrap or truncate; it collapses to one icon-width
+button in the search bar and is not drawn at all until something in the list has a source, so a
+history from before this shipped costs nothing. A sidebar and a search mini-language were both cut
+for the reason in `BACKLOG.md`: a menu bar app pays for every pixel of UI.
+
+**The filter dies with the popover.** `sourceFilter` is `@State`, and `showPopover` rebuilds this view
+on every open. Persisting it would be a way to lose clips behind a setting nobody remembers turning
+on, which is the opposite of what a clipboard history is for. Two consequences: nothing has to clear
+it on quit, and `revealWrittenItem` clears it alongside the tab and the search. That last one is not
+theoretical, it is the common case: an edit, a merge, a split and text read from an image all have no
+source, so a list narrowed to an app can never contain what any of them just wrote.
+
+`MacClipboardTests/ClipboardSourceTests.swift` covers what is worth recording, the no-frontmost-app
+case in both the guard and the item, every kind of clip carrying a source, the four user-made items
+carrying none, the re-copy rules, name resolution for an installed and an uninstalled app, the four
+search rules, and the five filter rules including the one that pins the filter being exact where the
+search is not. `ClipboardSourceStoreTests` covers the round trip and what a row written before the
+attribute existed loads as.
 
 ### A Clip That Is a Colour
 

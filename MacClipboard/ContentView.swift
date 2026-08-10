@@ -45,10 +45,24 @@ struct ClipboardTimeAgo {
 }
 
 struct ClipboardFilter {
+    /// `sourceAppName` is what the item's source app is *shown* as, which is also the rule for
+    /// matching it: typing "Slack" finds what was copied out of Slack, and an app that has since
+    /// been uninstalled matches on the identifier the row prints for it because that is then the
+    /// only name it has. The bundle identifier of an installed app is deliberately not matched;
+    /// "com.google.Chrome" would make a search for "google" return every clip from Chrome.
+    ///
+    /// Injected so this stays a pure function: the real resolver is a LaunchServices lookup.
+    ///
+    /// `sourceBundleIdentifier` is the exact filter, and it is a different thing from the search
+    /// matching above: the search is a fuzzy find over everything a row shows, this is "only the
+    /// clips from that app". It is an identifier rather than a name because two apps can print the
+    /// same name and the identifier is what was actually recorded.
     static func filteredItems(
         from items: [ClipboardItem],
         selectedFilter: FilterTab,
-        searchText: String
+        searchText: String,
+        sourceBundleIdentifier: String? = nil,
+        sourceAppName: (String) -> String? = { ClipboardSourceAppCatalog.app(for: $0).name }
     ) -> [ClipboardItem] {
         var filtered: [ClipboardItem]
         switch selectedFilter {
@@ -62,13 +76,20 @@ struct ClipboardFilter {
             filtered = items.filter { $0.isSensitive }
         }
 
+        if let sourceBundleIdentifier {
+            filtered = filtered.filter { $0.sourceBundleIdentifier == sourceBundleIdentifier }
+        }
+
         guard !searchText.isEmpty else { return filtered }
 
         filtered = filtered.filter { item in
             let previewMatch = item.previewText.localizedCaseInsensitiveContains(searchText)
             let fullTextMatch = item.fullText.localizedCaseInsensitiveContains(searchText)
             let noteMatch = item.note?.localizedCaseInsensitiveContains(searchText) ?? false
-            return previewMatch || fullTextMatch || noteMatch
+            let sourceMatch = item.sourceBundleIdentifier
+                .flatMap { sourceAppName($0) }?
+                .localizedCaseInsensitiveContains(searchText) ?? false
+            return previewMatch || fullTextMatch || noteMatch || sourceMatch
         }
 
         // Sort by score descending, keeping the original (recency) order for equal
@@ -416,6 +437,11 @@ struct ContentView: View {
     @State private var selectedIndex: Int = 0
     @State private var showImageModal = false
     @State private var selectedFilter: FilterTab = .all
+    /// The one app the list is narrowed to, or nil for all of them. Deliberately not persisted and
+    /// not a preference: `showPopover` rebuilds this view on every open, so the filter lasts as long
+    /// as the popover does. A source filter that outlived the session would be a way to lose clips
+    /// behind a setting nobody remembers turning on.
+    @State private var sourceFilter: String?
     @State private var showClearConfirmation = false
     @State private var showDeleteAllConfirmation = false  // Second confirmation for delete all
     @State private var selectedItemIds: Set<UUID> = []  // For multi-selection
@@ -482,12 +508,14 @@ struct ContentView: View {
         let items = clipboardMonitor.clipboardHistory
         let filter = selectedFilter
         let searchQuery = debouncedSearchText
+        let source = sourceFilter
 
         filterTask = Task.detached(priority: .userInitiated) {
             let filtered = ClipboardFilter.filteredItems(
                 from: items,
                 selectedFilter: filter,
-                searchText: searchQuery
+                searchText: searchQuery,
+                sourceBundleIdentifier: source
             )
 
             // Check if cancelled before updating UI
@@ -662,6 +690,9 @@ struct ContentView: View {
                             onEdit: { caretOffset in
                                 beginEditing(caretOffset: caretOffset)
                             },
+                            onSearchSource: { bundleIdentifier in
+                                setSourceFilter(bundleIdentifier)
+                            },
                             onReleaseKeyboard: {
                                 keyFocusToken += 1
                             }
@@ -782,6 +813,18 @@ struct ContentView: View {
             clearMultiSelection()
             isScrolledDown = false
             // Recompute when filter tab changes
+            recomputeFilteredItems()
+        }
+        .onChange(of: sourceFilter) { _ in
+            // Narrowing to one app changes what the list holds exactly as switching tabs does, so
+            // it resets the same state. Every writer goes through `setSourceFilter`, and the reset
+            // lives here rather than there so neither entry point can skip it.
+            showShortcuts = false
+            shouldResetSelectionAfterFilterChange = true
+            selectedIndex = 0
+            selectedItem = nil
+            clearMultiSelection()
+            isScrolledDown = false
             recomputeFilteredItems()
         }
         .onChange(of: clipboardMonitor.clipboardHistory) { _ in
@@ -1141,10 +1184,94 @@ struct ContentView: View {
                 // this as much as the key handler does, so what the app wants follows what happened.
                 isSearchFocused = hasKeyboard
             }
+
+            sourceFilterMenu
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 3)
         .background(Color(NSColor.controlBackgroundColor))
+    }
+
+    /// The apps that actually have something in the list, which is the only set worth offering.
+    ///
+    /// Read off the current tab rather than off the whole history, so the menu never offers an app
+    /// that would leave the list empty, and deliberately *before* the source filter and the search
+    /// are applied, or picking an app would empty the menu that picked it.
+    ///
+    /// Cheap enough to be a computed property: a set of a handful of identifiers over at most a
+    /// thousand items, and every name behind it is a dictionary hit in `ClipboardSourceAppCatalog`.
+    private var sourceAppsInList: [ClipboardSourceApp] {
+        let identifiers = Set(
+            ClipboardFilter.filteredItems(
+                from: clipboardMonitor.clipboardHistory,
+                selectedFilter: selectedFilter,
+                searchText: ""
+            ).compactMap { $0.sourceBundleIdentifier }
+        )
+
+        return identifiers
+            .map { ClipboardSourceAppCatalog.app(for: $0) }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Picking one app out of the ones present, from the search bar.
+    ///
+    /// A menu rather than a row of app tabs: the set is different on every Mac and grows with the
+    /// history, so tabs would either wrap or truncate, and a menu bar app pays for every pixel. It
+    /// collapses to a single icon-width button, and it is not drawn at all until something in the
+    /// list has a source to filter by, so a history from before this shipped costs nothing.
+    @ViewBuilder private var sourceFilterMenu: some View {
+        let apps = sourceAppsInList
+
+        if !apps.isEmpty {
+            Menu {
+                Button {
+                    setSourceFilter(nil)
+                } label: {
+                    // A tick would be the Mac convention, but `Menu` gives no control over the
+                    // selection mark, so the state is carried by the button in the search bar.
+                    Text("All Apps")
+                }
+
+                Divider()
+
+                ForEach(apps, id: \.bundleIdentifier) { app in
+                    Button {
+                        setSourceFilter(app.bundleIdentifier)
+                    } label: {
+                        Text(app.name)
+                        if let icon = ClipboardSourceAppCatalog.icon(for: app.bundleIdentifier) {
+                            Image(nsImage: icon)
+                        }
+                    }
+                }
+            } label: {
+                if let sourceFilter, let icon = ClipboardSourceAppCatalog.icon(for: sourceFilter) {
+                    Image(nsImage: icon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 12, height: 12)
+                } else {
+                    Image(systemName: sourceFilter == nil ? "app.dashed" : "questionmark.app.dashed")
+                        .foregroundColor(sourceFilter == nil ? .secondary : .accentColor)
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .accessibilityLabel(sourceFilterLabel)
+            .help(sourceFilterLabel)
+        }
+    }
+
+    private var sourceFilterLabel: String {
+        guard let sourceFilter else {
+            return L10n.string("Show clips from one app", comment: "Tooltip for the source app filter when it is off")
+        }
+        return String(
+            format: L10n.string("Showing clips from %@ only. Choose All Apps to stop.", comment: "Tooltip for the active source app filter"),
+            ClipboardSourceAppCatalog.app(for: sourceFilter).name
+        )
     }
 
     private var filterPickerView: some View {
@@ -1394,16 +1521,38 @@ struct ContentView: View {
     /// tab shows every item, hidden ones included, which is what a masked result needs: both the
     /// editor and Copy Merged can only gain masking, so either can produce a row that the Hidden
     /// tab is the only other place to find.
+    ///
+    /// The source filter is checked with the rest and cleared with them, and it is the one every
+    /// write here trips: an edit, a merge, a split and text read from an image all have no source,
+    /// so a list narrowed to an app can never contain what they just wrote.
     private func revealWrittenItem(withId id: UUID) {
         guard let written = clipboardMonitor.clipboardHistory.first(where: { $0.id == id }) else { return }
 
-        if ClipboardFilter.filteredItems(from: [written], selectedFilter: selectedFilter, searchText: searchText).isEmpty {
+        let isVisible = !ClipboardFilter.filteredItems(
+            from: [written],
+            selectedFilter: selectedFilter,
+            searchText: searchText,
+            sourceBundleIdentifier: sourceFilter
+        ).isEmpty
+
+        if !isVisible {
             searchText = ""
             debouncedSearchText = ""
             selectedFilter = .all
+            sourceFilter = nil
         }
 
         selectItem(withId: id)
+    }
+
+    /// Narrows the list to one app, or widens it back to all of them.
+    ///
+    /// The one writer of `sourceFilter`, from the menu in the search bar and from the preview's
+    /// source button, so the selection reset that a changed list needs cannot be forgotten by one
+    /// of them. Exact, unlike typing the app's name into the search: that is a find over everything
+    /// a row shows and will also turn up clips that merely mention the word.
+    private func setSourceFilter(_ bundleIdentifier: String?) {
+        sourceFilter = bundleIdentifier
     }
 
     // MARK: - Merging a Selection
@@ -2158,6 +2307,8 @@ struct ClipboardCompactPreviewView: View {
     let onSaveNote: () -> Void
     /// Opens the editor. The offset is where in the text the caret should land, nil for the start.
     let onEdit: (Int?) -> Void
+    /// Narrows the list to the clips copied out of this item's source app, by bundle identifier.
+    let onSearchSource: (String) -> Void
     /// Escape while the preview text has the keyboard: hand it back to the list.
     let onReleaseKeyboard: () -> Void
 
@@ -2283,6 +2434,12 @@ struct ClipboardCompactPreviewView: View {
 
     private var metadataRow: some View {
         HStack(spacing: 8) {
+            // Ahead of the type-specific counts, and shared by all three of them: an image and a
+            // set of files were copied out of an app just as text was.
+            if let sourceBundleIdentifier = item.sourceBundleIdentifier {
+                sourceApp(bundleIdentifier: sourceBundleIdentifier)
+            }
+
             switch item.type {
             case .text:
                 textMetadata
@@ -2324,6 +2481,29 @@ struct ClipboardCompactPreviewView: View {
                 .accessibilityLabel("Paste without formatting")
                 .help("Paste without formatting (⇧⏎)")
         }
+    }
+
+    /// The name beside the icon, and the second way into the source filter: the first is the menu
+    /// in the search bar, and this is the same filter reached from the item that prompted the
+    /// thought. It sets the filter rather than typing the name, so it is exact.
+    private func sourceApp(bundleIdentifier: String) -> some View {
+        let app = ClipboardSourceAppCatalog.app(for: bundleIdentifier)
+
+        return Button {
+            onSearchSource(bundleIdentifier)
+        } label: {
+            HStack(spacing: 3) {
+                ClipboardSourceAppIcon(bundleIdentifier: bundleIdentifier, size: 12)
+                Text(app.name)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.borderless)
+        .fixedSize()
+        .accessibilityLabel("Show clips copied from \(app.name)")
+        .help("Show the clips copied from \(app.name)")
     }
 
     @ViewBuilder private var textMetadata: some View {
@@ -2826,6 +3006,48 @@ struct ClipboardColorSwatchView: View {
     }
 }
 
+/// The icon of the app a clip was copied out of, resolved from the stored bundle identifier.
+///
+/// Only drawn for an item that recorded one, so an empty source costs no pixels at all. An app that
+/// is no longer installed keeps its place with a placeholder glyph rather than dropping out, for
+/// the reason `ExcludedAppRow` keeps its entry: the row still knows where the clip came from.
+struct ClipboardSourceAppIcon: View {
+    let bundleIdentifier: String
+    let size: CGFloat
+
+    private var app: ClipboardSourceApp {
+        ClipboardSourceAppCatalog.app(for: bundleIdentifier)
+    }
+
+    var body: some View {
+        Group {
+            if let icon = ClipboardSourceAppCatalog.icon(for: bundleIdentifier) {
+                Image(nsImage: icon)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(systemName: "questionmark.app.dashed")
+                    .font(.system(size: size))
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel("Copied from \(app.name)")
+        .help(sourceHelp)
+    }
+
+    /// The polling limit is stated here rather than only in Settings, because this is where a user
+    /// meets the guess. A wrong app on a row is the failure this whole marker introduces, and a
+    /// tooltip that pretends otherwise would make it look like a bug in the app instead.
+    private var sourceHelp: String {
+        let name = app.name
+        if app.isInstalled {
+            return "Copied from \(name), as far as MacClipboard could tell: the app in front when the clipboard changed"
+        }
+        return "Copied from \(name), which is no longer installed"
+    }
+}
+
 struct ClipboardItemRow: View {
     let item: ClipboardItem
     let isSelected: Bool
@@ -2912,6 +3134,14 @@ struct ClipboardItemRow: View {
                     .foregroundColor(shouldMask ? .secondary : .primary)
 
                 HStack(spacing: 4) {
+                    // First, and ahead of the time: scanning a long history for "the thing I copied
+                    // out of Slack" is what this is for, and an icon answers that before any text
+                    // in the row does. Shown whether or not the item is masked, like the formatting
+                    // and read-from-an-image markers beside it, because where a clip came from is
+                    // not its content and gives nothing about it away.
+                    if let sourceBundleIdentifier = item.sourceBundleIdentifier {
+                        ClipboardSourceAppIcon(bundleIdentifier: sourceBundleIdentifier, size: 10)
+                    }
                     Text(timeAgoText)
                     if item.note != nil && !(item.note?.isEmpty ?? true) {
                         Image(systemName: "note.text")

@@ -257,6 +257,10 @@ class PersistenceManager: ObservableObject {
                 persistedItem.isManuallyUnsensitive = item.isManuallyUnsensitive
                 persistedItem.note = item.note
                 persistedItem.isRecognizedText = item.isRecognizedText
+                // The identifier only. The name and the icon are resolved when a row is drawn, so
+                // an app the user later uninstalls or renames still reads correctly and no icon
+                // bytes ever reach the store. See `ClipboardSourceAppCatalog`.
+                persistedItem.sourceBundleIdentifier = item.sourceBundleIdentifier
 
                 switch item.type {
                 case .text:
@@ -406,6 +410,10 @@ class PersistenceManager: ObservableObject {
             // False for every row written before this attribute existed, which is the honest answer:
             // nothing recorded where those clips came from. See `ClipboardImageTextRecognition`.
             isRecognizedText: persistedItem.isRecognizedText,
+            // nil for every row written before this attribute existed: a row either names its
+            // source or says nothing, never "Unknown app". Normalised on the way out as well as on
+            // the way in, as the flavours below are, so a blank string cannot become an empty name.
+            sourceBundleIdentifier: ClipboardSource.storableBundleIdentifier(persistedItem.sourceBundleIdentifier),
             associatedText: contentType == .image ? persistedItem.textContent : nil,
             // Re-checked on the way out as well as on the way in: a row written by a build that
             // stored something else under these attributes must not put a formatting marker on a

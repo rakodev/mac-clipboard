@@ -20,7 +20,8 @@ Managing clipboard history shouldn't be complicated. MacClipboard gives you inst
 * 🔒 **Sensitive mode** - Hide content from shoulder surfing with `Cmd+H` (reveal with `Cmd+V` or eye icon)
 * ⏸️ **Pause capture** - Stop saving new copies before a screen share or a customer's account, without quitting; the menu bar icon shows a struck-through clipboard while it is off
 * 📝 **Notes** - Add descriptions to items for easier searching (e.g., "work password", "API key")
-* 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content and notes)
+* 🔍 **Live search** - Find clipboard items quickly with real-time filtering (searches content, notes, and the app a clip came from)
+* 🏷️ **Source app** - Each clip shows the app it was copied out of, and one click narrows the list to just that app
 * 👀 **Smart preview** - Click any item to see full content before pasting
 * 🖼️ **Image preview** - Full-size image preview with `Cmd+Z`
 * 🔎 **Read text from an image** - Press `Cmd+R` on a screenshot to save the text in it as a new item, recognised on your own Mac
@@ -180,6 +181,13 @@ While editing a copy:
   image is left exactly as it was, and what you had copied stays on your clipboard. It only runs when
   you ask: nothing is recognised in the background. An image with no readable text in it says so and
   adds nothing, and a hidden image has to be revealed first
+* **Where a clip came from**: Each item shows the icon of the app that was in front when you copied
+  it, with the name in the preview. The app button next to the search box lists the apps that have
+  something in your history; pick one to see only its clips, or **All Apps** to see everything again.
+  Clicking the app's name in the preview does the same thing. Because the clipboard itself does not record who wrote to it,
+  this is the app that was in front when the change was noticed rather than a certainty: copy and
+  switch apps in the same instant and the name can be wrong. Clips saved before this feature existed,
+  and items you made yourself by editing, merging or splitting, show no app at all
 * **Image zoom**: Press `Cmd+Z` on an image to see full-size preview
 
 ### Content Types Supported

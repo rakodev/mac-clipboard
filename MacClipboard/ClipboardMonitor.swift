@@ -374,9 +374,16 @@ struct ClipboardHistoryMerger {
             // replaces the row instead, which is what a match anywhere else in the history does.
             // Both flavours are compared: the same words copied from Chrome and then from Word are
             // the same clip with different formatting, and either one changing has to get through.
+            //
+            // The source app is compared for exactly the same reason. Copying the same sentence out
+            // of Slack after copying it out of Mail is the user's most recent copy having come from
+            // Slack, and a row that kept saying Mail would be recording something that did not
+            // happen. `copyToClipboard` adopts the pasteboard's change count, so MacClipboard's own
+            // writes never come back through here and cannot make an item claim it came from us.
             if actualIndex == 0
                 && history[0].rtfData == item.rtfData
-                && history[0].htmlData == item.htmlData {
+                && history[0].htmlData == item.htmlData
+                && history[0].sourceBundleIdentifier == item.sourceBundleIdentifier {
                 return ClipboardHistoryInsertionResult(history: history, removedItemIDs: [], shouldPersistInsertedItem: false)
             }
 
@@ -388,11 +395,13 @@ struct ClipboardHistoryMerger {
             itemToInsert.isManuallyUnsensitive = existingItem.isManuallyUnsensitive
             itemToInsert.note = existingItem.note
             itemToInsert.associatedText = itemToInsert.associatedText ?? existingItem.associatedText
-            // `rtfData` and `htmlData` are deliberately *not* inherited, unlike everything above
-            // them. The others are decisions the user made about this clip and a re-copy must not
-            // undo them; formatting is a property of the copy itself. Falling back to the old item's
-            // flavours would paste styling the user's most recent copy did not have, and would keep
-            // the row's formatting marker up after they deliberately re-copied the same text plain.
+            // `rtfData`, `htmlData` and `sourceBundleIdentifier` are deliberately *not* inherited,
+            // unlike everything above them. The others are decisions the user made about this clip
+            // and a re-copy must not undo them; formatting and the source app are properties of the
+            // copy itself. Falling back to the old item's flavours would paste styling the user's
+            // most recent copy did not have, and would keep the row's formatting marker up after
+            // they deliberately re-copied the same text plain; falling back to its source would say
+            // the clip came from an app the user has not copied out of since.
 
             removedItemIDs.insert(existingItem.id)
             updatedHistory.remove(at: actualIndex)
@@ -682,6 +691,9 @@ class ClipboardMonitor: ObservableObject {
     private let textRecognizer: ImageTextRecognizing
     private var maintenanceTimer: Timer?
     private var pendingChangeCount: Int?
+    /// The frontmost app read when the change was first noticed, held for the retry. Re-reading it
+    /// when the retry finally succeeds would name whichever app the user has switched to since.
+    private var pendingSourceBundleIdentifier: String?
     private var pendingCaptureAttempts: Int = 0
     private var pendingCaptureRetryScheduled = false
     private let maxPendingCaptureAttempts = 20
@@ -863,34 +875,54 @@ class ClipboardMonitor: ObservableObject {
             // Decided before the pasteboard is read, and never queued for a retry: a skipped clip
             // is meant to leave no trace at all. `changeCount` has already moved, so a skip is
             // final rather than reconsidered on the next tick.
-            let decision = captureDecision(for: pasteboard)
-            guard decision == .capture else {
-                logSkippedCapture(decision)
+            let read = captureRead(for: pasteboard)
+            guard read.decision == .capture else {
+                logSkippedCapture(read.decision)
                 return
             }
 
             // Get clipboard content
-            if let content = getClipboardContent() {
+            if let content = getClipboardContent(sourceBundleIdentifier: read.sourceBundleIdentifier) {
                 addToHistory(content)
             } else {
                 pendingChangeCount = changeCount
+                pendingSourceBundleIdentifier = read.sourceBundleIdentifier
                 schedulePendingCaptureRetry()
             }
         }
+    }
+
+    /// What one look at the frontmost app answered: whether to record the clip, and which app to
+    /// record it against.
+    ///
+    /// Both come out of the same read on purpose. Asking `NSWorkspace` a second time for the source
+    /// would let the guard and the recorded app disagree, so a clip could be kept because Slack was
+    /// not excluded and then be labelled as coming from Mail.
+    private struct CaptureRead {
+        let decision: ClipboardCapturePolicy.Decision
+        let sourceBundleIdentifier: String?
     }
 
     /// The capture guard's inputs, gathered at the moment a change is noticed.
     ///
     /// `frontmostApplication` is read here and nowhere else on this path. With 0.8 s polling it is
     /// a good guess at the source of the clip rather than a fact, which is the known limit stated in
-    /// the Settings copy; the concealed-type check beside it is exact, because the source app sets
-    /// that marker itself.
-    private func captureDecision(for pasteboard: NSPasteboard) -> ClipboardCapturePolicy.Decision {
-        ClipboardCapturePolicy.decision(
-            hasSensitivePasteboardType: SensitiveContentDetector.hasSensitivePasteboardType(pasteboard),
-            skipConcealedClips: userPreferences.skipConcealedClips,
-            sourceBundleIdentifier: NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
-            excludedBundleIdentifiers: userPreferences.excludedBundleIdentifierSet
+    /// the Settings copy and the reason `ClipboardSource` says not to sharpen it with activation
+    /// history; the concealed-type check beside it is exact, because the source app sets that
+    /// marker itself.
+    private func captureRead(for pasteboard: NSPasteboard) -> CaptureRead {
+        let frontmostBundleIdentifier = ClipboardSource.storableBundleIdentifier(
+            NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        )
+
+        return CaptureRead(
+            decision: ClipboardCapturePolicy.decision(
+                hasSensitivePasteboardType: SensitiveContentDetector.hasSensitivePasteboardType(pasteboard),
+                skipConcealedClips: userPreferences.skipConcealedClips,
+                sourceBundleIdentifier: frontmostBundleIdentifier,
+                excludedBundleIdentifiers: userPreferences.excludedBundleIdentifierSet
+            ),
+            sourceBundleIdentifier: frontmostBundleIdentifier
         )
     }
 
@@ -907,6 +939,7 @@ class ClipboardMonitor: ObservableObject {
 
     private func cancelPendingCapture() {
         pendingChangeCount = nil
+        pendingSourceBundleIdentifier = nil
         pendingCaptureAttempts = 0
     }
 
@@ -949,9 +982,10 @@ class ClipboardMonitor: ObservableObject {
 
         // The excluded-app check is deliberately not repeated here: it was made when the change was
         // detected, and by now the user may well have switched apps, so re-reading the frontmost app
-        // would answer a different question. The concealed type is worth another look, because an
-        // app that writes its clip in stages (which is why this retry path exists) can declare that
-        // type after the change count has already moved.
+        // would answer a different question. The source recorded on the item comes from that same
+        // first read, carried in `pendingSourceBundleIdentifier`, for the same reason. The concealed
+        // type is worth another look, because an app that writes its clip in stages (which is why
+        // this retry path exists) can declare that type after the change count has already moved.
         if userPreferences.skipConcealedClips,
            SensitiveContentDetector.hasSensitivePasteboardType(pasteboard) {
             Logging.debug("🔒 Skipped a clip the source app marked confidential")
@@ -961,7 +995,7 @@ class ClipboardMonitor: ObservableObject {
 
         pendingCaptureAttempts += 1
 
-        if let content = getClipboardContent() {
+        if let content = getClipboardContent(sourceBundleIdentifier: pendingSourceBundleIdentifier) {
             addToHistory(content)
             cancelPendingCapture()
             return
@@ -1099,7 +1133,9 @@ class ClipboardMonitor: ObservableObject {
         return nil
     }
     
-    private func getClipboardContent() -> ClipboardItem? {
+    /// `sourceBundleIdentifier` comes from the caller rather than from another `NSWorkspace` read:
+    /// see `captureRead(for:)`. Every item built here carries it, images and files included.
+    private func getClipboardContent(sourceBundleIdentifier: String?) -> ClipboardItem? {
         let pasteboard = NSPasteboard.general
 
         // Check pasteboard types for sensitive indicators first (instant check)
@@ -1137,6 +1173,7 @@ class ClipboardMonitor: ObservableObject {
                             isSensitive: sensitivity.isSensitive,
                             isAutoSensitive: sensitivity.isAutoSensitive,
                             isPasswordLike: sensitivity.isPasswordLike,
+                            sourceBundleIdentifier: sourceBundleIdentifier,
                             rtfData: rtfData,
                             htmlData: htmlData
                         )
@@ -1161,6 +1198,7 @@ class ClipboardMonitor: ObservableObject {
                 isSensitive: sensitivity.isSensitive,
                 isAutoSensitive: sensitivity.isAutoSensitive,
                 isPasswordLike: sensitivity.isPasswordLike,
+                sourceBundleIdentifier: sourceBundleIdentifier,
                 associatedText: attachedText
             )
         }
@@ -1189,6 +1227,7 @@ class ClipboardMonitor: ObservableObject {
                 isSensitive: sensitivity.isSensitive,
                 isAutoSensitive: sensitivity.isAutoSensitive,
                 isPasswordLike: sensitivity.isPasswordLike,
+                sourceBundleIdentifier: sourceBundleIdentifier,
                 rtfData: rtfData,
                 htmlData: htmlData
             )
@@ -1209,7 +1248,8 @@ class ClipboardMonitor: ObservableObject {
                 timestamp: Date(),
                 displayText: fileNames,
                 isSensitive: isSensitive,
-                isAutoSensitive: isAutoSensitive
+                isAutoSensitive: isAutoSensitive,
+                sourceBundleIdentifier: sourceBundleIdentifier
             )
         }
 
@@ -1772,12 +1812,16 @@ struct ClipboardItem: Identifiable, Equatable {
     /// `ClipboardImageTextRecognition`: a stored flag rather than a note, because the note belongs
     /// to the user, and rather than a display-time derivation, because provenance is not content.
     let isRecognizedText: Bool
+    /// The app that was in front when this clip was noticed, as a bundle identifier. nil for every
+    /// clip captured before the attribute existed, for a process with no identifier, and for an
+    /// item the user made themselves. See `ClipboardSource`.
+    let sourceBundleIdentifier: String?
     var associatedText: String?  // Optional text representation when clipboard item is image + text
     var rtfData: Data?   // The source app's RTF for a text item, written back on paste. See ClipboardRichText.
     var htmlData: Data?  // The source app's HTML, for the apps that write that instead of RTF.
     var isImageLoaded: Bool  // For lazy loading: false means image needs to be loaded from disk
 
-    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, isRecognizedText: Bool = false, associatedText: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, isImageLoaded: Bool = true) {
+    init(id: UUID, content: Any, type: ClipboardContentType, timestamp: Date, displayText: String? = nil, isFavorite: Bool = false, isSensitive: Bool = false, isAutoSensitive: Bool = false, isPasswordLike: Bool = false, isManuallyUnsensitive: Bool = false, note: String? = nil, isRecognizedText: Bool = false, sourceBundleIdentifier: String? = nil, associatedText: String? = nil, rtfData: Data? = nil, htmlData: Data? = nil, isImageLoaded: Bool = true) {
         self.id = id
         self.content = content
         self.type = type
@@ -1792,6 +1836,9 @@ struct ClipboardItem: Identifiable, Equatable {
         // Text only, for the reason the flavours below are: the marker says this text was read out
         // of an image, and only a text item holds text.
         self.isRecognizedText = (type == .text) && isRecognizedText
+        // Every kind of clip has a source, unlike the flavours and the recognition marker below and
+        // above it: an image and a set of files were copied out of an app just as text was.
+        self.sourceBundleIdentifier = ClipboardSource.storableBundleIdentifier(sourceBundleIdentifier)
         self.associatedText = associatedText
         // Formatting belongs to text. An image or a file carrying RTF or HTML would be a marker in
         // the row that no paste could honour, since neither writes a text flavour.
@@ -1897,6 +1944,7 @@ struct ClipboardItem: Identifiable, Equatable {
                lhs.isManuallyUnsensitive == rhs.isManuallyUnsensitive &&
                lhs.note == rhs.note &&
                lhs.isRecognizedText == rhs.isRecognizedText &&
+               lhs.sourceBundleIdentifier == rhs.sourceBundleIdentifier &&
                lhs.associatedText == rhs.associatedText &&
                lhs.rtfData == rhs.rtfData &&
                lhs.htmlData == rhs.htmlData &&

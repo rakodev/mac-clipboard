@@ -325,6 +325,49 @@ because the note field is the user's, and rather than a display-time derivation 
 not content. The recognition is on device with no entitlement and no network; the update check
 remains the app's only unprompted network call. Design notes are in `docs/DEVELOPMENT.md`.
 
+## A Clip Records Which App It Came From, and That Is a Guess
+
+`sourceBundleIdentifier` is the app that was in front when the change was noticed. The pasteboard
+carries no author, so `NSWorkspace.shared.frontmostApplication` at detection time is the only answer
+there is, and with 0.8 s polling it is a good guess rather than a fact. `ClipboardSource` holds the
+rule, the row shows the app's icon and the preview its name. Five things it depends on:
+
+- **One read answers both questions.** `captureRead(for:)` samples the frontmost app once and hands
+  the same value to `ClipboardCapturePolicy` and to the item, so the guard that may drop the clip and
+  the source recorded on it can never name different apps. The retry path carries it in
+  `pendingSourceBundleIdentifier` rather than re-reading, for the reason the excluded-app check is
+  not repeated there: by then the user may have switched apps.
+- **The identifier only is stored.** Name and icon are resolved at display time by
+  `ClipboardSourceAppCatalog`, as `ExcludedAppRow` already does, so a renamed app reads correctly, an
+  uninstalled one reads as its identifier instead of dropping off, and no icon bytes reach the store.
+  The catalog caches hits *and* misses, because the search predicate runs over the whole history on
+  every keystroke; `NSWorkspace.didLaunchApplicationNotification` clears it so an app installed while
+  MacClipboard runs stops reading as its own identifier.
+- **A row either names its source or says nothing.** nil for every clip captured before the attribute
+  existed, for a process with no bundle identifier, and for an item the user made themselves (an
+  edit, a merge, a split), which were copied out of nothing. Never an "Unknown app".
+- **It is not inherited on a re-copy**, exactly like the text flavours: the source is a property of
+  the copy, not a decision the user made about the clip, so `ClipboardHistoryMerger`'s "already at
+  position 0, nothing to write" short-circuit compares it too. `copyToClipboard` adopts the
+  pasteboard's change count, so the app's own writes never come back through capture and cannot make
+  an item claim it came from MacClipboard.
+- **The filter is exact; the search is a find.** `sourceFilter` (a bundle identifier) narrows the
+  list to one app, set from a menu in the search bar and from the preview's source button, both
+  through `setSourceFilter`. Search also matches the name the row shows, but never the bundle
+  identifier of an installed app: "com.google.Chrome" would make a search for "google" return every
+  clip from Chrome. So typing "Mail" finds the clips that say the word as well as the ones from
+  Mail, and the menu finds only the ones from Mail.
+- **The menu offers only the apps that have something in the list**, read off the current tab
+  before the source filter and the search are applied, so picking an app cannot empty the menu that
+  picked it, and it is not drawn at all until something has a source. `sourceFilter` is `@State`
+  and dies with the popover: a source filter that outlived the session would hide clips behind a
+  setting nobody remembers turning on. `revealWrittenItem` clears it, and it is the filter every
+  write there trips, since an edit, a merge, a split and text read from an image all have no source.
+
+Do not sharpen the guess with `NSWorkspace.didActivateApplicationNotification` history; that is a
+heuristic on a heuristic. The honest way to narrow the window is a shorter tick, which is task 15 in
+`docs/BACKLOG.md`. Design notes are in `docs/DEVELOPMENT.md`.
+
 ## A Clip That Is a Colour Shows the Colour
 
 `ClipboardColorSwatch` parses a text clip that is **exactly** a colour (`#RGB`, `#RGBA`, `#RRGGBB`,
@@ -438,6 +481,7 @@ Key singletons:
 - `isFavorite`, `isSensitive`: Boolean
 - `note`: String (user-added)
 - `isRecognizedText`: Boolean (this text was read out of an image; see below)
+- `sourceBundleIdentifier`: String (the app that was in front when the clip was noticed; see below)
 - `createdAt`, `updatedAt`: Date
 
 ## Images Are the Storage Cost, Not Text
@@ -838,6 +882,32 @@ When modifying text recognition:
 - [ ] Running it on an old image that is no longer in memory loads the image first and still works
 - [ ] With shortcuts switched off in Settings, ⌘R does nothing and the button still works
 
+When modifying the recorded source app:
+- [ ] Copying from Slack, then from a browser, then from Terminal gives each row that app's icon
+      beside the time and its name in the preview, and the tooltip says it is the app that was in
+      front rather than a certainty
+- [ ] Clips captured before this shipped show no icon and no name at all, not "Unknown app", and the
+      rows are otherwise unchanged
+- [ ] An edit (⌘E), a merge (⌘M), a split (⌘⇧M) and text read from an image (⌘R) all produce rows
+      with no source
+- [ ] Copying the same sentence out of one app and then out of another leaves one row, and it names
+      the second app; re-copying it from the same app again changes nothing
+- [ ] The menu in the search bar lists exactly the apps that have something in the list, with their
+      icons, and is absent entirely on a history where nothing has a source
+- [ ] Picking one narrows the list to that app and the menu button shows its icon; All Apps widens
+      it again, and the menu still lists every app while one is picked
+- [ ] Switching tabs while an app is picked keeps the app picked, and the menu then lists only the
+      apps with something in that tab
+- [ ] Clicking the app name in the preview picks that app in the menu, and gives the same list
+- [ ] Searching for a word that is also an app name finds both the clips containing that word and
+      the clips from that app, while the menu finds only the clips from that app
+- [ ] With an app picked, an edit, a merge, a split or ⌘R widens the list back out rather than
+      writing a row into a list that cannot show it
+- [ ] A clip from an app that has since been uninstalled shows the placeholder glyph and its bundle
+      identifier, and is still findable by searching that identifier
+- [ ] With an app excluded from capture, nothing is recorded for it at all, source included
+- [ ] A masked clip still shows its source: where a clip came from is not its content
+
 When modifying the colour swatch:
 - [ ] Copying `#FF5733`, `#f53`, `#FF573380` and `rgb(255, 87, 51)` each gives the row a swatch of
       that colour, and the preview one beside the character count
@@ -922,5 +992,6 @@ the only check that needs both the signature and the ticket to be there.
 | Change Split | `ClipboardMonitor.swift` (`ClipboardTextSplit`, `splitIntoItems`), `ContentView.swift` (`ClipboardTextSplitContent`, `splitSelectedItem`) |
 | Change the colour swatch | `ContentView.swift` (`ClipboardColorSwatch`, `ClipboardColorSwatchView`) |
 | Change text recognition | `ImageTextRecognition.swift`, `ClipboardMonitor.swift` (`recognizeText`), `ContentView.swift` (`recognizeSelectedItemText`, `recognizeTextButton`) |
+| Change the recorded source app | `ClipboardSource.swift`, `ClipboardMonitor.swift` (`captureRead`), `ContentView.swift` (`ClipboardSourceAppIcon`, `sourceApp`, `searchForSourceApp`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
 | Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |
