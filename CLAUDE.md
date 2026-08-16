@@ -1010,4 +1010,5 @@ the only check that needs both the signature and the ticket to be there.
 | Change text recognition | `ImageTextRecognition.swift`, `ClipboardMonitor.swift` (`recognizeText`), `ContentView.swift` (`recognizeSelectedItemText`, `recognizeTextButton`) |
 | Change the recorded source app | `ClipboardSource.swift`, `ClipboardMonitor.swift` (`captureRead`), `ContentView.swift` (`ClipboardSourceAppIcon`, `sourceApp`, `searchForSourceApp`) |
 | Modify menu bar behavior | `MenuBarController.swift` |
+| Change the app icon | `scripts/make-app-icon.swift`, then re-run it; the PNGs it writes into `Assets.xcassets/AppIcon.appiconset` are checked in, and no SF Symbol may be used in an app icon |
 | Change the update check or how it is announced | `UpdateService.swift` (`UpdateChecker`), `MenuBarController.swift` (badge, menu item, alert), `ContentView.swift` (`updateAvailableBanner`), `SettingsView.swift` (`updateStatusControl`) |
